@@ -1,263 +1,383 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Truck, Package, Clock, Users, MapPin, AlertTriangle, CheckCircle, RotateCcw, Maximize, Info, Calendar, User } from 'lucide-react';
+import {
+  getAllOrders,
+  getAllOrderProducts,
+  getAllProducts,
+  getAllCustomers,
+  getAllBuildings,
+  getAllTimeSlots,
+  getAllTeams,
+  getAllTrucks
+} from '../../services/informationService';
 
 const WarehouseLoadingSchedule = () => {
-  const [selectedDate, setSelectedDate] = useState('2025-08-28');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTruck, setSelectedTruck] = useState('all');
   const [viewMode, setViewMode] = useState('schedule'); // 'schedule' or 'optimization'
 
-  // Dummy data following exact attribute structure
-  const trucks = {
-    'TRK_00019': {
-      TruckID: 'TRK_00019',
-      CarPlate: 'XWD4558',
-      LengthCM: 443,
-      WidthCM: 250,
-      HeightCM: 210,
-      Tone: 3
-    },
-    'TRK_00020': {
-      TruckID: 'TRK_00020',
-      CarPlate: 'FAC6652',
-      LengthCM: 443,
-      WidthCM: 250,
-      HeightCM: 210,
-      Tone: 3
-    },
-    'TRK_00021': {
-      TruckID: 'TRK_00021',
-      CarPlate: 'ABC1234',
-      LengthCM: 600,
-      WidthCM: 250,
-      HeightCM: 250,
-      Tone: 5
-    }
+  // Data state
+  const [orders, setOrders] = useState([]);
+  const [orderProducts, setOrderProducts] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [buildings, setBuildings] = useState([]);
+  const [timeSlots, setTimeSlots] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [trucks, setTrucks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Generate mock data for demonstration
+  const generateMockData = () => {
+    const today = new Date().toISOString().split('T')[0];
+
+    const mockTrucks = [
+      { id: 'TRK_MOCK_001', plate_no: 'WXY1234', length_cm: 443, width_cm: 250, height_cm: 210, tone: 3 },
+      { id: 'TRK_MOCK_002', plate_no: 'ABC5678', length_cm: 600, width_cm: 250, height_cm: 250, tone: 5 }
+    ];
+
+    const mockTeams = [
+      { id: 'TEAM_DEL_001', team_type: 'Delivery Team A' },
+      { id: 'TEAM_WH_001', team_type: 'Warehouse Team A' }
+    ];
+
+    const mockTimeSlots = [
+      {
+        id: 'TS_MOCK_WH_001',
+        date: today,
+        time_window_start: '07:00',
+        time_window_end: '09:00',
+        available_flag: false,
+        delivery_team_id: 'TEAM_DEL_001',
+        warehouse_team_id: 'TEAM_WH_001',
+        truck_id: 'TRK_MOCK_001'
+      },
+      {
+        id: 'TS_MOCK_WH_002',
+        date: today,
+        time_window_start: '08:00',
+        time_window_end: '10:00',
+        available_flag: false,
+        delivery_team_id: 'TEAM_DEL_001',
+        warehouse_team_id: 'TEAM_WH_001',
+        truck_id: 'TRK_MOCK_002'
+      }
+    ];
+
+    const mockCustomers = [
+      { id: 'CUST_MOCK_WH_001', full_name: 'Alice Tan', address: 'Mont Kiara' },
+      { id: 'CUST_MOCK_WH_002', full_name: 'Bob Lee', address: 'KLCC' }
+    ];
+
+    const mockBuildings = [
+      { id: 'BLD_MOCK_WH_001', building_name: 'Menara KLCC' },
+      { id: 'BLD_MOCK_WH_002', building_name: 'Pavilion Tower' }
+    ];
+
+    const mockProducts = [
+      { id: 'PROD_MOCK_WH_001', product_name: 'Samsung Refrigerator', package_length_cm: 180, package_width_cm: 70, package_height_cm: 65, fragile_flag: false, no_lie_down_flag: true },
+      { id: 'PROD_MOCK_WH_002', product_name: 'LG Washing Machine', package_length_cm: 95, package_width_cm: 60, package_height_cm: 85, fragile_flag: false, no_lie_down_flag: true },
+      { id: 'PROD_MOCK_WH_003', product_name: 'Daikin Air Conditioner', package_length_cm: 115, package_width_cm: 83, package_height_cm: 43, fragile_flag: true, no_lie_down_flag: true }
+    ];
+
+    const mockOrders = [
+      {
+        id: 'ORD_MOCK_WH_001',
+        customer_id: 'CUST_MOCK_WH_001',
+        building_id: 'BLD_MOCK_WH_001',
+        time_slot_id: 'TS_MOCK_WH_001',
+        order_status: 'Ready for Loading',
+        scheduled_start_date_time: `${today}T09:00:00`,
+        scheduled_end_date_time: `${today}T10:30:00`,
+        truck_loading_sequence: 2,
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'ORD_MOCK_WH_002',
+        customer_id: 'CUST_MOCK_WH_002',
+        building_id: 'BLD_MOCK_WH_002',
+        time_slot_id: 'TS_MOCK_WH_001',
+        order_status: 'Ready for Loading',
+        scheduled_start_date_time: `${today}T14:00:00`,
+        scheduled_end_date_time: `${today}T15:30:00`,
+        truck_loading_sequence: 1,
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'ORD_MOCK_WH_003',
+        customer_id: 'CUST_MOCK_WH_001',
+        building_id: 'BLD_MOCK_WH_001',
+        time_slot_id: 'TS_MOCK_WH_002',
+        order_status: 'Loading in Progress',
+        scheduled_start_date_time: `${today}T11:00:00`,
+        scheduled_end_date_time: `${today}T12:30:00`,
+        truck_loading_sequence: 1,
+        created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+      }
+    ];
+
+    const mockOrderProducts = [
+      { order_id: 'ORD_MOCK_WH_001', product_id: 'PROD_MOCK_WH_001', quantity: 1 },
+      { order_id: 'ORD_MOCK_WH_002', product_id: 'PROD_MOCK_WH_002', quantity: 1 },
+      { order_id: 'ORD_MOCK_WH_002', product_id: 'PROD_MOCK_WH_003', quantity: 1 },
+      { order_id: 'ORD_MOCK_WH_003', product_id: 'PROD_MOCK_WH_001', quantity: 2 }
+    ];
+
+    return {
+      orders: mockOrders,
+      orderProducts: mockOrderProducts,
+      products: mockProducts,
+      customers: mockCustomers,
+      buildings: mockBuildings,
+      timeSlots: mockTimeSlots,
+      teams: mockTeams,
+      trucks: mockTrucks
+    };
   };
 
-  const lorryTrips = [
-    {
-      LorryTripID: 'TRP_00010',
-      TruckID: 'TRK_00019',
-      DeliveryTeamID: 'TEM_00005',
-      WarehouseTeamID: 'TEM_00006',
-      Date: '2025-08-28',
-      LoadingStartTime: '07:00',
-      LoadingEndTime: '09:00',
-      DepartureTime: '09:30',
-      Status: 'Scheduled'
-    },
-    {
-      LorryTripID: 'TRP_00011',
-      TruckID: 'TRK_00020',
-      DeliveryTeamID: 'TEM_00005',
-      WarehouseTeamID: 'TEM_00007',
-      Date: '2025-08-28',
-      LoadingStartTime: '08:00',
-      LoadingEndTime: '10:00',
-      DepartureTime: '10:30',
-      Status: 'Loading'
-    },
-    {
-      LorryTripID: 'TRP_00012',
-      TruckID: 'TRK_00021',
-      DeliveryTeamID: 'TEM_00008',
-      WarehouseTeamID: 'TEM_00006',
-      Date: '2025-08-28',
-      LoadingStartTime: '06:30',
-      LoadingEndTime: '08:30',
-      DepartureTime: '09:00',
-      Status: 'Completed'
-    }
-  ];
+  // Load all data
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [
+          ordersData,
+          orderProductsData,
+          productsData,
+          customersData,
+          buildingsData,
+          timeSlotsData,
+          teamsData,
+          trucksData
+        ] = await Promise.all([
+          getAllOrders(),
+          getAllOrderProducts(),
+          getAllProducts(),
+          getAllCustomers(),
+          getAllBuildings(),
+          getAllTimeSlots(),
+          getAllTeams(),
+          getAllTrucks()
+        ]);
 
-  const orders = [
-    {
-      OrderID: 'ORD_00030',
-      CustomerID: 'CUS_00010',
-      BuildingID: 'BLD_00008',
-      TimeSlotID: 'TSL_00010',
-      DeliveryTeamID: 'TEM_00005',
-      LorryTripID: 'TRP_00010',
-      OrderStatus: 'Ready for Loading',
-      ScheduledStartDateTime: new Date('2025-08-28T09:00:00'),
-      ScheduledEndDateTime: new Date('2025-08-28T10:30:00'),
-      Priority: 1,
-      LoadingSequence: 1,
-      CreatedAt: new Date('2025-08-25T10:00:00')
-    },
-    {
-      OrderID: 'ORD_00031',
-      CustomerID: 'CUS_00011',
-      BuildingID: 'BLD_00009',
-      TimeSlotID: 'TSL_00011',
-      DeliveryTeamID: 'TEM_00005',
-      LorryTripID: 'TRP_00010',
-      OrderStatus: 'Ready for Loading',
-      ScheduledStartDateTime: new Date('2025-08-28T14:00:00'),
-      ScheduledEndDateTime: new Date('2025-08-28T15:30:00'),
-      Priority: 2,
-      LoadingSequence: 2,
-      CreatedAt: new Date('2025-08-26T11:30:00')
-    },
-    {
-      OrderID: 'ORD_00032',
-      CustomerID: 'CUS_00012',
-      BuildingID: 'BLD_00010',
-      TimeSlotID: 'TSL_00012',
-      DeliveryTeamID: 'TEM_00005',
-      LorryTripID: 'TRP_00011',
-      OrderStatus: 'Loading in Progress',
-      ScheduledStartDateTime: new Date('2025-08-28T11:00:00'),
-      ScheduledEndDateTime: new Date('2025-08-28T12:30:00'),
-      Priority: 1,
-      LoadingSequence: 1,
-      CreatedAt: new Date('2025-08-27T09:00:00')
-    },
-    {
-      OrderID: 'ORD_00033',
-      CustomerID: 'CUS_00013',
-      BuildingID: 'BLD_00011',
-      TimeSlotID: 'TSL_00013',
-      DeliveryTeamID: 'TEM_00008',
-      LorryTripID: 'TRP_00012',
-      OrderStatus: 'Loaded',
-      ScheduledStartDateTime: new Date('2025-08-28T10:00:00'),
-      ScheduledEndDateTime: new Date('2025-08-28T11:30:00'),
-      Priority: 1,
-      LoadingSequence: 1,
-      CreatedAt: new Date('2025-08-24T14:00:00')
-    }
-  ];
+        // Use real data if available, otherwise use mock data
+        const hasRealData = timeSlotsData.length > 0 || ordersData.length > 0;
 
-  const orderProducts = [
-    {
-      OrderID: 'ORD_00030',
-      ProductID: 'PRD_00005',
-      Quantity: 1,
-      LoadingPosition: 'A1',
-      IsLoaded: false
-    },
-    {
-      OrderID: 'ORD_00030',
-      ProductID: 'PRD_00006',
-      Quantity: 1,
-      LoadingPosition: 'A2',
-      IsLoaded: false
-    },
-    {
-      OrderID: 'ORD_00031',
-      ProductID: 'PRD_00007',
-      Quantity: 2,
-      LoadingPosition: 'B1',
-      IsLoaded: false
-    },
-    {
-      OrderID: 'ORD_00032',
-      ProductID: 'PRD_00005',
-      Quantity: 1,
-      LoadingPosition: 'A1',
-      IsLoaded: true
-    },
-    {
-      OrderID: 'ORD_00033',
-      ProductID: 'PRD_00006',
-      Quantity: 1,
-      LoadingPosition: 'A1',
-      IsLoaded: true
-    }
-  ];
+        // if (!hasRealData) {
+          const mockData = generateMockData();
 
-  const products = {
-    'PRD_00005': {
-      ProductID: 'PRD_00005',
-      ProductName: 'Panasonic Dryer A700',
-      PackageLengthCM: 107,
-      PackageWidthCM: 88,
-      PackageHeightCM: 53,
-      WeightKG: 45,
-      FragileFlag: false,
-      NoLieDownFlag: false,
-      StackableFlag: true,
-      MaxStackHeight: 2
-    },
-    'PRD_00006': {
-      ProductID: 'PRD_00006',
-      ProductName: 'DAIKIN Air Conditioner',
-      PackageLengthCM: 115,
-      PackageWidthCM: 83,
-      PackageHeightCM: 43,
-      WeightKG: 32,
-      FragileFlag: true,
-      NoLieDownFlag: true,
-      StackableFlag: false,
-      MaxStackHeight: 1
-    },
-    'PRD_00007': {
-      ProductID: 'PRD_00007',
-      ProductName: 'Samsung Refrigerator',
-      PackageLengthCM: 180,
-      PackageWidthCM: 70,
-      PackageHeightCM: 65,
-      WeightKG: 85,
-      FragileFlag: false,
-      NoLieDownFlag: true,
-      StackableFlag: false,
-      MaxStackHeight: 1
-    },
-    'PRD_00008': {
-      ProductID: 'PRD_00008',
-      ProductName: 'LG Washing Machine',
-      PackageLengthCM: 95,
-      PackageWidthCM: 60,
-      PackageHeightCM: 85,
-      WeightKG: 70,
-      FragileFlag: false,
-      NoLieDownFlag: true,
-      StackableFlag: false,
-      MaxStackHeight: 1
+          setOrders(mockData.orders);
+          setOrderProducts(mockData.orderProducts);
+          setProducts(mockData.products);
+          setCustomers(mockData.customers);
+          setBuildings(mockData.buildings);
+          setTimeSlots(mockData.timeSlots);
+          setTeams(mockData.teams);
+          setTrucks(mockData.trucks);
+
+        // } else {
+        //   console.log('[TruckSchedule] ✅ Using real data from API');
+        //   setOrders(ordersData);
+        //   setOrderProducts(orderProductsData);
+        //   setProducts(productsData);
+        //   setCustomers(customersData);
+        //   setBuildings(buildingsData);
+        //   setTimeSlots(timeSlotsData);
+        //   setTeams(teamsData);
+        //   setTrucks(trucksData);
+        // }
+      } catch (error) {
+        // Use mock data on error
+        const mockData = generateMockData();
+        setOrders(mockData.orders);
+        setOrderProducts(mockData.orderProducts);
+        setProducts(mockData.products);
+        setCustomers(mockData.customers);
+        setBuildings(mockData.buildings);
+        setTimeSlots(mockData.timeSlots);
+        setTeams(mockData.teams);
+        setTrucks(mockData.trucks);
+      } finally {
+        setLoading(false);
+      }
     }
+    loadData();
+  }, []);
+
+  // Field accessors for flexible data handling
+  const field = {
+    truckId: (truck) => truck.id || truck.TruckID,
+    truckPlate: (truck) => truck.plate_no || truck.CarPlate || '',
+    truckLength: (truck) => truck.length_cm || truck.LengthCM || 400,
+    truckWidth: (truck) => truck.width_cm || truck.WidthCM || 200,
+    truckHeight: (truck) => truck.height_cm || truck.HeightCM || 200,
+    truckTone: (truck) => truck.tone || truck.Tone || 3,
+    orderId: (order) => order.id || order.OrderID,
+    orderCustomerId: (order) => order.customer_id || order.CustomerID,
+    orderBuildingId: (order) => order.building_id || order.BuildingID,
+    orderTimeSlotId: (order) => order.time_slot_id || order.TimeSlotID,
+    orderStatus: (order) => order.order_status || order.OrderStatus || 'Pending',
+    orderScheduledStart: (order) => order.scheduled_start_date_time || order.ScheduledStartDateTime,
+    orderScheduledEnd: (order) => order.scheduled_end_date_time || order.ScheduledEndDateTime,
+    orderLoadingSequence: (order) => order.truck_loading_sequence || order.TruckLoadingSequence || null,
+    orderCreatedAt: (order) => order.created_at || order.CreatedAt,
+    timeSlotId: (ts) => ts.id || ts.TimeSlotID,
+    timeSlotDate: (ts) => ts.date || ts.Date,
+    timeSlotStart: (ts) => ts.time_window_start || ts.TimeWindowStart,
+    timeSlotEnd: (ts) => ts.time_window_end || ts.TimeWindowEnd,
+    timeSlotDeliveryTeamId: (ts) => ts.delivery_team_id || ts.DeliveryTeamID,
+    timeSlotWarehouseTeamId: (ts) => ts.warehouse_team_id || ts.WarehouseTeamID,
+    timeSlotTruckId: (ts) => ts.truck_id || ts.TruckID,
+    teamId: (team) => team.id || team.TeamID,
+    teamType: (team) => team.team_type || team.TeamType || '',
+    customerId: (cust) => cust.id || cust.CustomerID,
+    customerName: (cust) => cust.full_name || cust.name || '',
+    customerAddress: (cust) => cust.address || '',
+    buildingId: (bld) => bld.id || bld.BuildingID,
+    buildingName: (bld) => bld.building_name || '',
+    productId: (prod) => prod.id || prod.ProductID,
+    productName: (prod) => prod.product_name || prod.ProductName || '',
+    productLength: (prod) => prod.package_length_cm || prod.PackageLengthCM || 50,
+    productWidth: (prod) => prod.package_width_cm || prod.PackageWidthCM || 50,
+    productHeight: (prod) => prod.package_height_cm || prod.PackageHeightCM || 50,
+    productFragile: (prod) => prod.fragile_flag ?? prod.FragileFlag ?? false,
+    productNoLieDown: (prod) => prod.no_lie_down_flag ?? prod.NoLieDownFlag ?? false,
+    orderProductOrderId: (op) => op.order_id || op.OrderID,
+    orderProductProductId: (op) => op.product_id || op.ProductID,
+    orderProductQuantity: (op) => op.quantity || op.Quantity || 1,
+    orderProductDismantle: (op) => op.dismantle_required ?? op.DismantleRequired ?? false
   };
 
-  const customers = {
-    'CUS_00010': { name: 'Alice Tan', address: 'Mont Kiara' },
-    'CUS_00011': { name: 'Bob Lee', address: 'KLCC' },
-    'CUS_00012': { name: 'Carol Wong', address: 'Bangsar' },
-    'CUS_00013': { name: 'David Lim', address: 'Petaling Jaya' }
-  };
+  // Convert trucks data to object format for easy lookup
+  const trucksObj = trucks.reduce((acc, truck) => {
+    acc[field.truckId(truck)] = {
+      TruckID: field.truckId(truck),
+      CarPlate: field.truckPlate(truck),
+      LengthCM: field.truckLength(truck),
+      WidthCM: field.truckWidth(truck),
+      HeightCM: field.truckHeight(truck),
+      Tone: field.truckTone(truck)
+    };
+    return acc;
+  }, {});
 
-  const teams = {
-    'TEM_00005': { TeamType: 'Delivery Team A' },
-    'TEM_00006': { TeamType: 'Warehouse Team A' },
-    'TEM_00007': { TeamType: 'Warehouse Team B' },
-    'TEM_00008': { TeamType: 'Delivery Team B' }
-  };
+  const lorryTrips = timeSlots
+    .filter(ts => field.timeSlotTruckId(ts)) // Only slots with assigned trucks
+    .filter(ts => field.timeSlotDate(ts) === selectedDate) // Filter by selected date
+    .map(ts => {
+      // Find orders for this timeslot
+      const slotOrders = orders.filter(o => field.orderTimeSlotId(o) === field.timeSlotId(ts));
+      const status = slotOrders.length === 0 ? 'Scheduled' :
+                     slotOrders.every(o => field.orderStatus(o) === 'Completed') ? 'Completed' :
+                     slotOrders.some(o => field.orderStatus(o) === 'In Progress') ? 'Loading' : 'Scheduled';
+
+      return {
+        LorryTripID: field.timeSlotId(ts),
+        TruckID: field.timeSlotTruckId(ts),
+        DeliveryTeamID: field.timeSlotDeliveryTeamId(ts),
+        WarehouseTeamID: field.timeSlotWarehouseTeamId(ts),
+        Date: field.timeSlotDate(ts),
+        LoadingStartTime: field.timeSlotStart(ts),
+        LoadingEndTime: field.timeSlotEnd(ts),
+        DepartureTime: field.timeSlotEnd(ts),
+        Status: status
+      };
+    });
+
+  if (lorryTrips.length > 0) {
+    console.log('[TruckSchedule] Sample lorry trip:', lorryTrips[0]);
+  }
+
+  // Convert orders data to expected format
+  const ordersData = orders.map(order => ({
+    OrderID: field.orderId(order),
+    CustomerID: field.orderCustomerId(order),
+    BuildingID: field.orderBuildingId(order),
+    TimeSlotID: field.orderTimeSlotId(order),
+    DeliveryTeamID: timeSlots.find(ts => field.timeSlotId(ts) === field.orderTimeSlotId(order))?.delivery_team_id,
+    LorryTripID: field.orderTimeSlotId(order), // Use timeslot ID as lorry trip ID
+    OrderStatus: field.orderStatus(order),
+    ScheduledStartDateTime: field.orderScheduledStart(order) ? new Date(field.orderScheduledStart(order)) : null,
+    ScheduledEndDateTime: field.orderScheduledEnd(order) ? new Date(field.orderScheduledEnd(order)) : null,
+    Priority: 1,
+    LoadingSequence: field.orderLoadingSequence(order) || 1,
+    CreatedAt: field.orderCreatedAt(order) ? new Date(field.orderCreatedAt(order)) : new Date()
+  }));
+
+  // Convert orderProducts data
+  const orderProductsData = orderProducts.map(op => ({
+    OrderID: field.orderProductOrderId(op),
+    ProductID: field.orderProductProductId(op),
+    Quantity: field.orderProductQuantity(op),
+    LoadingPosition: 'Auto',
+    IsLoaded: false
+  }));
+
+  // Convert products data to object format
+  const productsObj = products.reduce((acc, prod) => {
+    acc[field.productId(prod)] = {
+      ProductID: field.productId(prod),
+      ProductName: field.productName(prod),
+      PackageLengthCM: field.productLength(prod),
+      PackageWidthCM: field.productWidth(prod),
+      PackageHeightCM: field.productHeight(prod),
+      WeightKG: 50, // Default weight
+      FragileFlag: field.productFragile(prod),
+      NoLieDownFlag: field.productNoLieDown(prod),
+      StackableFlag: !field.productNoLieDown(prod),
+      MaxStackHeight: field.productNoLieDown(prod) ? 1 : 2
+    };
+    return acc;
+  }, {});
+
+  // Convert customers to object format
+  const customersObj = customers.reduce((acc, cust) => {
+    acc[field.customerId(cust)] = {
+      name: field.customerName(cust),
+      address: field.customerAddress(cust)
+    };
+    return acc;
+  }, {});
+
+  // Convert teams to object format
+  const teamsObj = teams.reduce((acc, team) => {
+    acc[field.teamId(team)] = {
+      TeamType: field.teamType(team)
+    };
+    return acc;
+  }, {});
 
   // Calculate truck utilization and optimization
   const calculateTruckOptimization = (lorryTripId) => {
     const trip = lorryTrips.find(t => t.LorryTripID === lorryTripId);
-    const truck = trucks[trip.TruckID];
-    const tripOrders = orders.filter(o => o.LorryTripID === lorryTripId);
-    
+    if (!trip) return null;
+
+    const truck = trucksObj[trip.TruckID];
+    if (!truck) return null;
+
+    const tripOrders = ordersData.filter(o => o.LorryTripID === lorryTripId);
+
     let totalVolume = 0;
     let totalWeight = 0;
     let items = [];
 
     tripOrders.forEach(order => {
-      const orderItems = orderProducts.filter(op => op.OrderID === order.OrderID);
+      const orderItems = orderProductsData.filter(op => op.OrderID === order.OrderID);
       orderItems.forEach(item => {
-        const product = products[item.ProductID];
+        const product = productsObj[item.ProductID];
+        if (!product) return;
+
         const volume = (product.PackageLengthCM * product.PackageWidthCM * product.PackageHeightCM) / 1000000; // Convert to cubic meters
         const weight = product.WeightKG * item.Quantity;
-        
+
         totalVolume += volume * item.Quantity;
         totalWeight += weight;
-        
+
         for (let i = 0; i < item.Quantity; i++) {
           items.push({
             ...item,
             ...product,
             orderInfo: order,
-            customerInfo: customers[order.CustomerID]
+            customerInfo: customersObj[order.CustomerID]
           });
         }
       });
@@ -354,6 +474,18 @@ const WarehouseLoadingSchedule = () => {
     return filteredTrips.map(trip => calculateTruckOptimization(trip.LorryTripID));
   }, [filteredTrips]);
 
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading warehouse schedule...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -377,7 +509,7 @@ const WarehouseLoadingSchedule = () => {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="all">All Trucks</option>
-                {Object.values(trucks).map(truck => (
+                {Object.values(trucksObj).map(truck => (
                   <option key={truck.TruckID} value={truck.TruckID}>
                     {truck.CarPlate} - {truck.Tone}T
                   </option>
@@ -423,10 +555,10 @@ const WarehouseLoadingSchedule = () => {
               </div>
             ) : (
               filteredTrips.map(trip => {
-                const truck = trucks[trip.TruckID];
-                const tripOrders = orders.filter(o => o.LorryTripID === trip.LorryTripID);
-                const warehouseTeam = teams[trip.WarehouseTeamID];
-                const deliveryTeam = teams[trip.DeliveryTeamID];
+                const truck = trucksObj[trip.TruckID];
+                const tripOrders = ordersData.filter(o => o.LorryTripID === trip.LorryTripID);
+                const warehouseTeam = teamsObj[trip.WarehouseTeamID];
+                const deliveryTeam = teamsObj[trip.DeliveryTeamID];
 
                 return (
                   <div key={trip.LorryTripID} className="bg-white rounded-lg shadow-sm p-6">
@@ -512,9 +644,9 @@ const WarehouseLoadingSchedule = () => {
                       <h4 className="font-medium text-gray-900 mb-4">Orders ({tripOrders.length})</h4>
                       <div className="space-y-3">
                         {tripOrders.map(order => {
-                          const orderItems = orderProducts.filter(op => op.OrderID === order.OrderID);
-                          const customer = customers[order.CustomerID];
-                          
+                          const orderItems = orderProductsData.filter(op => op.OrderID === order.OrderID);
+                          const customer = customersObj[order.CustomerID];
+
                           return (
                             <div key={order.OrderID} className="border rounded-lg p-4">
                               <div className="flex items-center justify-between mb-3">
@@ -529,10 +661,10 @@ const WarehouseLoadingSchedule = () => {
                                   Seq: {order.LoadingSequence} | {customer?.name} - {customer?.address}
                                 </div>
                               </div>
-                              
+
                               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                                 {orderItems.map((item, index) => {
-                                  const product = products[item.ProductID];
+                                  const product = productsObj[item.ProductID];
                                   return (
                                     <div key={index} className="bg-gray-50 rounded p-3">
                                       <div className="font-medium text-gray-900 mb-1">{product?.ProductName}</div>
@@ -813,13 +945,15 @@ const WarehouseLoadingSchedule = () => {
             </div>
             <div className="bg-yellow-50 rounded-lg p-4 text-center">
               <div className="text-2xl font-bold text-yellow-600">
-                {orders.filter(o => filteredTrips.some(t => t.LorryTripID === o.LorryTripID)).length}
+                {ordersData.filter(o => filteredTrips.some(t => t.LorryTripID === o.LorryTripID)).length}
               </div>
               <div className="text-sm text-gray-600">Total Orders</div>
             </div>
             <div className="bg-purple-50 rounded-lg p-4 text-center">
               <div className="text-2xl font-bold text-purple-600">
-                {optimizationData.reduce((acc, data) => acc + parseFloat(data.maxUtilization), 0) / optimizationData.length || 0}%
+                {optimizationData.filter(d => d !== null).length > 0
+                  ? (optimizationData.filter(d => d !== null).reduce((acc, data) => acc + parseFloat(data.maxUtilization), 0) / optimizationData.filter(d => d !== null).length).toFixed(1)
+                  : 0}%
               </div>
               <div className="text-sm text-gray-600">Avg Utilization</div>
             </div>

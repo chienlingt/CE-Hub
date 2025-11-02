@@ -18,10 +18,9 @@ import {
 const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
 /**
- * RoleAccessControl - Now fetches from PostgreSQL via API
+ * RoleAccessControl - Fetches from PostgreSQL via API
  * - Loads roles from /api/roles endpoint
- * - Saves role permissions back to PostgreSQL
- * - Writes audit logs to access_logs table
+ * - Saves role permissions back to PostgreSQL roles table
  */
 
 const mockNavItems = [
@@ -33,6 +32,7 @@ const mockNavItems = [
   { key: 'delivery', name: 'Delivery Schedule', description: 'Delivery schedule management', icon: '🚚' },
   { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
   { key: 'warehouse', name: 'Warehouse Schedule', description: 'Warehouse loading and operations', icon: '🏭' },
+  { key: 'customer', name: 'Place Order', description: 'Demo to place order', icon: '' },
 ];
 
 export default function RoleAccessControl() {
@@ -42,7 +42,6 @@ export default function RoleAccessControl() {
   const [originalAccessControl, setOriginalAccessControl] = useState({});
   const [selectedRole, setSelectedRole] = useState(null);
   const [hasChanges, setHasChanges] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showAddRole, setShowAddRole] = useState(false);
@@ -121,6 +120,7 @@ export default function RoleAccessControl() {
         return JSON.stringify(prev) !== JSON.stringify(curr);
       });
 
+      // Update each role's permissions
       for (const roleId of updates) {
         const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles/${roleId}`, {
           method: 'PUT',
@@ -128,26 +128,17 @@ export default function RoleAccessControl() {
           body: JSON.stringify({ permissions: accessControl[roleId] })
         });
 
-        if (!response.ok) throw new Error(`Failed to update role ${roleId}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Failed to update role ${roleId}: ${errorText}`);
+        }
       }
 
-      // Write audit log
-      try {
-        await fetch(`${REACT_APP_API_BASE_URL}/api/access-logs`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            changes: accessControl,
-            changed_at: new Date().toISOString()
-          })
-        });
-      } catch (logErr) {
-        console.warn('Failed to write access log:', logErr);
-      }
-
+      // Update local state to reflect saved changes
       setOriginalAccessControl(JSON.parse(JSON.stringify(accessControl)));
       setHasChanges(false);
-      alert('Access control settings saved successfully!');
+
+      alert('Access control settings saved successfully! Users will need to log out and log back in for changes to take effect.');
     } catch (err) {
       console.error('Failed to save access control:', err);
       setError('Failed to save changes. See console for details.');

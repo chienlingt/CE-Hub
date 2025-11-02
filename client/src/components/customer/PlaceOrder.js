@@ -11,7 +11,6 @@ const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://loc
 export default function PlaceOrder() {
   const [step, setStep] = useState(1); // 1: Products, 2: Customer Info, 3: Review & Submit
   const [products, setProducts] = useState([]);
-  const [timeSlots, setTimeSlots] = useState([]);
   const [zones, setZones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -40,23 +39,15 @@ export default function PlaceOrder() {
     zone_id: ''
   });
 
-  // Delivery schedule state
-  const [deliverySchedule, setDeliverySchedule] = useState({
-    time_slot_id: '',
-    preferred_date: ''
-  });
-
   // Load initial data
   useEffect(() => {
     async function loadData() {
       try {
-        const [productsData, timeSlotsData, zonesData] = await Promise.all([
+        const [productsData, zonesData] = await Promise.all([
           getAllProducts(),
-          getAllTimeSlots(),
           getAllZones()
         ]);
         setProducts(productsData);
-        setTimeSlots(timeSlotsData);
         setZones(zonesData);
       } catch (error) {
         console.error('Error loading data:', error);
@@ -120,8 +111,7 @@ export default function PlaceOrder() {
       customerInfo.state.trim() &&
       buildingInfo.building_name.trim() &&
       buildingInfo.housing_type.trim() &&
-      buildingInfo.zone_id &&
-      deliverySchedule.time_slot_id
+      buildingInfo.zone_id
     );
   };
 
@@ -129,7 +119,15 @@ export default function PlaceOrder() {
   const handleSubmitOrder = async () => {
     setSubmitting(true);
     setError(null);
-
+    console.log('Submitting order with data:', {
+      customer: customerInfo,
+          building: buildingInfo,
+          products: cart.map(item => ({
+            product_id: item.product.id || item.product.product_id,
+            quantity: item.quantity,
+            dismantle_required: item.dismantle_required
+          }))
+    });
     try {
       // Create order via API
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders`, {
@@ -140,7 +138,6 @@ export default function PlaceOrder() {
         body: JSON.stringify({
           customer: customerInfo,
           building: buildingInfo,
-          timeSlot: deliverySchedule,
           products: cart.map(item => ({
             product_id: item.product.id || item.product.product_id,
             quantity: item.quantity,
@@ -154,7 +151,7 @@ export default function PlaceOrder() {
       }
 
       const data = await response.json();
-      setOrderNumber(data.order?.id || data.order?.OrderID || 'ORD-' + Date.now());
+      setOrderNumber(data.order?.id || data.order?.OrderID);
       setSuccess(true);
     } catch (err) {
       console.error('Order submission error:', err);
@@ -489,31 +486,6 @@ export default function PlaceOrder() {
                 </div>
               </div>
             </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
-                <Calendar className="h-6 w-6 mr-2 text-blue-600" />
-                Delivery Schedule
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Time Slot *</label>
-                  <select
-                    value={deliverySchedule.time_slot_id}
-                    onChange={(e) => setDeliverySchedule({ ...deliverySchedule, time_slot_id: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">Select time slot</option>
-                    {timeSlots.filter(ts => ts.available_flag || ts.AvailableFlag).map(slot => (
-                      <option key={slot.id || slot.TimeSlotID} value={slot.id || slot.TimeSlotID}>
-                        {slot.date || slot.Date} - {slot.time_window_start || slot.TimeWindowStart} to {slot.time_window_end || slot.TimeWindowEnd}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
             <div className="flex justify-between">
               <button
                 onClick={() => setStep(1)}
@@ -570,20 +542,6 @@ export default function PlaceOrder() {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div><span className="text-gray-600">Building:</span> {buildingInfo.building_name}</div>
                   <div><span className="text-gray-600">Type:</span> {buildingInfo.housing_type}</div>
-                </div>
-              </div>
-
-              {/* Delivery Schedule */}
-              <div>
-                <h3 className="font-semibold text-gray-700 mb-3">Delivery Schedule</h3>
-                <div className="text-sm">
-                  {(() => {
-                    const selectedSlot = timeSlots.find(ts => (ts.id || ts.TimeSlotID) === deliverySchedule.time_slot_id);
-                    if (selectedSlot) {
-                      return `${selectedSlot.date || selectedSlot.Date} - ${selectedSlot.time_window_start || selectedSlot.TimeWindowStart} to ${selectedSlot.time_window_end || selectedSlot.TimeWindowEnd}`;
-                    }
-                    return 'N/A';
-                  })()}
                 </div>
               </div>
             </div>

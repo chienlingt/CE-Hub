@@ -54,6 +54,7 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - Sets up Express with CORS, Helmet for security headers
 - Mounts route modules under `/api/*`
 - Health check endpoint: `GET /api/health` (tests DB connection with raw query)
+- Initializes auto-scheduler cron job on startup via `schedulerCron.js`
 - Graceful shutdown on SIGINT (disconnects Prisma)
 
 **Database Layer:**
@@ -69,6 +70,7 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - `/api/roles` - Role management
 - `/api/trucks` - Truck information
 - `/api/zones` - Delivery zones
+- `/api/truck-zones` - Truck-zone assignments (junction table operations)
 - `/api/buildings` - Building details with access constraints
 - `/api/products` - Product catalog
 - `/api/teams` - Team assignments
@@ -77,7 +79,9 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - `/api/time-slots` - Delivery time slots
 - `/api/lorry-trips` - Lorry/truck trip scheduling
 - `/api/assignments` - Employee-team assignments
+- `/api/order-products` - Order-product junction table operations
 - `/api/reports` - Reporting
+- `/api/scheduler` - Auto-scheduler configuration and triggers
 
 **Authentication:**
 - Uses bcrypt for password hashing
@@ -96,15 +100,18 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - `/*` - Protected routes wrapped in `<Layout />` component
 
 **Authentication Context:** `client/src/contexts/AuthContext.js`
-- Provides: `currentUser`, `employeeData`, `permissions`, `signIn()`, `logout()`, `hasPermission()`, `hasRole()`, etc.
+- **Main entry point for authentication** - handles all auth logic
+- Exported functions: `login(email, password)`, `logout()`, `hasPermission()`, `hasRole()`, `isAuthenticated()`
+- `login()` function: Calls `/api/auth/login`, validates credentials, fetches permissions, sets up session
+- Internal `signIn()` function: Sets up session after successful backend authentication (not exported)
+- Internal `fetchPermissionsForRole()`: Fetches permissions from `/api/roles` based on employee's role
 - Stores session in `sessionStorage` (keys: `employeeData`, `isAuthenticated`, `employeePermissions`, `employeeRole`)
-- **Important:** Still fetches permissions from Firebase Firestore (`Roles` collection) - needs migration
-- Session restore on mount checks sessionStorage; permissions fetched via `fetchPermissionsForRole()`
-- `loadingPermissions` and `loading` states track auth initialization
+- Session restore on mount: Checks sessionStorage and refetches permissions if needed
+- State: `currentUser`, `employeeData`, `permissions`, `loading`, `loadingPermissions`
 
 **Layout Component:** `client/src/components/Layout.js`
 - Renders sidebar navigation based on user permissions
-- Navigation sections: dashboard, schedule, info, cases, access, delivery, installation, warehouse
+- Navigation sections: dashboard, schedule, info, cases, access, delivery, installation, warehouse, customer
 - Permission-based filtering: Only shows nav items that match user's role permissions
 - **Admin role** gets full access to all sections
 
@@ -117,18 +124,21 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - `delivery` - Delivery schedule view
 - `installation` - Installation schedule view
 - `warehouse` - Warehouse loading schedule
+- `customer` - Customer order placement (PlaceOrder page)
 
 **Component Organization:**
 - `client/src/components/admin/` - Admin pages (dashboard, info, schedule, cases, access)
 - `client/src/components/delivery/` - Delivery team views
 - `client/src/components/installer/` - Installation team views
 - `client/src/components/warehouse/` - Warehouse team views
+- `client/src/components/customer/` - Customer views (PlaceOrder page)
 - `client/src/components/auth/` - Login and authentication UI
 
 **Access Control:** `client/src/components/admin/access/accessControl.js`
-- **Legacy:** Still uses Firebase Firestore (`db` from `firebase.js`)
-- Manages role permissions stored in Firestore collection `Roles`
-- Will need migration to Prisma-backed API (`/api/roles` endpoints exist)
+- Uses PostgreSQL via `/api/roles` endpoints for all role management
+- Manages role permissions stored in PostgreSQL `roles` table
+- Provides UI for creating, editing, and deleting roles
+- Updates role permissions which take effect after user re-login
 
 ### Database Schema (Key Models)
 
@@ -237,6 +247,22 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 - `changed_at`: Timestamp
 - `changes`: JSON field for audit trail
 
+**installation_schedules** (`installation_schedules` table)
+- `id`: UUID primary key (generated via `gen_random_uuid()`)
+- `order_id`: Unique foreign key to `orders` (one-to-one)
+- `installation_team_id`: Foreign key to `teams`
+- `estimated_arrival_time`: Timestamp
+- `status`: String (default: "Scheduled")
+- Timestamps: `created_at`, `updated_at`
+
+**scheduler_config** (`scheduler_config` table)
+- `id`: UUID primary key (generated via `gen_random_uuid()`)
+- `warehouse_address`, `warehouse_postal`: Warehouse location details
+- `cron_expression`: Cron schedule (default: "0 0 * * *" - daily at midnight)
+- `enabled`: Boolean flag (default: true)
+- `last_run_at`: Timestamp of last scheduler execution
+- Timestamps: `created_at`, `updated_at`
+
 ## Data Flow
 
 **Authentication Flow:**
@@ -262,11 +288,11 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 ## Important Notes for Development
 
 ### Migration Status
-- **Active Migration:** Moving from Firebase to PostgreSQL/Prisma
-- **Critical:** `AuthContext.js` still fetches permissions from Firebase Firestore `Roles` collection
-- `accessControl.js` still uses Firebase Firestore for role management
-- Authentication login/verification has been migrated to backend API
-- When modifying access control or permission features, prioritize migrating to Prisma-backed `/api/roles` endpoints
+- **Migration Complete:** Successfully migrated from Firebase to PostgreSQL/Prisma
+- `AuthContext.js` now fetches permissions from PostgreSQL via `/api/roles` endpoint
+- `accessControl.js` now uses PostgreSQL via `/api/roles` endpoints for all role management
+- Authentication login/verification uses backend API with PostgreSQL
+- All role and permission management now uses Prisma-backed `/api/roles` endpoints
 
 ### Permission System
 - Permissions are stored as string arrays in `Role.permissions`
@@ -344,11 +370,10 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 5. Check console for errors in both server and browser
 
 ### Known Issues
-- **Critical:** `AuthContext.js` fetches permissions from Firebase Firestore - must migrate to fetch from `/api/roles` or backend
-- Access Control UI (`accessControl.js`) still uses Firestore (needs migration to `/api/roles` endpoints)
 - Password reset emails not implemented (tokens logged to console for testing)
 - JWT middleware defined (`server/middleware/auth.js`) but not actively used (app uses session-based auth)
 - `PasswordReset` model referenced in `auth.js` but missing from Prisma schema - needs to be added or auth.js updated
+- **Important:** Users must log out and log back in after permission changes for changes to take effect
 
 ## Environment Variables
 

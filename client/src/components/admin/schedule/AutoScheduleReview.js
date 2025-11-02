@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Calendar,
   Clock,
@@ -8,172 +8,393 @@ import {
   PlayCircle,
   RefreshCw,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Settings,
+  Save,
+  Users,
+  Warehouse
 } from "lucide-react";
 
-// Use the scheduler you already have on the server/clientside (the file you posted)
-import { scheduleOrders } from "../../../services/scheduler"; // adjust path if needed
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
-/**
- * AutoScheduler (calls your existing scheduleOrders)
- *
- * - UI unchanged from your previous component.
- * - When "Run Scheduler" is clicked it calls scheduleOrders() (your scheduler.js).
- * - Displays the returned schedule and relies on your scheduler to log pending orders to the console.
- * - No local scheduling calculations are done here anymore.
- *
- * Make sure the imported scheduleOrders is the same function you showed earlier and is safe
- * to call from the browser (i.e., does not import firebase-admin). If scheduleOrders runs
- * server-side only, call it via your API instead and replace the import with an API call.
- */
+export default function AutoScheduleReview() {
+  // Generate mock data for initial display
+  const generateMockScheduleData = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = tomorrow.toISOString();
 
-function toISODateString(dt) {
-  return dt.toISOString().slice(0, 10);
-}
+    return {
+      scheduled: [
+        {
+          id: 'ORD_MOCK_SCHED_001',
+          customer_id: 'CUST_001',
+          customers: { full_name: 'Ahmad Hassan', phone: '012-3456789', postcode: '50100' },
+          buildings: { building_name: 'Menara KLCC', postal_code: '50088', access_time_window_start: '08:00', access_time_window_end: '22:00' },
+          scheduled_start_date_time: `${tomorrowDate.split('T')[0]}T09:00:00`,
+          scheduled_end_date_time: `${tomorrowDate.split('T')[0]}T10:30:00`,
+          truck_loading_sequence: 2,
+          time_slot_id: 'TS_001',
+          time_slots: {
+            time_window_start: '08:00',
+            time_window_end: '12:00',
+            delivery_team: { team_type: 'Delivery Team A' },
+            warehouse_team: { team_type: 'Warehouse Team A' },
+            truck: { plate_no: 'WXY1234' }
+          },
+          order_products: [
+            { products: { product_name: 'Samsung Smart TV 55"' }, quantity: 1 }
+          ]
+        },
+        {
+          id: 'ORD_MOCK_SCHED_002',
+          customer_id: 'CUST_002',
+          customers: { full_name: 'Siti Aminah', phone: '013-9876543', postcode: '50450' },
+          buildings: { building_name: 'Pavilion Residences', postal_code: '55100', access_time_window_start: '09:00', access_time_window_end: '18:00' },
+          scheduled_start_date_time: `${tomorrowDate.split('T')[0]}T10:00:00`,
+          scheduled_end_date_time: `${tomorrowDate.split('T')[0]}T11:30:00`,
+          truck_loading_sequence: 1,
+          time_slot_id: 'TS_001',
+          time_slots: {
+            time_window_start: '08:00',
+            time_window_end: '12:00',
+            delivery_team: { team_type: 'Delivery Team A' },
+            warehouse_team: { team_type: 'Warehouse Team A' },
+            truck: { plate_no: 'WXY1234' }
+          },
+          order_products: [
+            { products: { product_name: 'LG Washing Machine' }, quantity: 1 },
+            { products: { product_name: 'Panasonic Dryer' }, quantity: 1 }
+          ]
+        }
+      ],
+      unscheduled: [
+        {
+          id: 'ORD_MOCK_UNSCHED_001',
+          customer_id: 'CUST_003',
+          customers: { full_name: 'David Tan', phone: '016-2345678', postcode: '47400' },
+          buildings: { building_name: 'Sunway Pyramid Tower', postal_code: '47500' },
+          reason: 'Outside building access time window (available 10:00-16:00, needed 08:00-12:00)',
+          order_products: [
+            { products: { product_name: 'Daikin Air Conditioner' }, quantity: 2 }
+          ]
+        }
+      ],
+      stats: {
+        scheduled: 2,
+        unscheduled: 1,
+        installationSchedulesCreated: 2,
+        timeslotsCreated: 1,
+        postalCodeGroups: 2,
+        apiRequestCount: 0,
+        warnings: ['Mock data - run scheduler to see real results']
+      },
+      installations: [
+        {
+          id: 'INST_MOCK_001',
+          order_id: 'ORD_MOCK_SCHED_001',
+          installation_team_id: 'TEAM_INST_001',
+          estimated_arrival_time: `${tomorrowDate.split('T')[0]}T09:30:00`,
+          status: 'Scheduled',
+          orders: {
+            id: 'ORD_MOCK_SCHED_001',
+            customers: { full_name: 'Ahmad Hassan' },
+            buildings: { building_name: 'Menara KLCC' }
+          },
+          team: { team_type: 'Installation Team A' }
+        },
+        {
+          id: 'INST_MOCK_002',
+          order_id: 'ORD_MOCK_SCHED_002',
+          installation_team_id: 'TEAM_INST_002',
+          estimated_arrival_time: `${tomorrowDate.split('T')[0]}T10:30:00`,
+          status: 'Scheduled',
+          orders: {
+            id: 'ORD_MOCK_SCHED_002',
+            customers: { full_name: 'Siti Aminah' },
+            buildings: { building_name: 'Pavilion Residences' }
+          },
+          team: { team_type: 'Installation Team B' }
+        }
+      ]
+    };
+  };
 
-function formatTime(date) {
-  if (!date) return "-";
-  return new Date(date).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true
-  });
-}
+  const mockData = generateMockScheduleData();
 
-function formatDate(dateStr) {
-  return new Date(dateStr).toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric"
-  });
-}
-
-export default function AutoScheduler() {
-  const [schedule, setSchedule] = useState([]);
+  const [schedule, setSchedule] = useState(mockData.scheduled);
+  const [unscheduled, setUnscheduled] = useState(mockData.unscheduled);
+  const [installationSchedules, setInstallationSchedules] = useState(mockData.installations);
   const [loading, setLoading] = useState(false);
-  const [scheduledAt, setScheduledAt] = useState(null);
-  const [scheduledHour, setScheduledHour] = useState("now");
-  const [customTime, setCustomTime] = useState("");
+  const [scheduledAt, setScheduledAt] = useState(new Date(Date.now() - 30 * 60 * 1000)); // 30 minutes ago for mock
+  const [stats, setStats] = useState(mockData.stats);
 
-  // NOTE: your scheduleOrders() (provided earlier) does its own timeslot generation and scheduling.
-  // This component simply calls it and displays the returned schedule array.
+  // Configuration state
+  const [showConfig, setShowConfig] = useState(false);
+  const [config, setConfig] = useState({
+    warehouse_address: 'University of Malaya, Kuala Lumpur',
+    warehouse_postal: '50603',
+    cron_expression: '0 0 * * *',
+    enabled: true
+  });
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+
+  // Load configuration on mount
+  useEffect(() => {
+    console.log('[AutoScheduleReview] ===== COMPONENT MOUNTED =====');
+    console.log('[AutoScheduleReview] Initial mock data loaded:');
+    console.log('[AutoScheduleReview] - Scheduled orders:', schedule.length);
+    console.log('[AutoScheduleReview] - Unscheduled orders:', unscheduled.length);
+    console.log('[AutoScheduleReview] - Installation schedules:', installationSchedules.length);
+    console.log('[AutoScheduleReview] - Stats:', stats);
+    console.log('[AutoScheduleReview] Sample scheduled order:', schedule[0]);
+
+    loadConfiguration();
+    loadInstallationSchedules();
+  }, []);
+
+  const loadConfiguration = async () => {
+    try {
+      setConfigLoading(true);
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/config`);
+      const data = await response.json();
+
+      if (data.success && data.config) {
+        setConfig({
+          warehouse_address: data.config.warehouse_address || '',
+          warehouse_postal: data.config.warehouse_postal || '',
+          cron_expression: data.config.cron_expression || '0 0 * * *',
+          enabled: data.config.enabled !== undefined ? data.config.enabled : true
+        });
+      }
+    } catch (error) {
+      console.error('Error loading configuration:', error);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const saveConfiguration = async () => {
+    try {
+      setConfigSaving(true);
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        alert('Configuration saved successfully! The cron schedule has been updated.');
+      } else {
+        alert(`Failed to save configuration: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Error saving configuration:', error);
+      alert('Failed to save configuration. Please try again.');
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const loadInstallationSchedules = async () => {
+    try {
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/installation-schedules`);
+      const data = await response.json();
+
+      if (data.success) {
+        setInstallationSchedules(data.schedules || []);
+      }
+    } catch (error) {
+      console.error('Error loading installation schedules:', error);
+    }
+  };
 
   const handleSchedule = async () => {
     setLoading(true);
     setScheduledAt(new Date());
     setSchedule([]);
+    setUnscheduled([]);
+    setStats(null);
 
     try {
-      // Optionally compute runAtIso if you later extend scheduleOrders to accept a run time.
-      let runAtIso;
-      if (scheduledHour === "now") {
-        runAtIso = new Date().toISOString();
-      } else if (scheduledHour === "custom" && customTime) {
-        const [hh, mm] = customTime.split(":").map(Number);
-        const now = new Date();
-        const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh || 0, mm || 0, 0);
-        runAtIso = dt.toISOString();
-      } else {
-        // default to next midnight
-        const n = new Date();
-        runAtIso = new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0, 0, 0).toISOString();
-      }
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
 
-      // Call your scheduler function. If your scheduler accepts a runAt parameter, pass runAtIso.
-      // For backward compatibility we call without args; if your scheduler supports runAt, change below:
-      // const result = await scheduleOrders(runAtIso);
-      const result = await scheduleOrders();
+      const data = await response.json();
 
-      // scheduleOrders (your script) already prints pending orders to console per your requirement.
-      // result is expected to be an array of scheduled entries (as in your scheduler.js)
-      if (Array.isArray(result)) {
-        setSchedule(result);
+      if (data.success) {
+        setSchedule(data.details.scheduledOrders || []);
+        setUnscheduled(data.details.unscheduledOrders || []);
+        setStats(data.results);
+
+        // Reload installation schedules
+        await loadInstallationSchedules();
       } else {
-        // If your scheduler returns something else (e.g. { schedule, meta }), handle that shape:
-        if (result && Array.isArray(result.schedule)) {
-          setSchedule(result.schedule);
-        } else {
-          // Unknown shape: try to pick reasonable fields
-          setSchedule([]);
-          console.warn("scheduleOrders returned unexpected shape:", result);
-        }
+        alert(`Scheduler failed: ${data.error}`);
       }
     } catch (error) {
-      console.error("Scheduling error:", error);
+      console.error('Scheduling error:', error);
+      alert('Failed to run scheduler. Please check the console for details.');
     } finally {
       setLoading(false);
     }
   };
 
-  const grouped = schedule.reduce((acc, item) => {
-    const day = item.SlotDate || toISODateString(item.ScheduledStart ? new Date(item.ScheduledStart) : new Date());
-    if (!acc[day]) acc[day] = [];
-    acc[day].push(item);
-    return acc;
-  }, {});
+  const formatTime = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="p-3 bg-blue-600 rounded-xl">
-              <Calendar className="text-white" size={28} />
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-600 rounded-xl">
+                <Calendar className="text-white" size={28} />
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">Auto Scheduler</h1>
+                <p className="text-gray-600">Optimize and schedule pending orders automatically</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Auto Scheduler</h1>
-              <p className="text-gray-600">Run your scheduler implementation and view results</p>
-            </div>
+            <button
+              onClick={() => setShowConfig(!showConfig)}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              <Settings size={20} />
+              {showConfig ? 'Hide' : 'Show'} Configuration
+            </button>
           </div>
         </div>
 
-        {/* Control Panel */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-8">
-          <div className="flex flex-col md:flex-row gap-4 items-start md:items-end">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Schedule Time</label>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setScheduledHour("now")}
-                  className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                    scheduledHour === "now"
-                      ? "border-blue-600 bg-blue-50 text-blue-700 font-medium"
-                      : "border-gray-200 text-gray-600 hover:border-gray-300"
-                  }`}
-                >
-                  Start Now
-                </button>
-                <button
-                  onClick={() => setScheduledHour("custom")}
-                  className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                    scheduledHour === "custom"
-                      ? "border-blue-600 bg-blue-50 text-blue-700 font-medium"
-                      : "border-gray-200 text-gray-600 hover:border-gray-300"
-                  }`}
-                >
-                  Custom Time
-                </button>
-              </div>
-            </div>
+        {/* Configuration Panel */}
+        {showConfig && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-8">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Settings size={20} />
+              Scheduler Configuration
+            </h2>
 
-            {scheduledHour === "custom" && (
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Select Time</label>
-                <input
-                  type="time"
-                  value={customTime}
-                  onChange={(e) => setCustomTime(e.target.value)}
-                  className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-blue-600 focus:outline-none"
-                />
+            {configLoading ? (
+              <div className="text-center py-8">
+                <RefreshCw className="animate-spin h-8 w-8 text-blue-600 mx-auto mb-2" />
+                <p className="text-gray-600">Loading configuration...</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Warehouse Address
+                  </label>
+                  <input
+                    type="text"
+                    value={config.warehouse_address}
+                    onChange={(e) => setConfig({ ...config, warehouse_address: e.target.value })}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="e.g., University of Malaya, Kuala Lumpur"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Warehouse Postal Code
+                  </label>
+                  <input
+                    type="text"
+                    value={config.warehouse_postal}
+                    onChange={(e) => setConfig({ ...config, warehouse_postal: e.target.value })}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="e.g., 50603"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Cron Schedule Expression
+                  </label>
+                  <input
+                    type="text"
+                    value={config.cron_expression}
+                    onChange={(e) => setConfig({ ...config, cron_expression: e.target.value })}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+                    placeholder="0 0 * * *"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Examples: "0 0 * * *" (daily at midnight), "0 0 */2 * *" (every 2 days at midnight)
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="enabled"
+                    checked={config.enabled}
+                    onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                  <label htmlFor="enabled" className="text-sm font-medium text-gray-700">
+                    Enable automatic scheduling
+                  </label>
+                </div>
+
+                <button
+                  onClick={saveConfiguration}
+                  disabled={configSaving}
+                  className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {configSaving ? (
+                    <>
+                      <RefreshCw size={16} className="animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={16} />
+                      Save Configuration
+                    </>
+                  )}
+                </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Control Panel */}
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-8">
+          <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+            <div className="flex-1 text-center md:text-left">
+              <p className="text-sm text-gray-600 mb-1">Click the button to run the scheduler now</p>
+              <p className="text-xs text-gray-500">
+                The scheduler will process all pending orders and assign them to optimal timeslots
+              </p>
+            </div>
 
             <button
               onClick={handleSchedule}
               disabled={loading}
-              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
             >
               {loading ? (
                 <>
@@ -183,7 +404,7 @@ export default function AutoScheduler() {
               ) : (
                 <>
                   <PlayCircle size={20} />
-                  Run Scheduler
+                  Run Scheduler Now
                 </>
               )}
             </button>
@@ -197,116 +418,166 @@ export default function AutoScheduler() {
           )}
         </div>
 
-        {/* Results */}
-        {schedule.length > 0 ? (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <Package size={24} className="text-blue-600" />
-                Scheduled Orders ({schedule.length})
-              </h2>
-              <div className="text-sm text-gray-600">Results come from your scheduler implementation</div>
+        {/* Statistics */}
+        {stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <div className="flex items-center gap-2 text-green-600 mb-1">
+                <CheckCircle size={20} />
+                <span className="text-sm font-medium">Scheduled</span>
+              </div>
+              <p className="text-3xl font-bold text-gray-900">{stats.scheduled}</p>
             </div>
 
-            {Object.entries(grouped).map(([date, items]) => (
-              <div key={date} className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-                <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4">
-                  <h3 className="text-xl font-semibold text-white flex items-center gap-2">
-                    <Calendar size={20} />
-                    {formatDate(date)}
-                  </h3>
-                  <p className="text-blue-100 text-sm mt-1">{items.length} orders scheduled</p>
-                </div>
-
-                <div className="p-6 space-y-4">
-                  {items.map((item, idx) => (
-                    <div key={idx} className="bg-gradient-to-r from-gray-50 to-blue-50 rounded-xl p-5 border-l-4 border-blue-600 hover:shadow-md transition-shadow">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-3">
-                            <div className="bg-blue-600 text-white px-3 py-1 rounded-lg font-bold text-sm">{item.OrderID}</div>
-                            <div className="flex items-center gap-1 text-gray-600 text-sm">
-                              <MapPin size={14} />
-                              {item.BuildingName || `Building ${item.BuildingID}`}
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="flex items-center gap-2">
-                              <div className="p-2 bg-white rounded-lg">
-                                <Clock size={18} className="text-green-600" />
-                              </div>
-                              <div>
-                                <div className="text-xs text-gray-500 font-medium">Start Time</div>
-                                <div className="text-sm font-semibold text-gray-900">{formatTime(item.ScheduledStart)}</div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <div className="p-2 bg-white rounded-lg">
-                                <Clock size={18} className="text-red-600" />
-                              </div>
-                              <div>
-                                <div className="text-xs text-gray-500 font-medium">End Time</div>
-                                <div className="text-sm font-semibold text-gray-900">{formatTime(item.ScheduledEnd)}</div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <div className="p-2 bg-white rounded-lg">
-                                <Truck size={18} className="text-blue-600" />
-                              </div>
-                              <div>
-                                <div className="text-xs text-gray-500 font-medium">Duration</div>
-                                <div className="text-sm font-semibold text-gray-900">{item.TotalMinutes} minutes</div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex-shrink-0">
-                          <div className="bg-white px-4 py-3 rounded-lg border-2 border-blue-200">
-                            <div className="text-xs text-gray-500 font-medium text-center mb-1">Time Slot</div>
-                            <div className="text-sm font-bold text-blue-600 whitespace-nowrap">{item.SlotWindow}</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* optional product summary if present */}
-                      {item.products && item.products.length > 0 && (
-                        <div className="mt-3 text-xs text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
-                          {item.products.map((p, i) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <Package size={12} />
-                              <div>
-                                <div className="font-medium text-sm">{p.ProductName}</div>
-                                <div className="text-xs text-gray-500">
-                                  Qty: {p.Quantity} {p.DismantleRequired ? "• Dismantle" : ""}
-                                  {p.DismantleRequired && ` • Dismantle ${p.DismantleTimeMin}m`}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <div className="flex items-center gap-2 text-red-600 mb-1">
+                <AlertCircle size={20} />
+                <span className="text-sm font-medium">Unscheduled</span>
               </div>
-            ))}
+              <p className="text-3xl font-bold text-gray-900">{stats.unscheduled}</p>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <div className="flex items-center gap-2 text-blue-600 mb-1">
+                <Package size={20} />
+                <span className="text-sm font-medium">Installations</span>
+              </div>
+              <p className="text-3xl font-bold text-gray-900">{stats.installationSchedulesCreated}</p>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+              <div className="flex items-center gap-2 text-purple-600 mb-1">
+                <MapPin size={20} />
+                <span className="text-sm font-medium">API Requests</span>
+              </div>
+              <p className="text-3xl font-bold text-gray-900">{stats.apiRequestCount}</p>
+            </div>
           </div>
-        ) : (
-          !loading && (
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
-              <div className="max-w-md mx-auto">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <AlertCircle size={40} className="text-gray-400" />
+        )}
+
+        {/* Scheduled Orders */}
+        {schedule.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <CheckCircle size={24} className="text-green-600" />
+              Scheduled Orders ({schedule.length})
+            </h2>
+
+            <div className="space-y-3">
+              {schedule.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="bg-gradient-to-r from-green-50 to-blue-50 rounded-xl p-4 border-l-4 border-green-500 hover:shadow-md transition-shadow"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                    <div>
+                      <span className="font-semibold text-gray-700">Order ID:</span>
+                      <p className="text-gray-900">{item.orderId}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-gray-700">Start Time:</span>
+                      <p className="text-gray-900">{formatTime(item.startTime)}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-gray-700">End Time:</span>
+                      <p className="text-gray-900">{formatTime(item.endTime)}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-gray-700">Loading Sequence:</span>
+                      <p className="text-blue-600 font-bold">#{item.loadingSequence}</p>
+                      <p className="text-xs text-gray-500">
+                        {item.loadingSequence === 1 ? 'First to load, last to deliver' : 'Later loading position'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">No Schedule Generated</h3>
-                <p className="text-gray-600">Click "Run Scheduler" to run your scheduler and show results</p>
-              </div>
+              ))}
             </div>
-          )
+          </div>
+        )}
+
+        {/* Unscheduled Orders */}
+        {unscheduled.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <AlertCircle size={24} className="text-red-600" />
+              Unscheduled Orders ({unscheduled.length})
+            </h2>
+
+            <div className="space-y-3">
+              {unscheduled.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="bg-red-50 rounded-xl p-4 border-l-4 border-red-500"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="font-semibold text-gray-900">Order ID: {item.orderId}</p>
+                      <p className="text-sm text-gray-600 mt-1">Reason: {item.reason}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Installation Schedules */}
+        {installationSchedules.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <Users size={24} className="text-blue-600" />
+              Installation Schedules ({installationSchedules.length})
+            </h2>
+
+            <div className="space-y-3">
+              {installationSchedules.map((schedule, idx) => (
+                <div
+                  key={idx}
+                  className="bg-blue-50 rounded-xl p-4 border-l-4 border-blue-500"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <span className="font-semibold text-gray-700">Order ID:</span>
+                      <p className="text-gray-900">{schedule.order_id}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-gray-700">Estimated Arrival:</span>
+                      <p className="text-gray-900">{formatTime(schedule.estimated_arrival_time)}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-gray-700">Status:</span>
+                      <p className={`font-medium ${
+                        schedule.status === 'Scheduled' ? 'text-blue-600' :
+                        schedule.status === 'Completed' ? 'text-green-600' :
+                        'text-gray-600'
+                      }`}>
+                        {schedule.status}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!loading && schedule.length === 0 && unscheduled.length === 0 && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
+            <div className="max-w-md mx-auto">
+              <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertCircle size={40} className="text-gray-400" />
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Schedule Generated</h3>
+              <p className="text-gray-600 mb-4">
+                Click "Run Scheduler Now" to process pending orders and create an optimized schedule
+              </p>
+              <p className="text-sm text-gray-500">
+                The scheduler will group orders by postal code, optimize routes, and assign them to timeslots with proper truck loading sequence
+              </p>
+            </div>
+          </div>
         )}
       </div>
     </div>

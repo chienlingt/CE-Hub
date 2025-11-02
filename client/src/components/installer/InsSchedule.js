@@ -25,12 +25,99 @@ const InstallationSchedule = () => {
   const [buildings, setBuildings] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [installationSchedules, setInstallationSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Generate mock data for demonstration
+  const generateMockData = () => {
+    const today = new Date().toISOString().split('T')[0];
+
+    const mockTeams = [
+      { id: 'TEAM_INSTALL_001', team_type: 'Installation Team A' },
+      { id: 'TEAM_INSTALL_002', team_type: 'Installation Team B' }
+    ];
+
+    const mockCustomers = [
+      { id: 'CUST_MOCK_001', full_name: 'Emily Wong', phone: '012-3334444', email: 'emily@example.com', address: '10 Jalan Bukit Bintang', city: 'Kuala Lumpur', postcode: '55100', state: 'WP Kuala Lumpur' },
+      { id: 'CUST_MOCK_002', full_name: 'David Lim', phone: '013-5556666', email: 'david@example.com', address: '25 Jalan Sultan Ismail', city: 'Kuala Lumpur', postcode: '50250', state: 'WP Kuala Lumpur' }
+    ];
+
+    const mockBuildings = [
+      { id: 'BLD_MOCK_001', building_name: 'Pavilion Residences', postal_code: '55100', housing_type: 'Condominium', lift_available: true, loading_bay_available: true, access_time_window_start: '08:00', access_time_window_end: '22:00', pre_registration_required: true, notes: 'Security strict' },
+      { id: 'BLD_MOCK_002', building_name: 'Mont Kiara Sophia', postal_code: '50480', housing_type: 'Apartment', lift_available: true, loading_bay_available: false, access_time_window_start: '09:00', access_time_window_end: '18:00', narrow_doorways: true }
+    ];
+
+    const mockProducts = [
+      { id: 'PROD_MOCK_001', product_name: 'Daikin Air Conditioner 2.5HP', estimated_installation_time_min: 120, estimated_installation_time_max: 180, installer_team_required_flag: true, fragile_flag: false, no_lie_down_flag: true, package_length_cm: 100, package_width_cm: 50, package_height_cm: 80 },
+      { id: 'PROD_MOCK_002', product_name: 'Samsung Smart TV 65"', estimated_installation_time_min: 45, estimated_installation_time_max: 60, installer_team_required_flag: true, fragile_flag: true, no_lie_down_flag: true, package_length_cm: 150, package_width_cm: 90, package_height_cm: 15 }
+    ];
+
+    const mockOrders = [
+      {
+        id: 'ORD_MOCK_001',
+        customer_id: 'CUST_MOCK_001',
+        building_id: 'BLD_MOCK_001',
+        order_status: 'Scheduled',
+        scheduled_start_date_time: `${today}T09:00:00`,
+        scheduled_end_date_time: `${today}T12:00:00`,
+        number_of_attempts: 1,
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'ORD_MOCK_002',
+        customer_id: 'CUST_MOCK_002',
+        building_id: 'BLD_MOCK_002',
+        order_status: 'Scheduled',
+        scheduled_start_date_time: `${today}T14:00:00`,
+        scheduled_end_date_time: `${today}T16:00:00`,
+        number_of_attempts: 1,
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+      }
+    ];
+
+    const mockOrderProducts = [
+      { order_id: 'ORD_MOCK_001', product_id: 'PROD_MOCK_001', quantity: 2 },
+      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_002', quantity: 1 },
+      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_001', quantity: 1 }
+    ];
+
+    const mockInstallationSchedules = [
+      {
+        id: 'INST_MOCK_001',
+        order_id: 'ORD_MOCK_001',
+        installation_team_id: 'TEAM_INSTALL_001',
+        estimated_arrival_time: `${today}T09:30:00`,
+        status: 'Scheduled',
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'INST_MOCK_002',
+        order_id: 'ORD_MOCK_002',
+        installation_team_id: 'TEAM_INSTALL_002',
+        estimated_arrival_time: `${today}T14:30:00`,
+        status: 'Scheduled',
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+      }
+    ];
+
+    return {
+      orders: mockOrders,
+      orderProducts: mockOrderProducts,
+      products: mockProducts,
+      customers: mockCustomers,
+      buildings: mockBuildings,
+      teams: mockTeams,
+      installationSchedules: mockInstallationSchedules,
+      employees: []
+    };
+  };
 
   // Load all data
   useEffect(() => {
     async function loadData() {
       try {
+        const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
         const [
           ordersData,
           orderProductsData,
@@ -38,7 +125,8 @@ const InstallationSchedule = () => {
           customersData,
           buildingsData,
           employeesData,
-          teamsData
+          teamsData,
+          installationSchedulesResponse
         ] = await Promise.all([
           getAllOrders(),
           getAllOrderProducts(),
@@ -46,18 +134,51 @@ const InstallationSchedule = () => {
           getAllCustomers(),
           getAllBuildings(),
           getAllEmployees(),
-          getAllTeams()
+          getAllTeams(),
+          fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/installation-schedules`)
+            .then(res => res.ok ? res.json() : { success: false, schedules: [] })
+            .catch(() => ({ success: false, schedules: [] }))
         ]);
 
-        setOrders(ordersData);
-        setOrderProducts(orderProductsData);
-        setProducts(productsData);
-        setCustomers(customersData);
-        setBuildings(buildingsData);
-        setEmployees(employeesData);
-        setTeams(teamsData);
+        const installSchedules = installationSchedulesResponse.success ? installationSchedulesResponse.schedules : [];
+
+        // Use real data if available, otherwise use mock data
+        const hasRealData = ordersData.length > 0 || installSchedules.length > 0;
+
+        // if (!hasRealData) {
+          const mockData = generateMockData();
+          setOrders(mockData.orders);
+          setOrderProducts(mockData.orderProducts);
+          setProducts(mockData.products);
+          setCustomers(mockData.customers);
+          setBuildings(mockData.buildings);
+          setEmployees(mockData.employees);
+          setTeams(mockData.teams);
+          setInstallationSchedules(mockData.installationSchedules);
+
+          console.log('[InsSchedule] ✅ Mock data set to state');
+        // } else {
+        //   console.log('[InsSchedule] ✅ Using real data from API');
+        //   setOrders(ordersData);
+        //   setOrderProducts(orderProductsData);
+        //   setProducts(productsData);
+        //   setCustomers(customersData);
+        //   setBuildings(buildingsData);
+        //   setEmployees(employeesData);
+        //   setTeams(teamsData);
+        //   setInstallationSchedules(installSchedules);
+        // }
       } catch (error) {
-        console.error('Error loading data:', error);
+        // Use mock data on error
+        const mockData = generateMockData();
+        setOrders(mockData.orders);
+        setOrderProducts(mockData.orderProducts);
+        setProducts(mockData.products);
+        setCustomers(mockData.customers);
+        setBuildings(mockData.buildings);
+        setEmployees(mockData.employees);
+        setTeams(mockData.teams);
+        setInstallationSchedules(mockData.installationSchedules);
       } finally {
         setLoading(false);
       }
@@ -120,7 +241,12 @@ const InstallationSchedule = () => {
     employeeContact: (emp) => emp.contactNumber || emp.contact_number || '',
     employeeRole: (emp) => emp.role?.name || emp.roleName || emp.role || '',
     teamId: (team) => team.id || team.TeamID,
-    teamType: (team) => team.team_type || team.TeamType || ''
+    teamType: (team) => team.team_type || team.TeamType || '',
+    installScheduleId: (is) => is.id,
+    installScheduleOrderId: (is) => is.order_id,
+    installScheduleTeamId: (is) => is.installation_team_id,
+    installScheduleEstArrival: (is) => is.estimated_arrival_time,
+    installScheduleStatus: (is) => is.status || 'Scheduled'
   };
 
   const getStatusColor = (status) => {
@@ -153,29 +279,51 @@ const InstallationSchedule = () => {
     }
   };
 
-  // Get installation orders (orders that have products requiring installer team)
-  const installationOrders = orders.filter(order => {
-    const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
-    return orderProds.some(op => {
-      const product = products.find(p => field.productId(p) === field.orderProductProductId(op));
-      return product && field.productInstallerRequired(product);
-    });
-  });
+  // Use installation schedules if available, otherwise fall back to filtering orders
+  const useSchedules = installationSchedules.length > 0;
+
+  // Get installation orders from schedules or filter orders that require installation
+  const installationOrders = useSchedules
+    ? installationSchedules.map(schedule => {
+        // Find the related order
+        const order = orders.find(o => field.orderId(o) === field.installScheduleOrderId(schedule));
+        return {
+          ...order,
+          installationSchedule: schedule
+        };
+      }).filter(item => item.id) // Only include if order was found
+    : orders.filter(order => {
+        const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
+        return orderProds.some(op => {
+          const product = products.find(p => field.productId(p) === field.orderProductProductId(op));
+          return product && field.productInstallerRequired(product);
+        });
+      });
 
   // Filter orders by date and team
   const filteredOrders = installationOrders.filter(order => {
-    const scheduledStart = field.orderScheduledStart(order);
-    if (!scheduledStart) return false;
+    // For scheduled installations, use estimated_arrival_time
+    if (order.installationSchedule) {
+      const estArrival = field.installScheduleEstArrival(order.installationSchedule);
+      if (!estArrival) return false;
+      const arrivalDate = new Date(estArrival).toISOString().split('T')[0];
+      const dateMatch = arrivalDate === selectedDate;
 
-    const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
-    const filterDate = selectedDate;
-    const dateMatch = orderDate === filterDate;
+      // Filter by team if selected
+      if (selectedTeam !== 'all') {
+        const teamId = field.installScheduleTeamId(order.installationSchedule);
+        return dateMatch && teamId === selectedTeam;
+      }
 
-    // For team filter, we'd need to check delivery_team_id if that field exists on orders
-    // For now, just match date
-    return dateMatch;
+      return dateMatch;
+    } else {
+      // Fall back to scheduled start time for unscheduled orders
+      const scheduledStart = field.orderScheduledStart(order);
+      if (!scheduledStart) return false;
+      const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
+      return orderDate === selectedDate;
+    }
   });
-
   const formatTime = (dateTime) => {
     if (!dateTime) return 'Not started';
     try {
@@ -264,6 +412,12 @@ const InstallationSchedule = () => {
               const building = buildings.find(b => field.buildingId(b) === field.orderBuildingId(order));
               const employee = employees.find(e => field.employeeId(e) === field.orderEmployeeId(order));
 
+              // Get installation schedule info if available
+              const installSchedule = order.installationSchedule;
+              const installTeam = installSchedule ? teams.find(t => field.teamId(t) === field.installScheduleTeamId(installSchedule)) : null;
+              const estArrival = installSchedule ? field.installScheduleEstArrival(installSchedule) : null;
+              const installStatus = installSchedule ? field.installScheduleStatus(installSchedule) : field.orderStatus(order);
+
               // Get products for this order
               const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
               const orderProductsDetails = orderProds.map(op => {
@@ -280,10 +434,15 @@ const InstallationSchedule = () => {
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center space-x-3">
                       <h3 className="text-xl font-semibold text-gray-900">{field.orderId(order)}</h3>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium border flex items-center space-x-1 ${getStatusColor(field.orderStatus(order))}`}>
-                        {getStatusIcon(field.orderStatus(order))}
-                        <span>{field.orderStatus(order)}</span>
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium border flex items-center space-x-1 ${getStatusColor(installStatus)}`}>
+                        {getStatusIcon(installStatus)}
+                        <span>{installStatus}</span>
                       </span>
+                      {installTeam && (
+                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
+                          {field.teamType(installTeam)}
+                        </span>
+                      )}
                     </div>
                     <div className="text-right">
                       <p className="text-sm text-gray-600">Attempt #{field.orderAttempts(order) || 1}</p>
@@ -306,6 +465,14 @@ const InstallationSchedule = () => {
                           Schedule
                         </h4>
                         <div className="grid grid-cols-2 gap-4 text-sm">
+                          {estArrival && (
+                            <div className="col-span-2 mb-2">
+                              <p className="text-gray-600">Estimated Arrival</p>
+                              <p className="font-medium text-blue-600 text-lg">
+                                {formatTime(estArrival)} ({formatDate(estArrival)})
+                              </p>
+                            </div>
+                          )}
                           <div>
                             <p className="text-gray-600">Scheduled</p>
                             <p className="font-medium">

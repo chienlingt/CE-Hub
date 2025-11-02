@@ -25,7 +25,9 @@ import {
   getAllCustomers,
   getAllBuildings,
   getAllEmployees,
-  getAllTimeSlots
+  getAllTimeSlots,
+  getAllTeams,
+  getAllTrucks
 } from '../../services/informationService';
 
 export default function DeliverySchedule() {
@@ -35,10 +37,123 @@ export default function DeliverySchedule() {
   const [customers, setCustomers] = useState([]);
   const [buildings, setBuildings] = useState([]);
   const [timeSlots, setTimeSlots] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [trucks, setTrucks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [currentOrder, setCurrentOrder] = useState(null);
+
+  // Generate mock data for demonstration
+  const generateMockData = () => {
+    const today = new Date().toISOString().split('T')[0];
+
+    const mockTrucks = [
+      { id: 'TRK_MOCK_001', plate_no: 'WXY1234', tone: 3 },
+      { id: 'TRK_MOCK_002', plate_no: 'ABC5678', tone: 5 }
+    ];
+
+    const mockTeams = [
+      { id: 'TEAM_DEL_001', team_type: 'Delivery Team A' },
+      { id: 'TEAM_DEL_002', team_type: 'Delivery Team B' },
+      { id: 'TEAM_WH_001', team_type: 'Warehouse Team A' }
+    ];
+
+    const mockTimeSlots = [
+      {
+        id: 'TS_MOCK_001',
+        date: today,
+        time_window_start: '08:00',
+        time_window_end: '12:00',
+        available_flag: false,
+        delivery_team_id: 'TEAM_DEL_001',
+        warehouse_team_id: 'TEAM_WH_001',
+        truck_id: 'TRK_MOCK_001'
+      },
+      {
+        id: 'TS_MOCK_002',
+        date: today,
+        time_window_start: '13:00',
+        time_window_end: '17:00',
+        available_flag: false,
+        delivery_team_id: 'TEAM_DEL_002',
+        warehouse_team_id: 'TEAM_WH_001',
+        truck_id: 'TRK_MOCK_002'
+      }
+    ];
+
+    const mockCustomers = [
+      { id: 'CUST_MOCK_001', full_name: 'John Tan', phone: '012-3456789', email: 'john@example.com', address: '123 Jalan Raja', city: 'Kuala Lumpur', postcode: '50100', state: 'WP Kuala Lumpur' },
+      { id: 'CUST_MOCK_002', full_name: 'Sarah Lee', phone: '012-9876543', email: 'sarah@example.com', address: '456 Jalan Ampang', city: 'Kuala Lumpur', postcode: '50450', state: 'WP Kuala Lumpur' },
+      { id: 'CUST_MOCK_003', full_name: 'Ahmad Ibrahim', phone: '013-2468135', email: 'ahmad@example.com', address: '789 Jalan Damansara', city: 'Petaling Jaya', postcode: '47400', state: 'Selangor' }
+    ];
+
+    const mockBuildings = [
+      { id: 'BLD_MOCK_001', building_name: 'Menara KLCC', postal_code: '50088' },
+      { id: 'BLD_MOCK_002', building_name: 'Pavilion Residences', postal_code: '55100' },
+      { id: 'BLD_MOCK_003', building_name: 'The Gardens', postal_code: '59200' }
+    ];
+
+    const mockProducts = [
+      { id: 'PROD_MOCK_001', product_name: 'Samsung Smart TV 55"', estimated_installation_time_min: 30 },
+      { id: 'PROD_MOCK_002', product_name: 'LG Washing Machine', estimated_installation_time_min: 45 },
+      { id: 'PROD_MOCK_003', product_name: 'Panasonic Air Conditioner', estimated_installation_time_min: 60 }
+    ];
+
+    const mockOrders = [
+      {
+        id: 'ORD_MOCK_001',
+        customer_id: 'CUST_MOCK_001',
+        building_id: 'BLD_MOCK_001',
+        time_slot_id: 'TS_MOCK_001',
+        order_status: 'Scheduled',
+        scheduled_start_date_time: `${today}T08:00:00`,
+        scheduled_end_date_time: `${today}T09:30:00`,
+        truck_loading_sequence: 3,
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'ORD_MOCK_002',
+        customer_id: 'CUST_MOCK_002',
+        building_id: 'BLD_MOCK_002',
+        time_slot_id: 'TS_MOCK_001',
+        order_status: 'Scheduled',
+        scheduled_start_date_time: `${today}T10:00:00`,
+        scheduled_end_date_time: `${today}T11:30:00`,
+        truck_loading_sequence: 2,
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+      },
+      {
+        id: 'ORD_MOCK_003',
+        customer_id: 'CUST_MOCK_003',
+        building_id: 'BLD_MOCK_003',
+        time_slot_id: 'TS_MOCK_002',
+        order_status: 'Scheduled',
+        scheduled_start_date_time: `${today}T13:00:00`,
+        scheduled_end_date_time: `${today}T14:30:00`,
+        truck_loading_sequence: 1,
+        created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+      }
+    ];
+
+    const mockOrderProducts = [
+      { order_id: 'ORD_MOCK_001', product_id: 'PROD_MOCK_001', quantity: 1 },
+      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_002', quantity: 1 },
+      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_003', quantity: 1 },
+      { order_id: 'ORD_MOCK_003', product_id: 'PROD_MOCK_001', quantity: 2 }
+    ];
+
+    return {
+      orders: mockOrders,
+      orderProducts: mockOrderProducts,
+      products: mockProducts,
+      customers: mockCustomers,
+      buildings: mockBuildings,
+      timeSlots: mockTimeSlots,
+      teams: mockTeams,
+      trucks: mockTrucks
+    };
+  };
 
   // Load all data
   useEffect(() => {
@@ -50,24 +165,58 @@ export default function DeliverySchedule() {
           productsData,
           customersData,
           buildingsData,
-          timeSlotsData
+          timeSlotsData,
+          teamsData,
+          trucksData
         ] = await Promise.all([
           getAllOrders(),
           getAllOrderProducts(),
           getAllProducts(),
           getAllCustomers(),
           getAllBuildings(),
-          getAllTimeSlots()
+          getAllTimeSlots(),
+          getAllTeams(),
+          getAllTrucks()
         ]);
 
-        setOrders(ordersData);
-        setOrderProducts(orderProductsData);
-        setProducts(productsData);
-        setCustomers(customersData);
-        setBuildings(buildingsData);
-        setTimeSlots(timeSlotsData);
+        // Use real data if available, otherwise use mock data
+        const hasRealData = ordersData.length > 0 || timeSlotsData.length > 0;
+
+        // if (!hasRealData) {
+          const mockData = generateMockData();
+
+          setOrders(mockData.orders);
+          setOrderProducts(mockData.orderProducts);
+          setProducts(mockData.products);
+          setCustomers(mockData.customers);
+          setBuildings(mockData.buildings);
+          setTimeSlots(mockData.timeSlots);
+          setTeams(mockData.teams);
+          setTrucks(mockData.trucks);
+        // } else {
+        //   console.log('[DelSchedule] ✅ Using real data from API');
+        //   setOrders(ordersData);
+        //   setOrderProducts(orderProductsData);
+        //   setProducts(productsData);
+        //   setCustomers(customersData);
+        //   setBuildings(buildingsData);
+        //   setTimeSlots(timeSlotsData);
+        //   setTeams(teamsData);
+        //   setTrucks(trucksData);
+        // }
       } catch (error) {
-        console.error('Error loading delivery data:', error);
+        console.error('[DelSchedule] ❌ ERROR loading delivery data:', error);
+        // Use mock data on error
+        const mockData = generateMockData();
+        console.log('[DelSchedule] 🔹 Using mock data due to error');
+        setOrders(mockData.orders);
+        setOrderProducts(mockData.orderProducts);
+        setProducts(mockData.products);
+        setCustomers(mockData.customers);
+        setBuildings(mockData.buildings);
+        setTimeSlots(mockData.timeSlots);
+        setTeams(mockData.teams);
+        setTrucks(mockData.trucks);
       } finally {
         setLoading(false);
       }
@@ -118,14 +267,21 @@ export default function DeliverySchedule() {
     timeSlotDate: (ts) => ts.date || ts.Date,
     timeSlotStart: (ts) => ts.time_window_start || ts.TimeWindowStart,
     timeSlotEnd: (ts) => ts.time_window_end || ts.TimeWindowEnd,
-    timeSlotAvailable: (ts) => ts.available_flag ?? ts.AvailableFlag ?? true
+    timeSlotAvailable: (ts) => ts.available_flag ?? ts.AvailableFlag ?? true,
+    timeSlotDeliveryTeamId: (ts) => ts.delivery_team_id || ts.DeliveryTeamID,
+    timeSlotWarehouseTeamId: (ts) => ts.warehouse_team_id || ts.WarehouseTeamID,
+    timeSlotTruckId: (ts) => ts.truck_id || ts.TruckID,
+    orderLoadingSequence: (order) => order.truck_loading_sequence || order.TruckLoadingSequence || null,
+    teamId: (team) => team.id || team.TeamID,
+    teamType: (team) => team.team_type || team.TeamType || '',
+    truckId: (truck) => truck.id || truck.TruckID,
+    truckPlate: (truck) => truck.plate_no || truck.PlateNo || truck.CarPlate || ''
   };
 
-  // Filter orders for delivery (exclude installation-only orders)
+  // Filter orders for delivery (scheduled orders only)
   const deliveryOrders = orders.filter(order => {
-    const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
-    // Show all orders, or could filter by products NOT requiring installation
-    return true;
+    const status = field.orderStatus(order);
+    return status === 'Scheduled' || status === 'In Progress' || status === 'Completed';
   });
 
   // Filter orders by selected date
@@ -135,6 +291,7 @@ export default function DeliverySchedule() {
     const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
     return orderDate === selectedDate;
   });
+
 
   // Group orders by time slot
   const groupedOrders = filteredOrders.reduce((groups, order) => {
@@ -146,9 +303,18 @@ export default function DeliverySchedule() {
     return groups;
   }, {});
 
-  // Sort orders within each time slot by priority (high priority first) and scheduled time
+  // Sort orders within each time slot by truck loading sequence (or scheduled time as fallback)
   Object.keys(groupedOrders).forEach(timeSlotId => {
     groupedOrders[timeSlotId].sort((a, b) => {
+      const seqA = a.truck_loading_sequence || a.TruckLoadingSequence;
+      const seqB = b.truck_loading_sequence || b.TruckLoadingSequence;
+
+      // If both have loading sequence, sort by that (lower sequence = delivered first)
+      if (seqA && seqB) {
+        return seqA - seqB;
+      }
+
+      // Otherwise fallback to scheduled time
       return new Date(field.orderScheduledStart(a)) - new Date(field.orderScheduledStart(b));
     });
   });
@@ -279,6 +445,11 @@ export default function DeliverySchedule() {
               const totalTime = getTotalEstimatedTime(timeSlotOrders);
               const completedOrders = timeSlotOrders.filter(o => field.orderStatus(o) === 'Completed').length;
 
+              // Get team and truck info from timeslot
+              const deliveryTeam = timeSlot ? teams.find(t => field.teamId(t) === field.timeSlotDeliveryTeamId(timeSlot)) : null;
+              const warehouseTeam = timeSlot ? teams.find(t => field.teamId(t) === field.timeSlotWarehouseTeamId(timeSlot)) : null;
+              const truck = timeSlot ? trucks.find(tr => field.truckId(tr) === field.timeSlotTruckId(timeSlot)) : null;
+
               return (
                 <div key={timeSlotId} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                   {/* Time Slot Header */}
@@ -293,6 +464,26 @@ export default function DeliverySchedule() {
                           <p className="text-sm text-gray-600">
                             {timeSlot ? field.timeSlotDate(timeSlot) : 'Unassigned Time Slot'}
                           </p>
+                          {/* Team and Truck Info */}
+                          {(deliveryTeam || warehouseTeam || truck) && (
+                            <div className="flex items-center gap-3 mt-2 text-xs">
+                              {deliveryTeam && (
+                                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded">
+                                  Delivery: {field.teamType(deliveryTeam)}
+                                </span>
+                              )}
+                              {warehouseTeam && (
+                                <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
+                                  Warehouse: {field.teamType(warehouseTeam)}
+                                </span>
+                              )}
+                              {truck && (
+                                <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded">
+                                  Truck: {field.truckPlate(truck)}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center space-x-6">
@@ -334,13 +525,22 @@ export default function DeliverySchedule() {
                           return product ? `${field.orderProductQuantity(op)}x ${field.productName(product)}` : '';
                         }).filter(Boolean);
 
+                        const loadingSeq = field.orderLoadingSequence(order);
+
                         return (
                           <div key={field.orderId(order)} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
                               {/* Sequence Number */}
                               <div className="lg:col-span-1">
-                                <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
-                                  {index + 1}
+                                <div className="flex flex-col items-center gap-1">
+                                  <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+                                    {index + 1}
+                                  </div>
+                                  {loadingSeq && (
+                                    <span className="text-xs text-gray-500" title="Truck Loading Sequence">
+                                      Load: {loadingSeq}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
 

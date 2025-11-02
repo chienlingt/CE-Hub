@@ -10,7 +10,11 @@ const prisma = require('./prismaClient');
 const app = express();
 
 app.use(helmet());
-app.use(cors());
+// CORS configuration - allows frontend to access API
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  credentials: true
+}));
 app.use(express.json());
 
 // Mount route modules
@@ -28,7 +32,9 @@ app.use('/api/customers', require('./routes/customers'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/time-slots', require('./routes/time-slots'));
 app.use('/api/lorry-trips', require('./routes/lorry-trips'));
+app.use('/api/order-products', require('./routes/order-products'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/scheduler', require('./routes/scheduler'));
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -42,25 +48,31 @@ app.get('/api/health', async (req, res) => {
 
 // Start server
 const port = process.env.PORT || 4000;
-app.listen(port, () => {
+app.listen(port, async () => {
   console.log(`\nServer listening on http://localhost:${port}`);
-  console.log('\nMounted routes:');
-  console.log('  /api/auth');
-  console.log('  /api/employees');
-  console.log('  /api/roles');
-  console.log('  /api/teams');
-  console.log('  /api/assignments');
-  console.log('  /api/trucks');
-  console.log('  /api/zones');
-  console.log('  /api/truck-zones');
-  console.log('  /api/buildings');
-  console.log('  /api/products');
-  console.log('  /api/customers');
-  console.log('  /api/orders');
-  console.log('  /api/time-slots');
-  console.log('  /api/lorry-trips');
-  console.log('  /api/reports');
-  console.log('  /api/health\n');
+  // console.log('\nMounted routes:');
+  // console.log('  /api/auth');
+  // console.log('  /api/employees');
+  // console.log('  /api/roles');
+  // console.log('  /api/teams');
+  // console.log('  /api/assignments');
+  // console.log('  /api/trucks');
+  // console.log('  /api/zones');
+  // console.log('  /api/truck-zones');
+  // console.log('  /api/buildings');
+  // console.log('  /api/products');
+  // console.log('  /api/customers');
+  // console.log('  /api/orders');
+  // console.log('  /api/time-slots');
+  // console.log('  /api/lorry-trips');
+  // console.log('  /api/order-products');
+  // console.log('  /api/reports');
+  // console.log('  /api/scheduler');
+  // console.log('  /api/health\n');
+
+  // Initialize scheduler cron job
+  const { initializeSchedulerCron } = require('./schedulerCron');
+  await initializeSchedulerCron();
 });
 
 process.on('SIGINT', async () => {

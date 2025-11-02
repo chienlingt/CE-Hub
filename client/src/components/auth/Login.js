@@ -8,7 +8,7 @@ function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { signIn } = useAuth();
+  const { login } = useAuth();
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -17,43 +17,19 @@ function Login() {
       setError('');
       setLoading(true);
 
-      // Call the backend login API
-      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-      console.log('Email: ', email);
+      // Call AuthContext login function
+      const result = await login(email, password);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data.error || 'Failed to sign in');
+      if (!result.success) {
+        setError(result.error || 'Failed to sign in');
         return;
       }
-
-      if (!data.success || !data.employee) {
-        setError('Invalid response from server');
-        return;
-      }
-
-      // Store session in context (using sessionStorage)
-      await signIn(data.employee);
-
-      console.log('Login: signIn completed; sessionStorage:', {
-        isAuthenticated: sessionStorage.getItem('isAuthenticated'),
-        permissions: sessionStorage.getItem('employeePermissions')
-      });
 
       // Redirect to main dashboard
       navigate('/', { replace: true });
 
     } catch (err) {
-      console.error('Login Error:', err);
-      setError('Failed to sign in: ' + (err?.message || String(err)));
+      setError('An unexpected error occurred: ' + (err?.message || String(err)));
     } finally {
       setLoading(false);
     }

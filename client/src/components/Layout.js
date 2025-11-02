@@ -15,7 +15,7 @@ import TruckInfo from './admin/info/TruckInfo';
 import TruckZoneInfo from './admin/info/TruckZoneInfo';
 import TeamInfo from './admin/info/TeamInfo';
 import Cases from './admin/Cases';
-import Schedule from './admin/Schedule';
+import Schedule from './admin/schedule/Schedule';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
 import RoleAccessControl from './admin/access/accessControl';
@@ -138,6 +138,9 @@ const Layout = () => {
 
   // Determine effective permissions array from AuthContext
   const effectivePermissions = useMemo(() => Array.isArray(permissions) ? permissions.map(p => normalize(p)) : [], [permissions]);
+  // Debug: print current user's permissions once they are loaded
+  useEffect(() => {
+  }, [permissions, effectivePermissions, employeeData, loadingPermissions]);
 
   // Filter navigation based on permissions. Admin gets full access.
   const filteredNavigation = useMemo(() => {

@@ -1,6 +1,4 @@
 import React, { useContext, useState, useEffect, createContext } from 'react';
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
 
 // Create context
 const AuthContext = createContext();
@@ -13,44 +11,55 @@ export function useAuth() {
 // Helper to normalize strings
 const normalize = (s) => (s || '').toString().toLowerCase().trim();
 
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
 /**
- * Fetch permissions for a given role.
- * Tries:
- *  1. Roles/{roleId}
- *  2. Roles collection where 'name' matches
+ * Fetch permissions for a given role from PostgreSQL API.
+ * Tries to match by role ID or name.
  */
 async function fetchPermissionsForRole(roleRaw) {
-  if (!roleRaw) return [];
+  if (!roleRaw) {
+    return [];
+  }
 
   const roleId = normalize(roleRaw);
+  
   try {
-    // Direct lookup by doc ID
-    const roleRef = doc(db, 'Roles', roleId);
-    const snap = await getDoc(roleRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      return Array.isArray(data.permissions)
-        ? data.permissions.map(normalize)
-        : [];
+    // Fetch all roles from API
+    const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles`);
+    if (!response.ok) {
+      return [];
     }
 
-    // Otherwise, search by name
-    const rolesCol = collection(db, 'Roles');
-    const rolesSnap = await getDocs(rolesCol);
-    for (const d of rolesSnap.docs) {
-      const data = d.data() || {};
-      const name = normalize(data.name || '');
-      const id = normalize(d.id);
-      if (name === roleId || id === roleId) {
-        return Array.isArray(data.permissions)
-          ? data.permissions.map(normalize)
-          : [];
+    const data = await response.json();
+    const roles = Array.isArray(data) ? data : (data.data || []);
+
+    // Find role by ID or name (case-insensitive)
+    const role = roles.find(r => {
+      const rId = normalize(r.id || '');
+      const rName = normalize(r.name || '');
+      const match = rId === roleId || rName === roleId;
+      if (match) {
+        console.log('[AuthContext] Role match found:', { roleId: r.id, roleName: r.name, permissions: r.permissions });
       }
+      return match;
+    });
+
+    if (!role) {
+      console.warn('[AuthContext] No role found matching:', roleId, 'Available roles:', roles.map(r => ({ id: normalize(r.id), name: normalize(r.name) })));
+      return [];
     }
+
+    if (role && Array.isArray(role.permissions)) {
+      console.log('[AuthContext] Returning permissions for role:', role.name, '→', role.permissions);
+      return role.permissions.map(normalize);
+    }
+
+    return [];
   } catch (err) {
-    console.warn('fetchPermissionsForRole error:', err);
+    console.error('[AuthContext] fetchPermissionsForRole error:', err);
+    return [];
   }
-  return [];
 }
 
 export function AuthProvider({ children }) {
@@ -78,15 +87,48 @@ export function AuthProvider({ children }) {
   const hasPermission = (permissionName) =>
     permissions.includes(normalize(permissionName));
 
-  // Login handler
+  // API Login function - calls backend and handles authentication
+  const login = async (email, password) => {
+    try {
+
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await response.json();
+      if (!data.employee) {
+        throw new Error('No employee data returned from server');
+      }
+
+      // Login successful - now set up the session and fetch permissions
+      await signIn(data.employee);
+
+      return { success: true };
+    } catch (err) {
+      console.error('[AuthContext] login error:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  };
+
+  // Internal session setup handler
   const signIn = async (empData) => {
     if (!empData) return;
-
-    const roleNorm = normalize(empData.role);
+    // Extract role - could be an object with id/name, or just a string/ID
+    let roleToFetch = empData.role;
+    if (typeof empData.role === 'object' && empData.role !== null) {
+      // If role is an object, prefer role.name, then role.id
+      roleToFetch = empData.role.name || empData.role.id || empData.roleId;
+    } else {
+      // If role is not an object, use it directly (might be roleId or role name)
+      roleToFetch = empData.role || empData.roleId;
+    }
+    const roleNorm = normalize(roleToFetch);
     const userObj = {
       email: empData.email,
       name: empData.name || empData.displayName || '',
-      role: empData.role || '',
+      role: roleToFetch || '',
       employeeId: empData.EmployeeID || empData.id || '',
     };
 
@@ -98,7 +140,7 @@ export function AuthProvider({ children }) {
     try {
       sessionStorage.setItem('isAuthenticated', 'true');
       sessionStorage.setItem('employeeData', JSON.stringify(empData));
-      sessionStorage.setItem('employeeRole', empData.role || '');
+      sessionStorage.setItem('employeeRole', roleToFetch || '');
       sessionStorage.setItem('employeeId', userObj.employeeId);
       sessionStorage.setItem('employeeName', userObj.name);
       sessionStorage.setItem('employeeEmail', userObj.email);
@@ -160,7 +202,14 @@ export function AuthProvider({ children }) {
             setLoadingPermissions(false);
           } else {
             setLoadingPermissions(true);
-            const perms = await fetchPermissionsForRole(parsed.role);
+            // Extract role - could be an object with id/name, or just a string/ID
+            let roleToFetch = parsed.role;
+            if (typeof parsed.role === 'object' && parsed.role !== null) {
+              roleToFetch = parsed.role.name || parsed.role.id || parsed.roleId;
+            } else {
+              roleToFetch = parsed.role || parsed.roleId;
+            }
+            const perms = await fetchPermissionsForRole(roleToFetch);
             if (!mounted) return;
             setPermissions(perms);
             sessionStorage.setItem('employeePermissions', JSON.stringify(perms));
@@ -190,11 +239,11 @@ export function AuthProvider({ children }) {
     employeeData,
     permissions,
     isAuthenticated,
+    login,
     logout,
     getEmployeeRole,
     hasRole,
     hasPermission,
-    signIn,
     loading,
     loadingPermissions,
   };

@@ -5,16 +5,6 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const prisma = require('../prismaClient');
 
-// Helper: pick safe employee fields to return (no password)
-function safeEmployee(emp) {
-  if (!emp) return null;
-  const { password, ...rest } = emp;
-  return rest;
-}
-
-// POST /api/auth/login
-// Body: { email, password }
-// Validates employee credentials and returns employee data (no token needed for session storage approach)
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
   console.log(`🔐 Login attempt for email: ${email}`);
@@ -23,44 +13,37 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    console.log('Attempting to find employee in database...');
-    // Find employee by email (case-insensitive)
-    const employee = await prisma.employee.findFirst({
+    const employee = await prisma.employees.findFirst({
       where: {
         email: { equals: email, mode: 'insensitive' }
       },
       include: {
-        role: true // Include role information for permissions
+        role: true
       }
     });
-    console.log('Employee found:', employee ? 'YES' : 'NO');
 
     if (!employee) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check if employee account is active
-    if (!employee.activeFlag) {
+    if (!employee.active_flag) {
       return res.status(403).json({ error: 'This employee account has been deactivated' });
     }
 
-    // Check if password is set
-    const hash = employee.password;
-    if (!hash) {
-      return res.status(401).json({ error: 'No password set for this account. Please contact an administrator.' });
-    }
-
-    // Verify password
-    const passwordMatch = await bcrypt.compare(password, hash);
-    if (!passwordMatch) {
+    if(password !== employee.password) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Return safe employee object (without password)
-    return res.json({ 
-      success: true, 
-      employee: safeEmployee(employee),
-      message: 'Login successful' 
+    console.log('Login successful! Returning employee data with role:', {
+      id: employee.id,
+      email: employee.email,
+      hasRole: !!employee.role
+    });
+
+    return res.json({
+      success: true,
+      employee: employee,
+      message: 'Login successful'
     });
   } catch (err) {
     console.error('POST /api/auth/login error', err);
@@ -74,33 +57,33 @@ router.post('/login', async (req, res) => {
 // In production, this token should be sent via email to the employee
 router.post('/reset-request', async (req, res) => {
   const { email } = req.body || {};
-  
+
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
 
   try {
     // Find employee by email
-    const employee = await prisma.employee.findFirst({
-      where: { 
-        email: { equals: email, mode: 'insensitive' } 
+    const employee = await prisma.employees.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' }
       }
     });
 
     // For security, always return success even if email doesn't exist
     // This prevents email enumeration attacks
     if (!employee) {
-      return res.json({ 
-        success: true, 
-        message: 'If an account exists with this email, a password reset link has been sent.' 
+      return res.json({
+        success: true,
+        message: 'If an account exists with this email, a password reset link has been sent.'
       });
     }
 
     // Check if employee is active
     if (!employee.activeFlag) {
-      return res.json({ 
-        success: true, 
-        message: 'If an account exists with this email, a password reset link has been sent.' 
+      return res.json({
+        success: true,
+        message: 'If an account exists with this email, a password reset link has been sent.'
       });
     }
 
@@ -129,11 +112,11 @@ router.post('/reset-request', async (req, res) => {
     console.log(`⏰ Token expires at: ${expiresAt.toISOString()}`);
     console.log(`🔗 Reset link: http://localhost:3000/reset-password?token=${resetToken}`);
 
-    return res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       message: 'If an account exists with this email, a password reset link has been sent.',
       // REMOVE THIS IN PRODUCTION - only for testing
-      token: resetToken 
+      token: resetToken
     });
   } catch (err) {
     console.error('POST /api/auth/reset-request error', err);
@@ -146,7 +129,7 @@ router.post('/reset-request', async (req, res) => {
 // Validates the reset token and updates the employee's password
 router.post('/reset-confirm', async (req, res) => {
   const { token, newPassword } = req.body || {};
-  
+
   if (!token || !newPassword) {
     return res.status(400).json({ error: 'Token and new password are required' });
   }
@@ -157,7 +140,7 @@ router.post('/reset-confirm', async (req, res) => {
 
   try {
     // Find the reset token
-    const resetRecord = await prisma.passwordReset.findUnique({ 
+    const resetRecord = await prisma.passwordReset.findUnique({
       where: { token },
       include: {
         employee: true
@@ -179,9 +162,9 @@ router.post('/reset-confirm', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     // Update employee's password
-    await prisma.employee.update({
+    await prisma.employees.update({
       where: { id: resetRecord.employeeID },
-      data: { 
+      data: {
         password: hashedPassword,
         updatedAt: new Date()
       }
@@ -194,9 +177,9 @@ router.post('/reset-confirm', async (req, res) => {
 
     console.log(`✅ Password successfully reset for employee: ${resetRecord.employee.email}`);
 
-    return res.json({ 
-      success: true, 
-      message: 'Password has been successfully reset. You can now log in with your new password.' 
+    return res.json({
+      success: true,
+      message: 'Password has been successfully reset. You can now log in with your new password.'
     });
   } catch (err) {
     console.error('POST /api/auth/reset-confirm error', err);
@@ -209,13 +192,13 @@ router.post('/reset-confirm', async (req, res) => {
 // Verifies that the session is still valid by checking if employee exists and is active
 router.post('/verify-session', async (req, res) => {
   const { employeeId } = req.body || {};
-  
+
   if (!employeeId) {
     return res.status(400).json({ error: 'Employee ID is required' });
   }
 
   try {
-    const employee = await prisma.employee.findUnique({
+    const employee = await prisma.employees.findUnique({
       where: { id: employeeId },
       include: {
         role: true
@@ -230,9 +213,9 @@ router.post('/verify-session', async (req, res) => {
       return res.status(403).json({ error: 'This employee account has been deactivated' });
     }
 
-    return res.json({ 
-      success: true, 
-      employee: safeEmployee(employee) 
+    return res.json({
+      success: true,
+      employee: safeEmployee(employee)
     });
   } catch (err) {
     console.error('POST /api/auth/verify-session error', err);
