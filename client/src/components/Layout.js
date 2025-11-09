@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut
+  Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle
 } from 'lucide-react';
 import {
   // admin pages
@@ -15,6 +15,7 @@ import TruckInfo from './admin/info/TruckInfo';
 import TruckZoneInfo from './admin/info/TruckZoneInfo';
 import TeamInfo from './admin/info/TeamInfo';
 import Cases from './admin/Cases';
+import ReportIssue from './employee/ReportIssue';
 import Schedule from './admin/schedule/Schedule';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
@@ -180,6 +181,13 @@ const Layout = () => {
 
     const currentRoot = getPathRoot(location.pathname);
 
+    // Allow access to /cases for all users (no permission check)
+    if (currentRoot === '/cases') {
+      setActiveSection('');
+      setTopNavActive('');
+      return;
+    }
+
     // If user is at root path "/", navigate to first allowed section's first top tab
     if (currentRoot === '/' || currentRoot === '') {
       const [firstKey, firstSection] = filteredNavigation[0];
@@ -313,6 +321,14 @@ const Layout = () => {
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <h1 className="text-xl font-bold text-gray-800 truncate">{currentSection?.title || 'TBMDelivery'}</h1>
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => navigate('/cases')}
+                className="flex items-center space-x-2 px-3 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                title="Report Issues"
+              >
+                <AlertCircle size={20} />
+                <span className="hidden md:block font-medium">Report Issue</span>
+              </button>
               <div className="flex items-center space-x-2 p-2 text-gray-700 rounded-lg">
                 <User size={20} />
                 <span className="hidden md:block font-medium">{currentUser?.name || currentUser?.email || 'User'}</span>
@@ -356,6 +372,9 @@ const Layout = () => {
         {/* Content */}
         <div className="flex-1 overflow-auto p-2">
           <Routes>
+            {/* Standalone route for Report Issue (accessible to all employees) */}
+            <Route path="/cases" element={<ReportIssue />} />
+
             {/*
               Add redirect routes for each section's base path to its first top child path, plus all top child routes
             */}

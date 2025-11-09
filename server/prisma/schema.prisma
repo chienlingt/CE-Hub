@@ -31,6 +31,7 @@ model employees {
   teamAssignments employee_team_assignments[]
   role            roles?                      @relation(fields: [role_id], references: [id], onUpdate: NoAction)
   orders          orders[]
+  reports         reports[]                   @relation("EmployeeReports")
 }
 
 model teams {
@@ -181,10 +182,12 @@ model products {
 }
 
 model reports {
-  id         String    @id @default(uuid())
-  content    String?
-  status     String?
-  created_at DateTime?
+  id          String     @id @default(uuid())
+  content     String?
+  status      String?
+  created_at  DateTime?
+  employee_id String?
+  employee    employees? @relation("EmployeeReports", fields: [employee_id], references: [id], onUpdate: NoAction)
 }
 
 model time_slots {
