@@ -13,6 +13,3 @@ node_modules/
 
 # Logs
 *.log
-
-client/.env
-server/.env 
