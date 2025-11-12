@@ -284,10 +284,9 @@ export default function EmployeeInfo() {
                 contactNumber: modalData.contactNumber,
                 activeFlag: modalData.activeFlag
             };
-
+            console.log('!!!!!!!!!Updated employee:', employeeData);
             if (modalMode === "add") {
                 employeeData.password = modalData.password; // add password
-                console.log('!!!!!!!!!Added employee:', modalData);
                 const newEmp = await addEmployee(employeeData);
                 const newEmpId = newEmp.EmployeeID || newEmp.id;
                 if (modalData.team) {
@@ -301,6 +300,7 @@ export default function EmployeeInfo() {
                     employeeData.password = modalData.password; // only update if entered
                 }
                 const empId = modalData.EmployeeID || modalData.id;
+                
                 await updateEmployee(empId, employeeData);
 
                 const oldTeam = modalData.teamId ?? null;

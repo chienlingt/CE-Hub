@@ -95,7 +95,7 @@ async function deleteDocGeneric(collectionName, id) {
 // -- Employee --
 export const getAllEmployees = () => getAllDocs("Employee");
 export const getEmployeeById = (id) => getDocById("Employee", id);
-export const addEmployee = (data) => addDocGeneric("Employee", data, { idField: "EmployeeID", prefix: "EMP_" });
+export const addEmployee = (data) => addDocGeneric("Employee", data);
 export const updateEmployee = (id, data) => updateDocGeneric("Employee", id, data);
 export const deleteEmployee = (id) => deleteDocGeneric("Employee", id);
 
@@ -109,7 +109,7 @@ export const deleteTruck = (id) => deleteDocGeneric("Truck", id);
 // -- Zone --
 export const getAllZones = () => getAllDocs("Zone");
 export const getZoneById = (id) => getDocById("Zone", id);
-export const addZone = (data) => addDocGeneric("Zone", data, { idField: "zone_id", prefix: "ZON_" });
+export const addZone = (data) => addDocGeneric("Zone", data);
 export const updateZone = (id, data) => updateDocGeneric("Zone", id, data);
 export const deleteZone = (id) => deleteDocGeneric("Zone", id);
 
@@ -122,21 +122,21 @@ export const deleteTruckZone = (id) => deleteDocGeneric("TruckZone", id);
 // -- Building --
 export const getAllBuildings = () => getAllDocs("Building");
 export const getBuilding = (id) => getDocById("Building", id);
-export const addBuilding = (data) => addDocGeneric("Building", data, { idField: "building_id", prefix: "BLD_" });
+export const addBuilding = (data) => addDocGeneric("Building", data);
 export const updateBuilding = (id, data) => updateDocGeneric("Building", id, data);
 export const deleteBuilding = (id) => deleteDocGeneric("Building", id);
 
 // -- Product --
 export const getAllProducts = () => getAllDocs("Product");
 export const getProduct = (id) => getDocById("Product", id);
-export const addProduct = (data) => addDocGeneric("Product", data, { idField: "product_id", prefix: "PRD_" });
+export const addProduct = (data) => addDocGeneric("Product", data);
 export const updateProduct = (id, data) => updateDocGeneric("Product", id, data);
 export const deleteProduct = (id) => deleteDocGeneric("Product", id);
 
 // -- Team --
 export const getAllTeams = () => getAllDocs("Team");
 export const getTeam = (id) => getDocById("Team", id);
-export const addTeam = (data) => addDocGeneric("Team", data, { idField: "TeamID", prefix: "TEM_" });
+export const addTeam = (data) => addDocGeneric("Team", data);
 export const updateTeam = (id, data) => updateDocGeneric("Team", id, data);
 export const deleteTeam = (id) => deleteDocGeneric("Team", id);
 
