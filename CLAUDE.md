@@ -370,24 +370,127 @@ npx prisma migrate reset            # Reset database and re-run all migrations
 5. Check console for errors in both server and browser
 
 ### Known Issues
-- Password reset emails not implemented (tokens logged to console for testing)
-- JWT middleware defined (`server/middleware/auth.js`) but not actively used (app uses session-based auth)
-- `PasswordReset` model referenced in `auth.js` but missing from Prisma schema - needs to be added or auth.js updated
+- JWT middleware defined (`server/middleware/auth.js`) but not actively used (app uses session-based auth for general authentication)
 - **Important:** Users must log out and log back in after permission changes for changes to take effect
+
+## Password Reset System
+
+### Overview
+The system implements a secure password reset flow using JWT tokens and email delivery (no database table required).
+
+### Implementation Details
+- **JWT-based tokens**: Password reset tokens are signed JWTs with 1-hour expiration
+- **Email service**: Uses Nodemailer with SMTP for email delivery
+- **Security features**: Email enumeration protection, active account verification, bcrypt password hashing
+
+### Email Configuration (Required for Password Reset)
+
+For Gmail (recommended for development):
+
+1. **Enable 2FA** on your Google Account
+2. **Generate App Password**:
+   - Go to https://myaccount.google.com/apppasswords
+   - Select "Mail" → "Other (Custom name)"
+   - Name it "TBM Delivery System"
+   - Copy the 16-character password
+3. **Configure** `server/.env`:
+
+```bash
+# Email Configuration (for password reset)
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT=587
+EMAIL_USER="your-email@gmail.com"
+EMAIL_PASSWORD="abcd efgh ijkl mnop"  # App password from step 2
+EMAIL_FROM="TBM Delivery <your-email@gmail.com>"
+```
+
+**Alternative providers:**
+- **Outlook**: `smtp-mail.outlook.com:587`
+- **Custom SMTP**: Configure your own SMTP server
+
+### Password Reset Flow
+
+1. **Request Reset** (`/forgot-password`):
+   - Employee enters email
+   - POST to `/api/auth/reset-request`
+   - Backend generates JWT token (1-hour expiration)
+   - Email sent with reset link: `http://localhost:3000/reset-password?token=...`
+
+2. **Reset Password** (`/reset-password?token=...`):
+   - Employee clicks email link
+   - Enters new password (min 6 characters)
+   - POST to `/api/auth/reset-confirm`
+   - Backend verifies JWT token, updates password
+   - Redirect to login
+
+### Development Mode (No Email Configured)
+
+If `EMAIL_USER` or `EMAIL_PASSWORD` is not set:
+- System shows warning in console
+- Reset link is logged to console for testing
+- User still sees success message (for security)
+
+Example console output:
+```
+⚠️  Email service not configured
+🔗 Password reset link for admin@example.com:
+   http://localhost:3000/reset-password?token=eyJhbGc...
+```
+
+### API Endpoints
+
+**POST /api/auth/reset-request**
+- Body: `{ email: string }`
+- Always returns success (prevents email enumeration)
+- Sends email if account exists and is active
+
+**POST /api/auth/reset-confirm**
+- Body: `{ token: string, newPassword: string }`
+- Verifies JWT token (checks expiration, signature, type)
+- Updates password with bcrypt hashing
+- Returns error if token expired/invalid
+
+### Security Features
+
+✅ JWT-based (stateless, no database table)
+✅ 1-hour expiration on reset links
+✅ Email enumeration protection
+✅ Active account verification
+✅ Bcrypt password hashing
+✅ Token type verification
+
+### Frontend Components
+
+- **ForgotPassword** (`/forgot-password`): Request password reset
+- **ResetPassword** (`/reset-password`): Complete password reset
+- **Login** (`/login`): Includes "Forgot your password?" link
 
 ## Environment Variables
 
 ### Server (.env in server/)
 ```bash
+# Database
 DATABASE_URL="postgresql://user:password@localhost:5432/dbname"
+
+# Server
 PORT=4000
 CLIENT_URL="http://localhost:3000"
+
+# JWT Secret (used for password reset tokens)
 JWT_SECRET="your-secret-key-change-in-production"
+
+# Email Configuration (for password reset)
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT=587
+EMAIL_USER="your-email@gmail.com"
+EMAIL_PASSWORD="your-gmail-app-password"  # 16-char app password
+EMAIL_FROM="TBM Delivery <your-email@gmail.com>"
+
+# Optional: Google Maps API
+GOOGLE_MAPS_API_KEY="your-api-key"
 ```
 
 ### Client (.env in client/)
 ```bash
 REACT_APP_API_BASE_URL="http://localhost:4000"
-# Firebase config (legacy - being phased out)
-REACT_APP_FIREBASE_API_KEY="..."
 ```

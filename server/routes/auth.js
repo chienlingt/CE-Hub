@@ -2,8 +2,9 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const prisma = require('../prismaClient');
+const { sendPasswordResetEmail } = require('../services/emailService');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
@@ -30,7 +31,9 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'This employee account has been deactivated' });
     }
 
-    if(password !== employee.password) {
+    // Use bcrypt to compare password with hashed password
+    const isPasswordValid = await bcrypt.compare(password, employee.password);
+    if(!isPasswordValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -53,8 +56,7 @@ router.post('/login', async (req, res) => {
 
 // POST /api/auth/reset-request
 // Body: { email }
-// Generates a password reset token and stores it in the database
-// In production, this token should be sent via email to the employee
+// Generates a JWT password reset token and sends email to the employee
 router.post('/reset-request', async (req, res) => {
   const { email } = req.body || {};
 
@@ -75,48 +77,48 @@ router.post('/reset-request', async (req, res) => {
     if (!employee) {
       return res.json({
         success: true,
-        message: 'If an account exists with this email, a password reset link has been sent.'
+        message: 'If an account exists with this email, a password reset link has been sent to your email address.'
       });
     }
 
     // Check if employee is active
-    if (!employee.activeFlag) {
+    if (!employee.active_flag) {
       return res.json({
         success: true,
-        message: 'If an account exists with this email, a password reset link has been sent.'
+        message: 'If an account exists with this email, a password reset link has been sent to your email address.'
       });
     }
 
-    // Generate secure random token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // Token expires in 1 hour
+    // Generate JWT token with employee ID and expiration
+    const jwtSecret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+    const resetToken = jwt.sign(
+      {
+        employeeId: employee.id,
+        email: employee.email,
+        type: 'password-reset'
+      },
+      jwtSecret,
+      { expiresIn: '1h' } // Token expires in 1 hour
+    );
 
-    // Delete any existing reset tokens for this employee
-    await prisma.passwordReset.deleteMany({
-      where: { employeeID: employee.id }
-    });
+    // Send password reset email
+    const emailSent = await sendPasswordResetEmail(
+      employee.email,
+      employee.name || employee.display_name || 'User',
+      resetToken
+    );
 
-    // Create new password reset record
-    await prisma.passwordReset.create({
-      data: {
-        token: resetToken,
-        employeeID: employee.id,
-        expiresAt: expiresAt
-      }
-    });
-
-    // TODO: Send email with reset link
-    // Example: https://your-app.com/reset-password?token=${resetToken}
-    // For now, log the token (REMOVE THIS IN PRODUCTION)
-    console.log(`🔑 Password reset token for ${employee.email}: ${resetToken}`);
-    console.log(`⏰ Token expires at: ${expiresAt.toISOString()}`);
-    console.log(`🔗 Reset link: http://localhost:3000/reset-password?token=${resetToken}`);
+    if (!emailSent) {
+      console.warn('⚠️  Email not sent, but showing success to user for security');
+      // For development: log the reset link
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+      console.log(`🔗 Password reset link for ${employee.email}:`);
+      console.log(`   ${clientUrl}/reset-password?token=${resetToken}`);
+    }
 
     return res.json({
       success: true,
-      message: 'If an account exists with this email, a password reset link has been sent.',
-      // REMOVE THIS IN PRODUCTION - only for testing
-      token: resetToken
+      message: 'If an account exists with this email, a password reset link has been sent to your email address.'
     });
   } catch (err) {
     console.error('POST /api/auth/reset-request error', err);
@@ -126,7 +128,7 @@ router.post('/reset-request', async (req, res) => {
 
 // POST /api/auth/reset-confirm
 // Body: { token, newPassword }
-// Validates the reset token and updates the employee's password
+// Validates the JWT reset token and updates the employee's password
 router.post('/reset-confirm', async (req, res) => {
   const { token, newPassword } = req.body || {};
 
@@ -139,21 +141,35 @@ router.post('/reset-confirm', async (req, res) => {
   }
 
   try {
-    // Find the reset token
-    const resetRecord = await prisma.passwordReset.findUnique({
-      where: { token },
-      include: {
-        employee: true
+    // Verify and decode JWT token
+    const jwtSecret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (jwtError) {
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(400).json({ error: 'Reset link has expired. Please request a new password reset.' });
       }
+      return res.status(400).json({ error: 'Invalid reset token' });
+    }
+
+    // Verify token type
+    if (decoded.type !== 'password-reset') {
+      return res.status(400).json({ error: 'Invalid token type' });
+    }
+
+    // Find employee
+    const employee = await prisma.employees.findUnique({
+      where: { id: decoded.employeeId }
     });
 
-    // Check if token exists and is not expired
-    if (!resetRecord || resetRecord.expiresAt < new Date()) {
-      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
     }
 
     // Check if employee is still active
-    if (!resetRecord.employee.activeFlag) {
+    if (!employee.active_flag) {
       return res.status(403).json({ error: 'This employee account has been deactivated' });
     }
 
@@ -163,19 +179,14 @@ router.post('/reset-confirm', async (req, res) => {
 
     // Update employee's password
     await prisma.employees.update({
-      where: { id: resetRecord.employeeID },
+      where: { id: employee.id },
       data: {
         password: hashedPassword,
-        updatedAt: new Date()
+        updated_at: new Date()
       }
     });
 
-    // Delete the used reset token
-    await prisma.passwordReset.delete({
-      where: { token }
-    });
-
-    console.log(`✅ Password successfully reset for employee: ${resetRecord.employee.email}`);
+    console.log(`Password successfully reset for employee: ${employee.email}`);
 
     return res.json({
       success: true,
@@ -209,13 +220,13 @@ router.post('/verify-session', async (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    if (!employee.activeFlag) {
+    if (!employee.active_flag) {
       return res.status(403).json({ error: 'This employee account has been deactivated' });
     }
 
     return res.json({
       success: true,
-      employee: safeEmployee(employee)
+      employee: employee
     });
   } catch (err) {
     console.error('POST /api/auth/verify-session error', err);

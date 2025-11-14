@@ -11,39 +11,83 @@ import {
 } from "../../../services/informationService";
 import { TeamBadge } from "./TeamInfo";
 
-const TABLE_KEYS = ["name", "role", "contactNumber", "email", "team", "activeFlag", "password"];
+const TABLE_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag", "password"];
 
 const FIELD_LABELS = {
     name: "Name",
     role: "Role",
-    contactNumber: "Contact Number",
+    contact_number: "Contact Number",
     email: "Email",
     team: "Team",
-    activeFlag: "Active Flag",
+    active_flag: "Active Flag",
     password: "Password"
 };
 
 const FIELD_GUIDANCE = {
     name: "First letter uppercase, e.g. Lee Tian Le",
     role: "E.g. installer, admin, etc.",
-    contactNumber: "Format: 01XXXXXXXX (no dashes/spaces)",
+    contact_number: "Format: 01XXXXXXXX (no dashes/spaces)",
     team: "Select the team this employee belongs to",
     email: "Press Tab to accept suggested email or type your own",
     password: "Enter a secure password"
 };
 
 
-// Helper function to generate email from name
-function generateEmailFromName(name) {
-    if (!name || name.trim().length === 0) return "";
+// Helper function to generate email suggestions from name
+function generateEmailSuggestions(name, existingEmails = []) {
+    if (!name || name.trim().length === 0) return [];
 
     const cleanName = name.trim().toLowerCase();
-    // Remove extra spaces and replace with nothing (compact)
-    const emailName = cleanName.replace(/\s+/g, '');
-    // Remove special characters except dots (none expected after above)
-    const sanitizedName = emailName.replace(/[^a-z0-9.]/g, '');
+    const nameParts = cleanName.split(/\s+/);
+    const suggestions = [];
 
-    return `${sanitizedName}@gmail.com`;
+    // Remove special characters
+    const sanitize = (str) => str.replace(/[^a-z0-9]/g, '');
+
+    if (nameParts.length >= 2) {
+        const firstName = sanitize(nameParts[0]);
+        const lastName = sanitize(nameParts[nameParts.length - 1]);
+
+        // Strategy 1: firstname.lastname@gmail.com
+        suggestions.push(`${firstName}.${lastName}@gmail.com`);
+
+        // Strategy 2: firstnamelastname@gmail.com
+        suggestions.push(`${firstName}${lastName}@gmail.com`);
+
+        // Strategy 3: firstname_lastname@gmail.com
+        suggestions.push(`${firstName}_${lastName}@gmail.com`);
+
+        // Strategy 4: firstinitial + lastname@gmail.com (e.g., jsmith@gmail.com)
+        suggestions.push(`${firstName.charAt(0)}${lastName}@gmail.com`);
+
+        // Strategy 5: lastname.firstname@gmail.com (reversed)
+        suggestions.push(`${lastName}.${firstName}@gmail.com`);
+    } else {
+        // Single name - just sanitize
+        const singleName = sanitize(cleanName);
+        suggestions.push(`${singleName}@gmail.com`);
+    }
+
+    // Filter out suggestions that already exist
+    const availableSuggestions = suggestions.filter(email =>
+        !existingEmails.some(existing =>
+            existing.toLowerCase() === email.toLowerCase()
+        )
+    );
+
+    // If all suggestions are taken, add numbered versions
+    if (availableSuggestions.length === 0 && suggestions.length > 0) {
+        const baseSuggestion = suggestions[0].replace('@gmail.com', '');
+        for (let i = 1; i <= 5; i++) {
+            const numberedEmail = `${baseSuggestion}${i}@gmail.com`;
+            if (!existingEmails.some(e => e.toLowerCase() === numberedEmail.toLowerCase())) {
+                availableSuggestions.push(numberedEmail);
+                break;
+            }
+        }
+    }
+
+    return availableSuggestions;
 }
 
 function Modal({ show, onClose, children }) {
@@ -173,8 +217,8 @@ export default function EmployeeInfo() {
                     EmployeeID: empId,
                     name: emp.name,
                     email: emp.email,
-                    contactNumber: emp.contactNumber,
-                    activeFlag: emp.activeFlag,
+                    contact_number: emp.contact_number,
+                    active_flag: emp.active_flag,
                     role: roleId,
                     password: emp.password || '********',
                     team: empTeamMap.get(empId)?.TeamType || null,
@@ -201,9 +245,9 @@ export default function EmployeeInfo() {
             name: "",
             email: "",
             role: rolesList[0]?.id || "",
-            contactNumber: "",
+            contact_number: "",
             team: "",
-            activeFlag: true,
+            active_flag: true,
             password: ""
         });
         setModalOpen(true);
@@ -237,7 +281,7 @@ export default function EmployeeInfo() {
         const { name, value } = e.target;
         let val = value;
 
-        if (name === "activeFlag") {
+        if (name === "active_flag") {
             val = value === "true";
         }
 
@@ -245,9 +289,17 @@ export default function EmployeeInfo() {
 
         // Handle email suggestion when name changes
         if (name === "name" && modalMode === "add") {
-            const suggested = generateEmailFromName(val);
-            setSuggestedEmail(suggested);
-            setShowEmailSuggestion(val.trim().length > 0 && !modalData.email);
+            // Get existing emails
+            const existingEmails = employees.map(emp => emp.email).filter(Boolean);
+            const suggestions = generateEmailSuggestions(val, existingEmails);
+
+            if (suggestions.length > 0) {
+                setSuggestedEmail(suggestions[0]);
+                setShowEmailSuggestion(val.trim().length > 0 && !modalData.email);
+            } else {
+                setSuggestedEmail('');
+                setShowEmailSuggestion(false);
+            }
         }
     }
 
@@ -273,6 +325,66 @@ export default function EmployeeInfo() {
     }
 
     async function handleModalSubmit() {
+        // Validation
+        const requiredFields = {
+            name: 'Name',
+            role: 'Role',
+            email: 'Email',
+            contact_number: 'Contact Number'
+        };
+
+        if (modalMode === "add") {
+            requiredFields.password = 'Password';
+        }
+
+        // Check required fields
+        const missingFields = [];
+        for (const [field, label] of Object.entries(requiredFields)) {
+            if (!modalData[field] || modalData[field].toString().trim() === '') {
+                missingFields.push(label);
+            }
+        }
+
+        if (missingFields.length > 0) {
+            setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
+            return;
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(modalData.email)) {
+            setError('Please enter a valid email address');
+            return;
+        }
+
+        // Check for duplicate email
+        const currentEmployeeId = modalMode === "edit" ? (modalData.EmployeeID || modalData.id) : null;
+        const isDuplicateEmail = employees.some(emp =>
+            emp.email &&
+            emp.email.toLowerCase() === modalData.email.toLowerCase() &&
+            emp.id !== currentEmployeeId
+        );
+
+        if (isDuplicateEmail) {
+            setError('This email address is already in use by another employee. Please use a different email.');
+            return;
+        }
+
+        // Validate contact number (basic format check)
+        if (modalData.contact_number) {
+            const contactRegex = /^01[0-9]{8,9}$/;
+            if (!contactRegex.test(modalData.contact_number)) {
+                setError('Contact number must be in format 01XXXXXXXX (10-11 digits)');
+                return;
+            }
+        }
+
+        // Validate password length for new employees
+        if (modalMode === "add" && modalData.password && modalData.password.length < 6) {
+            setError('Password must be at least 6 characters long');
+            return;
+        }
+
         setSaving(true);
         setError(null);
         setSuccessMsg("");
@@ -281,8 +393,8 @@ export default function EmployeeInfo() {
                 name: modalData.name,
                 role: modalData.role,
                 email: modalData.email,
-                contactNumber: modalData.contactNumber,
-                activeFlag: modalData.activeFlag
+                contact_number: modalData.contact_number,
+                active_flag: modalData.active_flag
             };
             console.log('!!!!!!!!!Updated employee:', employeeData);
             if (modalMode === "add") {
@@ -300,7 +412,7 @@ export default function EmployeeInfo() {
                     employeeData.password = modalData.password; // only update if entered
                 }
                 const empId = modalData.EmployeeID || modalData.id;
-                
+
                 await updateEmployee(empId, employeeData);
 
                 const oldTeam = modalData.teamId ?? null;
@@ -317,10 +429,22 @@ export default function EmployeeInfo() {
             await loadAllData(); // Refresh data
             setModalOpen(false);
         } catch (e) {
-            setError(modalMode === "add"
-                ? "Failed to add employee: " + (e?.message || e)
-                : "Failed to update employee: " + (e?.message || e)
-            );
+            // Parse error message for specific issues
+            const errorMsg = e?.message || String(e);
+
+            if (errorMsg.includes('email') && errorMsg.includes('unique')) {
+                setError("This email address is already in use. Please use a different email.");
+            } else if (errorMsg.includes('Failed to create assignment')) {
+                setError("Employee created but team assignment failed. You can assign a team later from the Team Info page.");
+                // Still refresh data to show the new employee
+                await loadAllData();
+                setModalOpen(false);
+            } else {
+                setError(modalMode === "add"
+                    ? "Failed to add employee: " + errorMsg
+                    : "Failed to update employee: " + errorMsg
+                );
+            }
             console.error(e);
         }
 
@@ -350,10 +474,10 @@ export default function EmployeeInfo() {
         // Required when adding (modalMode === 'add'); when editing, only required for fields you want to enforce
         const requiredWhenAdd = modalMode === "add" && k !== "team";
 
-        if (k === "activeFlag") {
+        if (k === "active_flag") {
             return (
                 <select
-                    name="activeFlag"
+                    name="active_flag"
                     value={val === true ? "true" : "false"}
                     onChange={onChange}
                     className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -414,7 +538,7 @@ export default function EmployeeInfo() {
             );
         }
 
-        if (k === "contactNumber") {
+        if (k === "contact_number") {
             return (
                 <input
                     name={k}
@@ -577,7 +701,7 @@ export default function EmployeeInfo() {
                                     </td>
                                     {TABLE_KEYS.map(k => (
                                         <td className="px-4 py-3 text-sm text-gray-900" key={k}>
-                                            {k === "activeFlag" ? (
+                                            {k === "active_flag" ? (
                                                 <ActiveFlagBadge value={emp[k]} />
                                             ) : k === "team" ? (
                                                 <TeamBadge teamType={emp[k]} />

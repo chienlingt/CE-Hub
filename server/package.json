@@ -21,7 +21,8 @@
     "express": "^5.1.0",
     "firebase-admin": "^13.5.0",
     "helmet": "^7.0.0",
-    "node-cron": "^4.2.1"
+    "node-cron": "^4.2.1",
+    "nodemailer": "^7.0.10"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",

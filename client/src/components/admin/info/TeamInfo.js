@@ -131,7 +131,7 @@ export default function TeamInfo() {
         setSuccessMsg("");
 
         try {
-            await addTeam({ teamType: newTeamType });
+            await addTeam({ team_type: newTeamType });
             setSuccessMsg("Team added successfully!");
             setTeamModalOpen(false);
             await loadAllData(); // Refresh all data
@@ -151,7 +151,7 @@ export default function TeamInfo() {
         setSuccessMsg("");
 
         try {
-            await updateTeam(editTeamId, { teamType: editTeamType });
+            await updateTeam(editTeamId, { team_type: editTeamType });
             setSuccessMsg("Team updated successfully!");
             setEditModalOpen(false);
             await loadAllData();

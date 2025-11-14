@@ -104,16 +104,19 @@ model chats {
 }
 
 model customers {
-  id         String    @id @default(uuid())
-  full_name  String?
-  email      String?
-  phone      String?
-  address    String?
-  city       String?
-  postcode   String?
-  state      String?
-  created_at DateTime?
-  orders     orders[]
+  id                    String      @id @default(uuid())
+  full_name             String?
+  email                 String?
+  phone                 String?
+  address               String?
+  city                  String?
+  postcode              String?
+  state                 String?
+  created_at            DateTime?
+  notifications_enabled Boolean?
+  complaint             complaint[]
+  orders                orders[]
+  rating                rating[]
 }
 
 model lorry_trips {
@@ -157,11 +160,13 @@ model orders {
   created_at                DateTime?
   updated_at                DateTime?
   truck_loading_sequence    Int?
+  complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
   buildings                 buildings?              @relation(fields: [building_id], references: [id], onUpdate: NoAction)
   customers                 customers?              @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
   employees                 employees?              @relation(fields: [employee_id], references: [id], onUpdate: NoAction)
+  rating                    rating[]
 }
 
 model products {
@@ -248,4 +253,38 @@ model scheduler_config {
   last_run_at       DateTime? @db.Timestamp(6)
   created_at        DateTime? @default(now()) @db.Timestamp(6)
   updated_at        DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+}
+
+model complaint {
+  complaint_id  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id   String    @db.VarChar(50)
+  employee_id   String?   @db.VarChar(50)
+  employee_name String?   @db.VarChar(100)
+  order_id      String?   @db.VarChar(50)
+  product_name  String?   @db.VarChar(100)
+  delivery_date String?   @db.VarChar(20)
+  reason        String?   @db.VarChar(100)
+  status        String?   @default("pending") @db.VarChar(50)
+  content       String?
+  image_url     String?
+  date_reported DateTime? @default(now()) @db.Timestamp(6)
+  customers     customers @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_complaint_customer")
+  orders        orders?   @relation(fields: [order_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_complaint_order")
+}
+
+model rating {
+  rating_id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id     String    @db.VarChar(50)
+  order_id        String    @db.VarChar(50)
+  product_name    String    @db.VarChar(100)
+  driver_id       String?   @db.VarChar(50)
+  driver_name     String?   @db.VarChar(100)
+  delivery_date   String?   @db.VarChar(20)
+  delivery_rating Int?
+  service_rating  Int?
+  comment         String?
+  image_url       String?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  customers       customers @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_rating_customer")
+  orders          orders    @relation(fields: [order_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_rating_order")
 }

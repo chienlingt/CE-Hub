@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(findstr:*)",
+      "Bash(nul)",
+      "Bash(rm:*)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []

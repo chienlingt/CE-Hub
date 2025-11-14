@@ -38,10 +38,10 @@ router.post('/', async (req, res) => {
   try {
     const { role, ...data } = req.body;
     console.log('Employee body:', req.body);
-    // Convert role field to roleId for foreign key
+    // Convert role field to role_id for foreign key
     const createData = { ...data };
     if (role) {
-      createData.roleId = role;
+      createData.role_id = role;
     }
 
     const employee = await prisma.employees.create({
@@ -60,10 +60,10 @@ router.put('/:id', async (req, res) => {
   try {
     const { role, ...data } = req.body;
 
-    // Convert role field to roleId for foreign key
+    // Convert role field to role_id for foreign key
     const updateData = { ...data };
     if (role !== undefined) {
-      updateData.roleId = role || null;
+      updateData.role_id = role || null;
     }
 
     const employee = await prisma.employees.update({
