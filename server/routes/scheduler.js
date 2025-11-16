@@ -10,20 +10,9 @@ const { scheduleOrders, loadConfiguration } = require('../services/scheduler');
  */
 router.post('/run', async (req, res) => {
   try {
-    console.log('📞 Manual scheduler run triggered via API');
+    console.log('Manual scheduler run triggered via API');
 
-    // Check if user wants to use Google Maps API (default: no, to avoid charges)
-    const { useGoogleMapsAPI = false } = req.body;
-
-    if (useGoogleMapsAPI && !process.env.GOOGLE_MAPS_API_KEY) {
-      return res.status(400).json({
-        success: false,
-        error: 'Google Maps API key not configured',
-        message: 'Please add GOOGLE_MAPS_API_KEY to your server .env file to use route optimization.'
-      });
-    }
-
-    const results = await scheduleOrders({ skipGoogleMapsAPI: !useGoogleMapsAPI });
+    const results = await scheduleOrders();
 
     res.json({
       success: true,
@@ -31,9 +20,8 @@ router.post('/run', async (req, res) => {
         scheduled: results.scheduled.length,
         unscheduled: results.unscheduled.length,
         installationSchedulesCreated: results.installationSchedulesCreated,
-        apiRequestCount: results.apiRequestCount,
         timeslotsCreated: results.timeslotsCreated,
-        postalCodeGroups: results.postalCodeGroups,
+        locationGroups: results.postalCodeGroups,
         warnings: results.warnings || []
       },
       details: {

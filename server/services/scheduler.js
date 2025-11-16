@@ -3,92 +3,68 @@ const dayjs = require('dayjs');
 const weekday = require('dayjs/plugin/weekday');
 const isSameOrAfter = require('dayjs/plugin/isSameOrAfter');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
-const axios = require('axios');
 const prisma = require('../prismaClient');
+const { optimizeRouteOrder, calculateCompleteRoute } = require('./routingService');
 
 dayjs.extend(weekday);
 dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
 
-// Google Maps API Configuration
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
-const GOOGLE_MAPS_BASE_URL = 'https://maps.googleapis.com/maps/api';
-
 /**
  * Main scheduler function - optimizes and schedules pending orders
  * @param {Object} options - Scheduler options
- * @param {boolean} options.skipGoogleMapsAPI - If true, skip Google Maps API calls (use simple distance estimation)
  * @returns {Object} Results with scheduled/unscheduled orders and statistics
  */
 async function scheduleOrders(options = {}) {
-  console.log('\n🚀 === AUTO-SCHEDULER STARTED ===\n');
+  console.log('\n=== AUTO-SCHEDULER STARTED ===\n');
 
-  const { skipGoogleMapsAPI = true } = options; // Default to skip to avoid charges
-
-  let apiRequestCount = 0;
   const results = {
     scheduled: [],
     unscheduled: [],
     installationSchedulesCreated: 0,
-    apiRequestCount: 0,
     timeslotsCreated: 0,
     postalCodeGroups: 0,
     warnings: []
   };
 
   try {
-    // Check if Google Maps API should be used
-    if (!skipGoogleMapsAPI && !GOOGLE_MAPS_API_KEY) {
-      console.warn('\n⚠️  WARNING: Google Maps API key not configured!');
-      console.warn('   Falling back to simple postal code grouping without route optimization.');
-      results.warnings.push('Google Maps API key not configured - using fallback routing');
-    }
-
-    if (!skipGoogleMapsAPI && GOOGLE_MAPS_API_KEY) {
-      console.log('\n💳 Google Maps API Cost Estimation:');
-      console.log('   - You have $200/month FREE credit (~40,000 requests/month)');
-      console.log('   - Distance Matrix API: $5 per 1,000 elements');
-      console.log('   - This run will use estimated API requests (tracked below)');
-      console.log('   - New accounts get $300 credit for first 90 days\n');
-    }
-
     // Step 1: Load configuration
-    console.log('📋 Loading scheduler configuration...');
+    console.log('Loading scheduler configuration...');
     const config = await loadConfiguration();
 
     // Step 2: Generate timeslots for next 7 days
-    console.log('\n🗓️  Generating timeslots...');
+    console.log('\nGenerating timeslots...');
     results.timeslotsCreated = await generateTimeSlots();
 
     // Step 3: Fetch pending orders (FIFO)
-    console.log('\n📦 Fetching pending orders...');
+    console.log('\nFetching pending orders...');
     const pendingOrders = await fetchPendingOrders();
 
     if (pendingOrders.length === 0) {
-      console.log('✅ No pending orders to schedule.\n');
+      console.log('No pending orders to schedule.\n');
       return results;
     }
 
-    // Step 4: Group by postal code
-    console.log('\n📍 Grouping orders by postal code...');
-    const postalCodeGroups = groupByPostalCode(pendingOrders);
-    results.postalCodeGroups = Object.keys(postalCodeGroups).length;
+    // Step 4: Group by address/location
+    console.log('\nGrouping orders by location...');
+    const locationGroups = groupByLocation(pendingOrders);
+    results.postalCodeGroups = Object.keys(locationGroups).length;
 
     // Step 5: Calculate installation time and requirements
-    console.log('\n⏱️  Calculating installation times...');
+    console.log('\nCalculating installation times...');
     await calculateOrderTimes(pendingOrders);
 
     // Step 6: Fetch available teams and trucks
-    console.log('\n👥 Loading available teams and trucks...');
+    console.log('\nLoading available teams and trucks...');
     const teams = await fetchTeams();
     const trucks = await fetchTrucks();
 
     // Step 7: Fetch available timeslots
-    console.log('\n📅 Loading available timeslots...');
+    console.log('\nLoading available timeslots...');
     const availableTimeslots = await fetchAvailableTimeslots();
 
     if (availableTimeslots.length === 0) {
-      console.log('⚠️  No available timeslots found. All orders remain unscheduled.');
+      console.log('No available timeslots found. All orders remain unscheduled.');
       results.unscheduled = pendingOrders.map(o => ({
         orderId: o.id,
         reason: 'No available timeslots'
@@ -97,20 +73,18 @@ async function scheduleOrders(options = {}) {
     }
 
     // Step 8: Optimize routes and assign to timeslots
-    console.log('\n🚚 Optimizing routes and scheduling...');
+    console.log('\nOptimizing routes and scheduling...');
     const schedulingResults = await optimizeAndSchedule(
-      postalCodeGroups,
+      locationGroups,
       availableTimeslots,
       teams,
       trucks,
-      config,
-      apiRequestCount
+      config
     );
 
     results.scheduled = schedulingResults.scheduled;
     results.unscheduled = schedulingResults.unscheduled;
     results.installationSchedulesCreated = schedulingResults.installationSchedulesCreated;
-    apiRequestCount = schedulingResults.apiRequestCount;
 
     // Step 9: Update last run timestamp
     await prisma.scheduler_config.update({
@@ -119,22 +93,19 @@ async function scheduleOrders(options = {}) {
     });
 
   } catch (error) {
-    console.error('❌ Scheduler error:', error);
+    console.error('Scheduler error:', error);
     throw error;
   } finally {
-    results.apiRequestCount = apiRequestCount;
-
     // Final summary
-    console.log('\n📊 === SCHEDULER RUN SUMMARY ===');
-    console.log(`📦 Total pending orders processed: ${results.scheduled.length + results.unscheduled.length}`);
-    console.log(`✅ Successfully scheduled: ${results.scheduled.length}`);
-    console.log(`❌ Unscheduled: ${results.unscheduled.length}`);
-    console.log(`🔧 Installation schedules created: ${results.installationSchedulesCreated}`);
-    console.log(`🗺️  Google Maps API requests: ${results.apiRequestCount}`);
-    console.log(`📍 Postal code groups: ${results.postalCodeGroups}`);
-    console.log(`🕒 Timeslots created: ${results.timeslotsCreated}`);
+    console.log('\n=== SCHEDULER RUN SUMMARY ===');
+    console.log(`Total pending orders processed: ${results.scheduled.length + results.unscheduled.length}`);
+    console.log(`Successfully scheduled: ${results.scheduled.length}`);
+    console.log(`Unscheduled: ${results.unscheduled.length}`);
+    console.log(`Installation schedules created: ${results.installationSchedulesCreated}`);
+    console.log(`Location groups: ${results.postalCodeGroups}`);
+    console.log(`Timeslots created: ${results.timeslotsCreated}`);
     console.log('================================\n');
-    console.log('🏁 === AUTO-SCHEDULER FINISHED ===\n');
+    console.log('=== AUTO-SCHEDULER FINISHED ===\n');
   }
 
   return results;
@@ -148,7 +119,7 @@ async function loadConfiguration() {
 
   if (!config) {
     // Create default configuration
-    console.log('⚠️  No configuration found. Creating default configuration...');
+    console.log('No configuration found. Creating default configuration...');
     config = await prisma.scheduler_config.create({
       data: {
         warehouse_address: 'University of Malaya, Kuala Lumpur',
@@ -161,9 +132,9 @@ async function loadConfiguration() {
     });
   }
 
-  console.log(`📍 Warehouse: ${config.warehouse_address} (${config.warehouse_postal})`);
-  console.log(`⏰ Schedule: ${config.cron_expression}`);
-  console.log(`🔄 Enabled: ${config.enabled}`);
+  console.log(`Warehouse: ${config.warehouse_address} (${config.warehouse_postal})`);
+  console.log(`Schedule: ${config.cron_expression}`);
+  console.log(`Enabled: ${config.enabled}`);
 
   return config;
 }
@@ -172,7 +143,7 @@ async function loadConfiguration() {
  * Generate timeslots for next 7 days (skip weekends & Thursday for normal delivery)
  */
 async function generateTimeSlots() {
-  console.log('🗓️  Generating default timeslots for next 7 days...');
+  console.log('Generating default timeslots for next 7 days...');
   const today = dayjs().startOf('day');
 
   const timeslotTemplates = {
@@ -195,12 +166,11 @@ async function generateTimeSlots() {
 
     // Skip weekends
     if (dayOfWeek === 0 || dayOfWeek === 6) {
-      console.log(`⏭️  Skipping ${day.format('YYYY-MM-DD')} (weekend)`);
+      console.log(`Skipping ${day.format('YYYY-MM-DD')} (weekend)`);
       continue;
     }
 
     // Thursday = far area deliveries only (e.g., Genting)
-    const templates = dayOfWeek === 4 ? timeslotTemplates.farArea : timeslotTemplates.normal;
     const slotType = dayOfWeek === 4 ? 'far-area' : 'normal';
 
     for (const t of timeslotTemplates.normal) {
@@ -222,12 +192,12 @@ async function generateTimeSlots() {
           }
         });
         createdCount++;
-        console.log(`➕ Created ${slotType} slot: ${day.format('YYYY-MM-DD')} ${t.start}-${t.end}`);
+        console.log(`Created ${slotType} slot: ${day.format('YYYY-MM-DD')} ${t.start}-${t.end}`);
       }
     }
   }
 
-  console.log(`📌 Total new timeslots created: ${createdCount}`);
+  console.log(`Total new timeslots created: ${createdCount}`);
   return createdCount;
 }
 
@@ -245,7 +215,7 @@ async function fetchPendingOrders() {
     }
   });
 
-  console.log(`📦 Found ${orders.length} pending orders (sorted by creation time - FIFO)`);
+  console.log(`Found ${orders.length} pending orders (sorted by creation time - FIFO)`);
 
   if (orders.length > 0) {
     console.log(`   Oldest order: ${dayjs(orders[0].created_at).format('YYYY-MM-DD HH:mm')}`);
@@ -256,23 +226,23 @@ async function fetchPendingOrders() {
 }
 
 /**
- * Group orders by postal code for efficient routing
+ * Group orders by location (address) for efficient routing
  */
-function groupByPostalCode(orders) {
+function groupByLocation(orders) {
   const groups = {};
 
   for (const order of orders) {
-    const postalCode = order.buildings?.postal_code || order.customers?.postcode || 'UNKNOWN';
+    const location = order.customers?.address || order.buildings?.building_name || 'UNKNOWN';
 
-    if (!groups[postalCode]) {
-      groups[postalCode] = [];
+    if (!groups[location]) {
+      groups[location] = [];
     }
-    groups[postalCode].push(order);
+    groups[location].push(order);
   }
 
-  console.log(`📍 Grouped into ${Object.keys(groups).length} postal code areas:`);
-  Object.entries(groups).forEach(([postal, orders]) => {
-    console.log(`   ${postal}: ${orders.length} order(s)`);
+  console.log(`Grouped into ${Object.keys(groups).length} location areas:`);
+  Object.entries(groups).forEach(([location, orders]) => {
+    console.log(`   ${location}: ${orders.length} order(s)`);
   });
 
   return groups;
@@ -314,7 +284,7 @@ async function calculateOrderTimes(orders) {
     order.calculatedInstallationTime = totalInstallationTime;
     order.requiresInstallation = requiresInstallation;
 
-    console.log(`📦 Order ${order.id}: Delivery ${totalDeliveryTime}min, Installation ${totalInstallationTime}min${requiresInstallation ? ' (Installation Required ✅)' : ''}`);
+    console.log(`Order ${order.id}: Delivery ${totalDeliveryTime}min, Installation ${totalInstallationTime}min${requiresInstallation ? ' (Installation Required)' : ''}`);
   }
 }
 
@@ -337,9 +307,9 @@ async function fetchTeams() {
     include: { assignments: { include: { employee: true } } }
   });
 
-  console.log(`👥 Delivery teams: ${deliveryTeams.length}`);
-  console.log(`🏭 Warehouse teams: ${warehouseTeams.length}`);
-  console.log(`🔧 Installation teams: ${installationTeams.length}`);
+  console.log(`Delivery teams: ${deliveryTeams.length}`);
+  console.log(`Warehouse teams: ${warehouseTeams.length}`);
+  console.log(`Installation teams: ${installationTeams.length}`);
 
   return { deliveryTeams, warehouseTeams, installationTeams };
 }
@@ -352,7 +322,7 @@ async function fetchTrucks() {
     include: { truck_zones: { include: { zones: true } } }
   });
 
-  console.log(`🚚 Available trucks: ${trucks.length}`);
+  console.log(`Available trucks: ${trucks.length}`);
 
   return trucks;
 }
@@ -369,7 +339,7 @@ async function fetchAvailableTimeslots() {
     ]
   });
 
-  console.log(`📅 Available timeslots: ${timeslots.length}`);
+  console.log(`Available timeslots: ${timeslots.length}`);
 
   return timeslots;
 }
@@ -377,7 +347,7 @@ async function fetchAvailableTimeslots() {
 /**
  * Main optimization and scheduling logic
  */
-async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, config, apiRequestCount) {
+async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, config) {
   const scheduled = [];
   const unscheduled = [];
   let installationSchedulesCreated = 0;
@@ -387,9 +357,9 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
   let warehouseTeamIndex = 0;
   let installationTeamIndex = 0;
 
-  // Process each postal code group
-  for (const [postalCode, orders] of Object.entries(postalCodeGroups)) {
-    console.log(`\n📍 Processing postal code ${postalCode} (${orders.length} orders)...`);
+  // Process each location group
+  for (const [location, orders] of Object.entries(locationGroups)) {
+    console.log(`\nProcessing location ${location} (${orders.length} orders)...`);
 
     // Try to fit orders into available timeslots
     for (const timeslot of timeslots) {
@@ -399,7 +369,7 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
       const slotEnd = dayjs(`${timeslot.date} ${timeslot.time_window_end}`);
       const slotDuration = slotEnd.diff(slotStart, 'minute');
 
-      console.log(`\n📅 Trying slot: ${timeslot.date} ${timeslot.time_window_start}-${timeslot.time_window_end} (${slotDuration} min)`);
+      console.log(`\nTrying slot: ${timeslot.date} ${timeslot.time_window_start}-${timeslot.time_window_end} (${slotDuration} min)`);
 
       // Find orders that can fit in this slot
       const suitableOrders = orders.filter(order => {
@@ -422,15 +392,14 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
       });
 
       if (suitableOrders.length === 0) {
-        console.log(`   ⏭️  No suitable orders for this slot`);
+        console.log(`   No suitable orders for this slot`);
         continue;
       }
 
-      console.log(`   ✅ ${suitableOrders.length} suitable orders found`);
+      console.log(`   ${suitableOrders.length} suitable orders found`);
 
       // Optimize route for these orders
-      const optimizedRoute = await optimizeRoute(suitableOrders, config.warehouse_postal, apiRequestCount);
-      apiRequestCount = optimizedRoute.apiRequestCount;
+      const optimizedRoute = await optimizeRoute(suitableOrders, config.warehouse_address, slotStart.toDate());
 
       // Assign teams to this timeslot
       if (!timeslot.delivery_team_id && teams.deliveryTeams.length > 0) {
@@ -445,7 +414,7 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
           }
         });
 
-        console.log(`   👥 Assigned Delivery Team: ${deliveryTeam.id}, Warehouse Team: ${warehouseTeam.id}`);
+        console.log(`   Assigned Delivery Team: ${deliveryTeam.id}, Warehouse Team: ${warehouseTeam.id}`);
 
         deliveryTeamIndex++;
         warehouseTeamIndex++;
@@ -453,15 +422,23 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
 
       // Schedule orders in optimized route
       let currentTime = slotStart.clone();
+      let travelTimeAccumulated = 0;
 
       for (let i = 0; i < optimizedRoute.orders.length; i++) {
         const order = optimizedRoute.orders[i];
+
+        // Add travel time to this location
+        if (i < optimizedRoute.travelTimes.length) {
+          travelTimeAccumulated += optimizedRoute.travelTimes[i];
+          currentTime = currentTime.add(optimizedRoute.travelTimes[i], 'minute');
+        }
+
         const orderStart = currentTime.clone();
         const orderEnd = currentTime.add(order.calculatedDeliveryTime, 'minute');
 
         // Check if order still fits in slot
         if (orderEnd.isAfter(slotEnd)) {
-          console.log(`   ⚠️  Order ${order.id} exceeds slot time, skipping remaining orders`);
+          console.log(`   Order ${order.id} exceeds slot time, skipping remaining orders`);
           break;
         }
 
@@ -478,7 +455,7 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
           }
         });
 
-        console.log(`   ✅ Scheduled Order ${order.id}: ${orderStart.format('HH:mm')}-${orderEnd.format('HH:mm')} (Load Seq: ${order.truck_loading_sequence})`);
+        console.log(`   Scheduled Order ${order.id}: ${orderStart.format('HH:mm')}-${orderEnd.format('HH:mm')} (Load Seq: ${order.truck_loading_sequence})`);
 
         scheduled.push({
           orderId: order.id,
@@ -507,7 +484,7 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
             }
           });
 
-          console.log(`   🔧 Installation scheduled: Team ${installationTeam.id}, ETA ${estimatedArrival.format('HH:mm')}`);
+          console.log(`   Installation scheduled: Team ${installationTeam.id}, ETA ${estimatedArrival.format('HH:mm')}`);
           installationSchedulesCreated++;
         }
 
@@ -520,6 +497,8 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
         // Update current time for next order
         currentTime = orderEnd.clone().add(10, 'minute'); // 10 min buffer between orders
       }
+
+      console.log(`   Total travel time for this route: ${Math.round(travelTimeAccumulated)} minutes (with traffic)`);
     }
 
     // Any remaining orders are unscheduled
@@ -528,36 +507,81 @@ async function optimizeAndSchedule(postalCodeGroups, timeslots, teams, trucks, c
         orderId: order.id,
         reason: 'No suitable timeslot found (access window conflict or insufficient time)'
       });
-      console.log(`   ❌ Unscheduled Order ${order.id}: No suitable timeslot`);
+      console.log(`   Unscheduled Order ${order.id}: No suitable timeslot`);
     }
   }
 
-  return { scheduled, unscheduled, installationSchedulesCreated, apiRequestCount };
+  return { scheduled, unscheduled, installationSchedulesCreated };
 }
 
 /**
- * Optimize delivery route using nearest neighbor algorithm
+ * Optimize delivery route using OpenStreetMap routing
  * CRITICAL: Assigns truck loading sequence (REVERSE of delivery order)
  */
-async function optimizeRoute(orders, warehousePostal, apiRequestCount) {
-  console.log(`   🚚 Optimizing route for ${orders.length} orders...`);
+async function optimizeRoute(orders, warehouseAddress, departureTime) {
+  console.log(`   Optimizing route for ${orders.length} orders using OpenStreetMap...`);
 
-  const route = [...orders]; // For now, keep FIFO order
-  // TODO: Implement Google Maps Distance Matrix API for route optimization
+  try {
+    // Optimize route order using nearest neighbor algorithm
+    const optimizedOrders = await optimizeRouteOrder(orders, warehouseAddress);
 
-  // Assign truck loading sequence (REVERSE of delivery sequence)
-  // Delivery order: [A, B, C] means A delivered first, C delivered last
-  // Truck loading: C loaded first (seq=1), B middle (seq=2), A loaded last (seq=3)
-  route.forEach((order, deliveryIndex) => {
-    order.truck_loading_sequence = route.length - deliveryIndex;
-  });
+    // Calculate complete route with travel times
+    const routeInfo = await calculateCompleteRoute(optimizedOrders, warehouseAddress, departureTime);
 
-  console.log(`   📋 Truck loading sequence assigned:`);
-  route.forEach((order, idx) => {
-    console.log(`      ${idx + 1}. Order ${order.id} → Load Seq ${order.truck_loading_sequence} (${idx === 0 ? 'first delivery, LAST to load' : idx === route.length - 1 ? 'last delivery, FIRST to load' : 'middle'})`);
-  });
+    // Calculate travel time between each stop (warehouse -> stop1 -> stop2 -> ...)
+    const travelTimes = [];
+    const waypoints = routeInfo.waypoints;
 
-  return { orders: route, apiRequestCount };
+    // Split total travel time proportionally based on segments
+    const totalSegments = waypoints.length - 1; // Number of segments
+    const avgTravelTime = routeInfo.totalTravelTimeWithTraffic / 60 / totalSegments; // Convert to minutes
+
+    for (let i = 0; i < optimizedOrders.length; i++) {
+      travelTimes.push(avgTravelTime);
+      console.log(`   Stop ${i + 1} travel time: ${Math.round(avgTravelTime)} minutes (with traffic)`);
+    }
+
+    // Assign truck loading sequence (REVERSE of delivery sequence)
+    // Delivery order: [A, B, C] means A delivered first, C delivered last
+    // Truck loading: C loaded first (seq=1), B middle (seq=2), A loaded last (seq=3)
+    optimizedOrders.forEach((order, deliveryIndex) => {
+      order.truck_loading_sequence = optimizedOrders.length - deliveryIndex;
+    });
+
+    console.log(`   Truck loading sequence assigned:`);
+    optimizedOrders.forEach((order, idx) => {
+      console.log(`      ${idx + 1}. Order ${order.id} -> Load Seq ${order.truck_loading_sequence} (${idx === 0 ? 'first delivery, LAST to load' : idx === optimizedOrders.length - 1 ? 'last delivery, FIRST to load' : 'middle'})`);
+    });
+
+    return {
+      orders: optimizedOrders,
+      travelTimes: travelTimes, // Travel time in minutes for each stop
+      totalDistance: routeInfo.totalDistance,
+      totalTravelTime: routeInfo.totalTravelTimeWithTraffic
+    };
+
+  } catch (error) {
+    console.error(`   Route optimization failed: ${error.message}`);
+    console.log(`   Using fallback: FIFO order without optimization`);
+
+    // Fallback: use FIFO order
+    const route = [...orders];
+
+    // Assign truck loading sequence
+    route.forEach((order, deliveryIndex) => {
+      order.truck_loading_sequence = route.length - deliveryIndex;
+    });
+
+    // Estimate travel times (10 min per stop)
+    const travelTimes = new Array(route.length).fill(10);
+
+    return {
+      orders: route,
+      travelTimes: travelTimes,
+      totalDistance: 0,
+      totalTravelTime: 0
+    };
+  }
 }
 
 module.exports = {

@@ -11,7 +11,8 @@ import {
 } from "../../../services/informationService";
 import { TeamBadge } from "./TeamInfo";
 
-const TABLE_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag", "password"];
+const TABLE_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag"];
+const FORM_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag", "password"];
 
 const FIELD_LABELS = {
     name: "Name",
@@ -29,7 +30,7 @@ const FIELD_GUIDANCE = {
     contact_number: "Format: 01XXXXXXXX (no dashes/spaces)",
     team: "Select the team this employee belongs to",
     email: "Press Tab to accept suggested email or type your own",
-    password: "Enter a secure password"
+    password: "Minimum 6 characters"
 };
 
 
@@ -220,7 +221,6 @@ export default function EmployeeInfo() {
                     contact_number: emp.contact_number,
                     active_flag: emp.active_flag,
                     role: roleId,
-                    password: emp.password || '********',
                     team: empTeamMap.get(empId)?.TeamType || null,
                     teamId: empTeamMap.get(empId)?.TeamID || null,
                     roleName: roleName
@@ -408,7 +408,7 @@ export default function EmployeeInfo() {
                 setSuccessMsg("Employee added successfully!");
             } else {
                 // update existing employee
-                if (modalData.password && modalData.password !== '********') {
+                if (modalData.password && modalData.password.trim() !== '') {
                     employeeData.password = modalData.password; // only update if entered
                 }
                 const empId = modalData.EmployeeID || modalData.id;
@@ -778,18 +778,37 @@ export default function EmployeeInfo() {
                     {modalMode === "add" ? "Add New Employee" : "Edit Employee"}
                 </h3>
                 <div className="space-y-4">
-                    {TABLE_KEYS.map(k => (
-                        <div key={k}>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                {FIELD_LABELS[k] || k}
-                                {k !== "team" && <span className="text-red-500">*</span>}
-                            </label>
-                            {renderInputField(k, modalData[k], handleModalChange)}
-                            {FIELD_GUIDANCE[k] && (
-                                <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE[k]}</p>
-                            )}
-                        </div>
-                    ))}
+                    {FORM_KEYS.map(k => {
+                        // Skip password field initially - we'll show it separately
+                        if (k === "password") {
+                            return null;
+                        }
+                        return (
+                            <div key={k}>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    {FIELD_LABELS[k] || k}
+                                    {k !== "team" && <span className="text-red-500">*</span>}
+                                </label>
+                                {renderInputField(k, modalData[k], handleModalChange)}
+                                {FIELD_GUIDANCE[k] && (
+                                    <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE[k]}</p>
+                                )}
+                            </div>
+                        );
+                    })}
+
+                    {/* Password field - required for add, optional for edit */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            {FIELD_LABELS["password"]}
+                            {modalMode === "add" && <span className="text-red-500">*</span>}
+                            {modalMode === "edit" && <span className="text-xs text-gray-500 ml-2">(leave blank to keep current password)</span>}
+                        </label>
+                        {renderInputField("password", modalData["password"], handleModalChange)}
+                        {FIELD_GUIDANCE["password"] && (
+                            <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["password"]}</p>
+                        )}
+                    </div>
                     <div className="flex gap-3 pt-4">
                         <button
                             type="button"

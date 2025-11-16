@@ -1,6 +1,7 @@
 // server/routes/employees.js
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
 const prisma = require('../prismaClient');
 
 // GET /api/employees - Get all employees
@@ -9,7 +10,14 @@ router.get('/', async (req, res) => {
     const employees = await prisma.employees.findMany({
       include: { role: true }
     });
-    res.json(employees);
+
+    // Remove password from response for security
+    const sanitizedEmployees = employees.map(emp => {
+      const { password, ...employeeWithoutPassword } = emp;
+      return employeeWithoutPassword;
+    });
+
+    res.json(sanitizedEmployees);
   } catch (err) {
     console.error('GET /api/employees error', err);
     res.status(500).json({ error: 'Failed to fetch employees' });
@@ -26,7 +34,10 @@ router.get('/:id', async (req, res) => {
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
     }
-    res.json(employee);
+
+    // Remove password from response for security
+    const { password, ...employeeWithoutPassword } = employee;
+    res.json(employeeWithoutPassword);
   } catch (err) {
     console.error('GET /api/employees/:id error', err);
     res.status(500).json({ error: 'Failed to fetch employee' });
@@ -36,19 +47,29 @@ router.get('/:id', async (req, res) => {
 // POST /api/employees - Create new employee
 router.post('/', async (req, res) => {
   try {
-    const { role, ...data } = req.body;
+    const { role, password, ...data } = req.body;
     console.log('Employee body:', req.body);
+
     // Convert role field to role_id for foreign key
     const createData = { ...data };
     if (role) {
       createData.role_id = role;
     }
 
+    // Hash password before saving
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      createData.password = await bcrypt.hash(password, salt);
+    }
+
     const employee = await prisma.employees.create({
       data: createData,
       include: { role: true }
     });
-    res.status(201).json(employee);
+
+    // Remove password from response for security
+    const { password: _, ...employeeWithoutPassword } = employee;
+    res.status(201).json(employeeWithoutPassword);
   } catch (err) {
     console.error('POST /api/employees error', err);
     res.status(500).json({ error: 'Failed to create employee', details: err.message });
@@ -58,7 +79,7 @@ router.post('/', async (req, res) => {
 // PUT /api/employees/:id - Update employee
 router.put('/:id', async (req, res) => {
   try {
-    const { role, ...data } = req.body;
+    const { role, password, ...data } = req.body;
 
     // Convert role field to role_id for foreign key
     const updateData = { ...data };
@@ -66,12 +87,21 @@ router.put('/:id', async (req, res) => {
       updateData.role_id = role || null;
     }
 
+    // Hash password if provided
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      updateData.password = await bcrypt.hash(password, salt);
+    }
+
     const employee = await prisma.employees.update({
       where: { id: req.params.id },
       data: updateData,
       include: { role: true }
     });
-    res.json(employee);
+
+    // Remove password from response for security
+    const { password: _, ...employeeWithoutPassword } = employee;
+    res.json(employeeWithoutPassword);
   } catch (err) {
     console.error('PUT /api/employees/:id error', err);
     if (err.code === 'P2025') {
