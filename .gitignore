@@ -7,8 +7,19 @@ node_modules/
 # Build files
 /build
 /dist
+client/build/
 
 # Logs
 *.log
+iisnode/
 
+# Environment files
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IIS logs
+*-stderr-*.txt
+*-stdout-*.txt
