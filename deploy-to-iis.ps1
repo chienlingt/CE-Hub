@@ -15,6 +15,18 @@ Write-Host "Deploying from Git to IIS" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Step 0: Stop IIS App Pool (to unlock files)
+Write-Host "[0/4] Stopping IIS app pool..." -ForegroundColor Green
+Import-Module WebAdministration -ErrorAction SilentlyContinue
+if (Get-Command Stop-WebAppPool -ErrorAction SilentlyContinue) {
+    Stop-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    Write-Host "App pool stopped" -ForegroundColor Gray
+} else {
+    Write-Host "Could not stop app pool (run as Administrator)" -ForegroundColor Yellow
+}
+Write-Host ""
+
 # Step 1: Build Client
 Write-Host "[1/4] Building React client..." -ForegroundColor Green
 Push-Location $clientPath
@@ -57,14 +69,13 @@ Pop-Location
 Write-Host "Server dependencies installed!" -ForegroundColor Gray
 Write-Host ""
 
-# Step 3: Restart IIS App Pool
-Write-Host "[3/4] Restarting IIS application pool..." -ForegroundColor Green
-Import-Module WebAdministration -ErrorAction SilentlyContinue
-if (Get-Command Restart-WebAppPool -ErrorAction SilentlyContinue) {
-    Restart-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
-    Write-Host "App pool '$AppPoolName' restarted" -ForegroundColor Gray
+# Step 3: Start IIS App Pool
+Write-Host "[3/4] Starting IIS application pool..." -ForegroundColor Green
+if (Get-Command Start-WebAppPool -ErrorAction SilentlyContinue) {
+    Start-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
+    Write-Host "App pool '$AppPoolName' started" -ForegroundColor Gray
 } else {
-    Write-Host "Could not restart app pool (run as Administrator)" -ForegroundColor Yellow
+    Write-Host "Could not start app pool (run as Administrator)" -ForegroundColor Yellow
 }
 Write-Host ""
 

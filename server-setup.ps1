@@ -29,7 +29,7 @@ if (-not (Get-Module WebAdministration)) {
 }
 
 $gitRoot = $PSScriptRoot
-$clientPath = Join-Path $gitRoot "client"
+$clientPath = Join-Path $gitRoot "client\build"
 $serverPath = Join-Path $gitRoot "server"
 
 Write-Host "Git Root: $gitRoot" -ForegroundColor Gray
