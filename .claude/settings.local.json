@@ -5,7 +5,9 @@
       "Bash(findstr:*)",
       "Bash(nul)",
       "Bash(rm:*)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(del DEPLOYMENT.md QUICK-DEPLOY.md DEPLOYMENT-CHECKLIST.md DEPLOYMENT-SUMMARY.md ARCHITECTURE.md README-DEPLOYMENT.md deploy.bat DEPLOY-FROM-GIT.md)",
+      "Bash(README.md)"
     ],
     "deny": [],
     "ask": []
