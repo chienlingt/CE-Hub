@@ -1,10 +1,19 @@
 # deploy-to-iis.ps1
 # Run this after git pull to rebuild and restart
-# Usage: .\deploy-to-iis.ps1
+# Usage: .\deploy-to-iis.ps1 (Run as Administrator)
 
 param(
     [string]$AppPoolName = "TBMDeliveryAPI"
 )
+
+# Check if running as Administrator
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "ERROR: This script must run as Administrator" -ForegroundColor Red
+    Write-Host "Right-click PowerShell and select 'Run as Administrator'" -ForegroundColor Yellow
+    pause
+    exit 1
+}
 
 $gitRoot = $PSScriptRoot
 $clientPath = Join-Path $gitRoot "client"
