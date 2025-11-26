@@ -27,114 +27,6 @@ const WarehouseLoadingSchedule = () => {
   const [trucks, setTrucks] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Generate mock data for demonstration
-  const generateMockData = () => {
-    const today = new Date().toISOString().split('T')[0];
-
-    const mockTrucks = [
-      { id: 'TRK_MOCK_001', plate_no: 'WXY1234', length_cm: 443, width_cm: 250, height_cm: 210, tone: 3 },
-      { id: 'TRK_MOCK_002', plate_no: 'ABC5678', length_cm: 600, width_cm: 250, height_cm: 250, tone: 5 }
-    ];
-
-    const mockTeams = [
-      { id: 'TEAM_DEL_001', team_type: 'Delivery Team A' },
-      { id: 'TEAM_WH_001', team_type: 'Warehouse Team A' }
-    ];
-
-    const mockTimeSlots = [
-      {
-        id: 'TS_MOCK_WH_001',
-        date: today,
-        time_window_start: '07:00',
-        time_window_end: '09:00',
-        available_flag: false,
-        delivery_team_id: 'TEAM_DEL_001',
-        warehouse_team_id: 'TEAM_WH_001',
-        truck_id: 'TRK_MOCK_001'
-      },
-      {
-        id: 'TS_MOCK_WH_002',
-        date: today,
-        time_window_start: '08:00',
-        time_window_end: '10:00',
-        available_flag: false,
-        delivery_team_id: 'TEAM_DEL_001',
-        warehouse_team_id: 'TEAM_WH_001',
-        truck_id: 'TRK_MOCK_002'
-      }
-    ];
-
-    const mockCustomers = [
-      { id: 'CUST_MOCK_WH_001', full_name: 'Alice Tan', address: 'Mont Kiara' },
-      { id: 'CUST_MOCK_WH_002', full_name: 'Bob Lee', address: 'KLCC' }
-    ];
-
-    const mockBuildings = [
-      { id: 'BLD_MOCK_WH_001', building_name: 'Menara KLCC' },
-      { id: 'BLD_MOCK_WH_002', building_name: 'Pavilion Tower' }
-    ];
-
-    const mockProducts = [
-      { id: 'PROD_MOCK_WH_001', product_name: 'Samsung Refrigerator', package_length_cm: 180, package_width_cm: 70, package_height_cm: 65, fragile_flag: false, no_lie_down_flag: true },
-      { id: 'PROD_MOCK_WH_002', product_name: 'LG Washing Machine', package_length_cm: 95, package_width_cm: 60, package_height_cm: 85, fragile_flag: false, no_lie_down_flag: true },
-      { id: 'PROD_MOCK_WH_003', product_name: 'Daikin Air Conditioner', package_length_cm: 115, package_width_cm: 83, package_height_cm: 43, fragile_flag: true, no_lie_down_flag: true }
-    ];
-
-    const mockOrders = [
-      {
-        id: 'ORD_MOCK_WH_001',
-        customer_id: 'CUST_MOCK_WH_001',
-        building_id: 'BLD_MOCK_WH_001',
-        time_slot_id: 'TS_MOCK_WH_001',
-        order_status: 'Ready for Loading',
-        scheduled_start_date_time: `${today}T09:00:00`,
-        scheduled_end_date_time: `${today}T10:30:00`,
-        truck_loading_sequence: 2,
-        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'ORD_MOCK_WH_002',
-        customer_id: 'CUST_MOCK_WH_002',
-        building_id: 'BLD_MOCK_WH_002',
-        time_slot_id: 'TS_MOCK_WH_001',
-        order_status: 'Ready for Loading',
-        scheduled_start_date_time: `${today}T14:00:00`,
-        scheduled_end_date_time: `${today}T15:30:00`,
-        truck_loading_sequence: 1,
-        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'ORD_MOCK_WH_003',
-        customer_id: 'CUST_MOCK_WH_001',
-        building_id: 'BLD_MOCK_WH_001',
-        time_slot_id: 'TS_MOCK_WH_002',
-        order_status: 'Loading in Progress',
-        scheduled_start_date_time: `${today}T11:00:00`,
-        scheduled_end_date_time: `${today}T12:30:00`,
-        truck_loading_sequence: 1,
-        created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    const mockOrderProducts = [
-      { order_id: 'ORD_MOCK_WH_001', product_id: 'PROD_MOCK_WH_001', quantity: 1 },
-      { order_id: 'ORD_MOCK_WH_002', product_id: 'PROD_MOCK_WH_002', quantity: 1 },
-      { order_id: 'ORD_MOCK_WH_002', product_id: 'PROD_MOCK_WH_003', quantity: 1 },
-      { order_id: 'ORD_MOCK_WH_003', product_id: 'PROD_MOCK_WH_001', quantity: 2 }
-    ];
-
-    return {
-      orders: mockOrders,
-      orderProducts: mockOrderProducts,
-      products: mockProducts,
-      customers: mockCustomers,
-      buildings: mockBuildings,
-      timeSlots: mockTimeSlots,
-      teams: mockTeams,
-      trucks: mockTrucks
-    };
-  };
-
   // Load all data
   useEffect(() => {
     async function loadData() {
@@ -159,43 +51,27 @@ const WarehouseLoadingSchedule = () => {
           getAllTrucks()
         ]);
 
-        // Use real data if available, otherwise use mock data
-        const hasRealData = timeSlotsData.length > 0 || ordersData.length > 0;
-
-        // if (!hasRealData) {
-          const mockData = generateMockData();
-
-          setOrders(mockData.orders);
-          setOrderProducts(mockData.orderProducts);
-          setProducts(mockData.products);
-          setCustomers(mockData.customers);
-          setBuildings(mockData.buildings);
-          setTimeSlots(mockData.timeSlots);
-          setTeams(mockData.teams);
-          setTrucks(mockData.trucks);
-
-        // } else {
-        //   console.log('[TruckSchedule] ✅ Using real data from API');
-        //   setOrders(ordersData);
-        //   setOrderProducts(orderProductsData);
-        //   setProducts(productsData);
-        //   setCustomers(customersData);
-        //   setBuildings(buildingsData);
-        //   setTimeSlots(timeSlotsData);
-        //   setTeams(teamsData);
-        //   setTrucks(trucksData);
-        // }
+        // Always use real data from API
+        console.log('[TruckSchedule] ✅ Using real data from API');
+        setOrders(Array.isArray(ordersData) ? ordersData : (ordersData?.data ?? []));
+        setOrderProducts(Array.isArray(orderProductsData) ? orderProductsData : (orderProductsData?.data ?? []));
+        setProducts(Array.isArray(productsData) ? productsData : (productsData?.data ?? []));
+        setCustomers(Array.isArray(customersData) ? customersData : (customersData?.data ?? []));
+        setBuildings(Array.isArray(buildingsData) ? buildingsData : (buildingsData?.data ?? []));
+        setTimeSlots(Array.isArray(timeSlotsData) ? timeSlotsData : (timeSlotsData?.data ?? []));
+        setTeams(Array.isArray(teamsData) ? teamsData : (teamsData?.data ?? []));
+        setTrucks(Array.isArray(trucksData) ? trucksData : (trucksData?.data ?? []));
       } catch (error) {
-        // Use mock data on error
-        const mockData = generateMockData();
-        setOrders(mockData.orders);
-        setOrderProducts(mockData.orderProducts);
-        setProducts(mockData.products);
-        setCustomers(mockData.customers);
-        setBuildings(mockData.buildings);
-        setTimeSlots(mockData.timeSlots);
-        setTeams(mockData.teams);
-        setTrucks(mockData.trucks);
+        console.error('[TruckSchedule] ❌ ERROR loading warehouse data:', error);
+        // Set empty arrays on error
+        setOrders([]);
+        setOrderProducts([]);
+        setProducts([]);
+        setCustomers([]);
+        setBuildings([]);
+        setTimeSlots([]);
+        setTeams([]);
+        setTrucks([]);
       } finally {
         setLoading(false);
       }

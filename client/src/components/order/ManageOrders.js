@@ -1,0 +1,1050 @@
+// client/src/components/order/ManageOrders.js
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Search,
+  Filter,
+  Plus,
+  Edit2,
+  Eye,
+  X,
+  Calendar,
+  User,
+  MapPin,
+  Package,
+  Clock,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react';
+import {
+  isOrderEditable,
+  getOrderStatusBadge,
+  formatDateTime,
+  formatDate,
+  getTotalProductCount,
+  getServiceTypeLabel,
+  searchOrders,
+  filterOrdersByDateRange,
+  getRemainingEditTime
+} from '../../utils/orderHelpers';
+
+const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
+export default function ManageOrders() {
+  // State management
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [editDeadlineHours, setEditDeadlineHours] = useState(24);
+
+  // Filter states
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [dateRangeFilter, setDateRangeFilter] = useState('all');
+  const [customDateStart, setCustomDateStart] = useState('');
+  const [customDateEnd, setCustomDateEnd] = useState('');
+  const [sortBy, setSortBy] = useState('created_desc');
+
+  // UI states
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
+
+  // Fetch edit deadline setting
+  useEffect(() => {
+    fetchEditDeadlineSetting();
+  }, []);
+
+  // Fetch orders
+  useEffect(() => {
+    fetchOrders();
+  }, [statusFilter, sortBy]);
+
+  const fetchEditDeadlineSetting = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/settings/order_edit_deadline_hours`);
+      if (res.ok) {
+        const data = await res.json();
+        setEditDeadlineHours(parseInt(data.data.value));
+      }
+    } catch (err) {
+      console.error('Failed to fetch edit deadline setting:', err);
+    }
+  };
+
+  const fetchOrders = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (statusFilter !== 'all') params.append('status', statusFilter);
+      params.append('sort', sortBy);
+
+      const res = await fetch(`${API_BASE}/api/orders?${params.toString()}`);
+      if (!res.ok) throw new Error('Failed to fetch orders');
+
+      const data = await res.json();
+      setOrders(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error fetching orders:', err);
+      setError(err.message);
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Apply filters and search
+  const filteredOrders = useMemo(() => {
+    let result = [...orders];
+
+    // Search filter
+    result = searchOrders(result, searchKeyword);
+
+    // Date range filter
+    if (dateRangeFilter !== 'all') {
+      result = filterOrdersByDateRange(
+        result,
+        dateRangeFilter,
+        customDateStart ? new Date(customDateStart) : null,
+        customDateEnd ? new Date(customDateEnd) : null
+      );
+    }
+
+    return result;
+  }, [orders, searchKeyword, dateRangeFilter, customDateStart, customDateEnd]);
+
+  // Calculate stats
+  const stats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    return {
+      pending: orders.filter(o => o.order_status === 'Pending').length,
+      scheduled: orders.filter(o => o.order_status === 'Scheduled').length,
+      delivered: orders.filter(o => o.order_status === 'Delivered').length,
+      today: orders.filter(o => {
+        const created = new Date(o.created_at);
+        return created >= today && created < tomorrow;
+      }).length
+    };
+  }, [orders]);
+
+  const handleEdit = (order) => {
+    const editCheck = isOrderEditable(order, editDeadlineHours);
+    if (!editCheck.editable) {
+      alert(`Cannot edit order: ${editCheck.reason}`);
+      return;
+    }
+    setEditingOrder(order);
+    setShowEditModal(true);
+  };
+
+  const handleView = (orderId) => {
+    setExpandedOrderId(expandedOrderId === orderId ? null : orderId);
+  };
+
+  const handleCloseEditModal = () => {
+    setShowEditModal(false);
+    setEditingOrder(null);
+  };
+
+  const handleSaveEdit = async (updatedData) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${editingOrder.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedData)
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to update order');
+      }
+
+      // Refresh orders
+      await fetchOrders();
+      handleCloseEditModal();
+      alert('Order updated successfully!');
+    } catch (err) {
+      console.error('Error updating order:', err);
+      alert(err.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="text-gray-600">Loading orders...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">Manage Orders</h1>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <StatCard
+          title="Pending Orders"
+          value={stats.pending}
+          color="yellow"
+          icon={<Clock className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Scheduled Orders"
+          value={stats.scheduled}
+          color="blue"
+          icon={<Calendar className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Delivered Orders"
+          value={stats.delivered}
+          color="green"
+          icon={<Package className="w-5 h-5" />}
+        />
+        <StatCard
+          title="Orders Today"
+          value={stats.today}
+          color="purple"
+          icon={<Plus className="w-5 h-5" />}
+        />
+      </div>
+
+      {/* Filters & Search */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Search orders..."
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* Status Filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="all">All Status</option>
+            <option value="Pending">Pending</option>
+            <option value="Scheduled">Scheduled</option>
+            <option value="Delivered">Delivered</option>
+            <option value="Cancelled">Cancelled</option>
+          </select>
+
+          {/* Date Range */}
+          <select
+            value={dateRangeFilter}
+            onChange={(e) => setDateRangeFilter(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="all">All Time</option>
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="custom">Custom Range</option>
+          </select>
+
+          {/* Sort By */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="created_desc">Latest First</option>
+            <option value="created_asc">Oldest First</option>
+            <option value="scheduled_desc">Scheduled (Latest)</option>
+            <option value="scheduled_asc">Scheduled (Earliest)</option>
+            <option value="customer">Customer Name</option>
+          </select>
+        </div>
+
+        {/* Custom Date Range */}
+        {dateRangeFilter === 'custom' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+              <input
+                type="date"
+                value={customDateStart}
+                onChange={(e) => setCustomDateStart(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+              <input
+                type="date"
+                value={customDateEnd}
+                onChange={(e) => setCustomDateEnd(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Orders Table */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Order #
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Customer
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Products
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Created
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Scheduled
+                </th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {filteredOrders.length === 0 ? (
+                <tr>
+                  <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
+                    No orders found
+                  </td>
+                </tr>
+              ) : (
+                filteredOrders.map((order) => (
+                  <OrderRow
+                    key={order.id}
+                    order={order}
+                    isExpanded={expandedOrderId === order.id}
+                    onView={handleView}
+                    onEdit={handleEdit}
+                    editDeadlineHours={editDeadlineHours}
+                  />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Edit Modal */}
+      {showEditModal && editingOrder && (
+        <EditOrderModal
+          order={editingOrder}
+          onClose={handleCloseEditModal}
+          onSave={handleSaveEdit}
+          editDeadlineHours={editDeadlineHours}
+        />
+      )}
+    </div>
+  );
+}
+
+// Stat Card Component
+function StatCard({ title, value, color, icon }) {
+  const colorClasses = {
+    yellow: 'bg-yellow-50 text-yellow-600 border-yellow-200',
+    blue: 'bg-blue-50 text-blue-600 border-blue-200',
+    green: 'bg-green-50 text-green-600 border-green-200',
+    purple: 'bg-purple-50 text-purple-600 border-purple-200'
+  };
+
+  return (
+    <div className={`rounded-lg border p-4 ${colorClasses[color]}`}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium opacity-80">{title}</p>
+          <p className="text-3xl font-bold mt-1">{value}</p>
+        </div>
+        <div className="opacity-60">{icon}</div>
+      </div>
+    </div>
+  );
+}
+
+// Order Row Component (with expandable details)
+function OrderRow({ order, isExpanded, onView, onEdit, editDeadlineHours }) {
+  const statusBadge = getOrderStatusBadge(order.order_status);
+  const editCheck = isOrderEditable(order, editDeadlineHours);
+  const productCount = getTotalProductCount(order.order_products);
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50">
+        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+          {order.id.substring(0, 8)}...
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          <div className="text-sm font-medium text-gray-900">
+            {order.customers?.full_name || 'N/A'}
+          </div>
+          <div className="text-sm text-gray-500">{order.customers?.phone || ''}</div>
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+          {productCount} {productCount === 1 ? 'item' : 'items'}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusBadge.bgColor} ${statusBadge.color}`}>
+            {statusBadge.label}
+          </span>
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+          {formatDate(order.created_at)}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+          {order.scheduled_start_date_time ? formatDateTime(order.scheduled_start_date_time) : '-'}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+          <button
+            onClick={() => onView(order.id)}
+            className="text-blue-600 hover:text-blue-900 mr-3"
+            title="View Details"
+          >
+            {isExpanded ? <ChevronUp className="w-5 h-5 inline" /> : <ChevronDown className="w-5 h-5 inline" />}
+          </button>
+          <button
+            onClick={() => onEdit(order)}
+            disabled={!editCheck.editable}
+            className={`${
+              editCheck.editable
+                ? 'text-green-600 hover:text-green-900'
+                : 'text-gray-400 cursor-not-allowed'
+            }`}
+            title={editCheck.editable ? 'Edit Order' : editCheck.reason}
+          >
+            <Edit2 className="w-5 h-5 inline" />
+          </button>
+        </td>
+      </tr>
+      {isExpanded && <ExpandedOrderDetails order={order} editDeadlineHours={editDeadlineHours} />}
+    </>
+  );
+}
+
+// Expanded Order Details Component
+function ExpandedOrderDetails({ order, editDeadlineHours }) {
+  const editCheck = isOrderEditable(order, editDeadlineHours);
+  const remainingTime = order.scheduled_start_date_time
+    ? getRemainingEditTime(order.scheduled_start_date_time, editDeadlineHours)
+    : null;
+
+  return (
+    <tr>
+      <td colSpan="7" className="px-6 py-4 bg-gray-50">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Customer Info */}
+          <div>
+            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Customer Information
+            </h4>
+            <div className="space-y-1 text-sm">
+              <p><span className="font-medium">Name:</span> {order.customers?.full_name || 'N/A'}</p>
+              <p><span className="font-medium">Email:</span> {order.customers?.email || 'N/A'}</p>
+              <p><span className="font-medium">Phone:</span> {order.customers?.phone || 'N/A'}</p>
+              <p><span className="font-medium">Address:</span> {order.customers?.address || 'N/A'}</p>
+            </div>
+          </div>
+
+          {/* Building Info */}
+          <div>
+            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <MapPin className="w-4 h-4" />
+              Building Information
+            </h4>
+            <div className="space-y-1 text-sm">
+              <p><span className="font-medium">Building:</span> {order.buildings?.building_name || 'N/A'}</p>
+              <p><span className="font-medium">Type:</span> {order.buildings?.housing_type || 'N/A'}</p>
+              <p><span className="font-medium">Postal Code:</span> {order.buildings?.postal_code || 'N/A'}</p>
+            </div>
+          </div>
+
+          {/* Products */}
+          <div className="md:col-span-2">
+            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <Package className="w-4 h-4" />
+              Products ({order.order_products?.length || 0})
+            </h4>
+            <div className="space-y-2">
+              {order.order_products?.map((op, idx) => (
+                <div key={idx} className="bg-white p-3 rounded border border-gray-200 text-sm">
+                  <div className="flex justify-between">
+                    <span className="font-medium">{op.products?.product_name || 'Unknown Product'}</span>
+                    <span className="text-gray-600">Qty: {op.quantity}</span>
+                  </div>
+                  <div className="mt-1 text-gray-600">
+                    <span className="mr-4">Service: {getServiceTypeLabel(op.service_type)}</span>
+                    {op.dismantle_required && <span className="text-orange-600">Dismantle Required</span>}
+                  </div>
+                  {(op.custom_installation_time_min || op.custom_installation_time_max) && (
+                    <div className="mt-1 text-gray-600">
+                      Installation Time: {op.custom_installation_time_min || 0}-{op.custom_installation_time_max || 0} min
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Special Equipment */}
+          {order.special_equipment_needed && (
+            <div className="md:col-span-2">
+              <h4 className="font-semibold text-gray-700 mb-2">Special Equipment</h4>
+              <p className="text-sm text-gray-600">{order.special_equipment_needed}</p>
+            </div>
+          )}
+
+          {/* Edit Deadline Info */}
+          {order.scheduled_start_date_time && (
+            <div className="md:col-span-2">
+              <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                <Clock className="w-4 h-4" />
+                Edit Deadline
+              </h4>
+              <div className="text-sm">
+                {editCheck.editable ? (
+                  remainingTime && !remainingTime.expired ? (
+                    <p className="text-green-600">
+                      Can edit for {remainingTime.hours}h {remainingTime.minutes}m
+                    </p>
+                  ) : (
+                    <p className="text-green-600">Order is editable</p>
+                  )
+                ) : (
+                  <p className="text-red-600">{editCheck.reason}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// Edit Order Modal Component - Full editing capabilities
+function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Data
+  const [customers, setCustomers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [allProducts, setAllProducts] = useState([]);
+
+  // Customer info (editable)
+  const [customerData, setCustomerData] = useState({
+    full_name: order.customers?.full_name || '',
+    email: order.customers?.email || '',
+    phone: order.customers?.phone || '',
+    address: order.customers?.address || '',
+    city: order.customers?.city || '',
+    state: order.customers?.state || '',
+    postcode: order.customers?.postcode || ''
+  });
+
+  // Products in cart
+  const [cart, setCart] = useState([]);
+
+  // Special equipment
+  const [specialEquipment, setSpecialEquipment] = useState(order.special_equipment_needed || '');
+
+  // Search
+  const [productSearch, setProductSearch] = useState('');
+
+  const remainingTime = order.scheduled_start_date_time
+    ? getRemainingEditTime(order.scheduled_start_date_time, editDeadlineHours)
+    : null;
+
+  // Load data
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [customersRes, productsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/customers`),
+          fetch(`${API_BASE}/api/products`)
+        ]);
+
+        const customersData = await customersRes.json();
+        const productsData = await productsRes.json();
+
+        setCustomers(Array.isArray(customersData) ? customersData : []);
+        setAllProducts(Array.isArray(productsData) ? productsData : []);
+
+        // Initialize cart from order_products
+        const initialCart = (order.order_products || []).map(op => ({
+          product: op.products,
+          quantity: op.quantity || 1,
+          serviceType: op.service_type || 'delivery',
+          dismantleRequired: op.dismantle_required || false,
+          customInstallTime: (op.custom_installation_time_min || op.custom_installation_time_max)
+            ? { min: op.custom_installation_time_min, max: op.custom_installation_time_max }
+            : null
+        }));
+        setCart(initialCart);
+      } catch (err) {
+        console.error('Error loading data:', err);
+        setError('Failed to load data');
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [order]);
+
+  const SERVICE_TYPE_OPTIONS = [
+    { value: 'delivery', label: 'Delivery Only' },
+    { value: 'delivery_installation', label: 'Delivery + Installation' },
+    { value: 'stock_transfer', label: 'Stock Transfer' }
+  ];
+
+  const filteredProducts = allProducts.filter(p =>
+    !cart.find(c => c.product.id === p.id) &&
+    p.product_name?.toLowerCase().includes(productSearch.toLowerCase())
+  );
+
+  const addToCart = (product) => {
+    setCart([...cart, {
+      product,
+      quantity: 1,
+      serviceType: 'delivery',
+      dismantleRequired: false,
+      customInstallTime: null
+    }]);
+    setProductSearch('');
+  };
+
+  const removeFromCart = (index) => {
+    setCart(cart.filter((_, i) => i !== index));
+  };
+
+  const updateCartQuantity = (index, quantity) => {
+    const updated = [...cart];
+    updated[index].quantity = Math.max(1, parseInt(quantity) || 1);
+    setCart(updated);
+  };
+
+  const updateCartServiceType = (index, serviceType) => {
+    const updated = [...cart];
+    updated[index].serviceType = serviceType;
+
+    // Reset installation time if not delivery_installation
+    if (serviceType !== 'delivery_installation') {
+      updated[index].customInstallTime = null;
+    }
+
+    setCart(updated);
+  };
+
+  const updateCartDismantle = (index, required) => {
+    const updated = [...cart];
+    updated[index].dismantleRequired = required;
+    setCart(updated);
+  };
+
+  const updateCartInstallTime = (index, min, max) => {
+    const updated = [...cart];
+    updated[index].customInstallTime = { min: parseInt(min) || 0, max: parseInt(max) || 0 };
+    setCart(updated);
+  };
+
+  const clearCustomInstallTime = (index) => {
+    const updated = [...cart];
+    updated[index].customInstallTime = null;
+    setCart(updated);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // Validation
+    if (!customerData.full_name || !customerData.email || !customerData.phone) {
+      setError('Customer name, email, and phone are required');
+      return;
+    }
+
+    if (cart.length === 0) {
+      setError('At least one product is required');
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      // Prepare update data
+      const updateData = {
+        // Update customer info
+        customer: {
+          id: order.customer_id,
+          ...customerData
+        },
+        // Update products
+        products: cart.map(item => ({
+          product_id: item.product.id,
+          quantity: item.quantity,
+          dismantle_required: item.dismantleRequired,
+          service_type: item.serviceType,
+          custom_installation_time_min: item.customInstallTime?.min || null,
+          custom_installation_time_max: item.customInstallTime?.max || null
+        })),
+        // Update special equipment
+        special_equipment_needed: specialEquipment || null
+      };
+
+      // First update customer
+      await fetch(`${API_BASE}/api/customers/${order.customer_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customerData)
+      });
+
+      // Then update order
+      await onSave(updateData);
+    } catch (err) {
+      console.error('Error saving order:', err);
+      setError(err.message || 'Failed to save changes');
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6">
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">Edit Order</h2>
+            <p className="text-sm text-gray-600 mt-1">Order ID: {order.id.substring(0, 8)}...</p>
+            {remainingTime && !remainingTime.expired && (
+              <p className="text-sm text-green-600 mt-1">
+                Time remaining: {remainingTime.hours}h {remainingTime.minutes}m
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6">
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <span className="text-red-700 text-sm">{error}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Left Column - Customer Info */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <User className="w-5 h-5" />
+                Customer Information
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                  <input
+                    type="text"
+                    value={customerData.full_name}
+                    onChange={(e) => setCustomerData({ ...customerData, full_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                  <input
+                    type="email"
+                    value={customerData.email}
+                    onChange={(e) => setCustomerData({ ...customerData, email: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone *</label>
+                  <input
+                    type="tel"
+                    value={customerData.phone}
+                    onChange={(e) => setCustomerData({ ...customerData, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                  <textarea
+                    value={customerData.address}
+                    onChange={(e) => setCustomerData({ ...customerData, address: e.target.value })}
+                    rows={2}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                    <input
+                      type="text"
+                      value={customerData.city}
+                      onChange={(e) => setCustomerData({ ...customerData, city: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Postcode</label>
+                    <input
+                      type="text"
+                      value={customerData.postcode}
+                      onChange={(e) => setCustomerData({ ...customerData, postcode: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column - Add Products */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <Package className="w-5 h-5" />
+                Add Products
+              </h3>
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Search products..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
+                {filteredProducts.length === 0 ? (
+                  <p className="text-center text-gray-500 py-4 text-sm">
+                    {productSearch ? 'No products found' : 'Search for products to add'}
+                  </p>
+                ) : (
+                  <div className="divide-y divide-gray-200">
+                    {filteredProducts.slice(0, 10).map((product) => (
+                      <div
+                        key={product.id}
+                        className="p-3 hover:bg-gray-50 cursor-pointer transition-colors"
+                        onClick={() => addToCart(product)}
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-medium text-gray-900">{product.product_name}</span>
+                          <Plus className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Products in Cart */}
+          <div className="mt-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">
+              Products in Order ({cart.length})
+            </h3>
+            {cart.length === 0 ? (
+              <div className="text-center py-8 bg-gray-50 rounded-lg">
+                <Package className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500">No products in cart</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {cart.map((item, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    <div className="flex justify-between items-start mb-3">
+                      <h4 className="font-medium text-gray-900 text-sm">{item.product.product_name}</h4>
+                      <button
+                        type="button"
+                        onClick={() => removeFromCart(index)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* Quantity */}
+                    <div className="mb-3">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(e) => updateCartQuantity(index, e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+
+                    {/* Service Type */}
+                    <div className="mb-3">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Service Type</label>
+                      <select
+                        value={item.serviceType}
+                        onChange={(e) => updateCartServiceType(index, e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      >
+                        {SERVICE_TYPE_OPTIONS.map(opt => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Dismantle */}
+                    {item.product.dismantle_required_flag && (
+                      <div className="mb-3">
+                        <label className="flex items-center text-xs">
+                          <input
+                            type="checkbox"
+                            checked={item.dismantleRequired}
+                            onChange={(e) => updateCartDismantle(index, e.target.checked)}
+                            className="mr-2"
+                          />
+                          Dismantling Required
+                        </label>
+                      </div>
+                    )}
+
+                    {/* Installation Time */}
+                    {item.serviceType === 'delivery_installation' && (
+                      <div className="bg-blue-50 rounded p-2">
+                        <p className="text-xs font-medium text-gray-700 mb-1">Installation Time:</p>
+                        {item.customInstallTime ? (
+                          <div className="space-y-2">
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="number"
+                                placeholder="Min (min)"
+                                value={item.customInstallTime.min}
+                                onChange={(e) => updateCartInstallTime(index, e.target.value, item.customInstallTime.max)}
+                                className="px-2 py-1 border border-gray-300 rounded text-xs"
+                              />
+                              <input
+                                type="number"
+                                placeholder="Max (min)"
+                                value={item.customInstallTime.max}
+                                onChange={(e) => updateCartInstallTime(index, item.customInstallTime.min, e.target.value)}
+                                className="px-2 py-1 border border-gray-300 rounded text-xs"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => clearCustomInstallTime(index)}
+                              className="text-xs text-blue-600 hover:text-blue-800"
+                            >
+                              Use product default
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            {item.product.estimated_installation_time_min && item.product.estimated_installation_time_max ? (
+                              <p className="text-xs text-gray-600 mb-1">
+                                Default: {item.product.estimated_installation_time_min}-{item.product.estimated_installation_time_max} min
+                              </p>
+                            ) : (
+                              <p className="text-xs text-gray-600 mb-1">No default time set</p>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => updateCartInstallTime(index, 0, 0)}
+                              className="text-xs text-blue-600 hover:text-blue-800"
+                            >
+                              Set custom time
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Special Equipment */}
+          <div className="mt-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Special Equipment Needed (for entire order)
+            </label>
+            <textarea
+              value={specialEquipment}
+              onChange={(e) => setSpecialEquipment(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+              placeholder="Enter any special equipment needed for this order..."
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || cart.length === 0}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

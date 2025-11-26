@@ -24,7 +24,8 @@ import AutoScheduleReview from './admin/schedule/AutoScheduleReview';
 import DeliverySchedule from './delivery/DelSchedule';
 import InstallationSchedule from './installer/InsSchedule';
 import WarehouseLoadingSchedule from './warehouse/truckSchedule';
-import PlaceOrder from './customer/PlaceOrder';
+import PlaceOrder from './order/PlaceOrder';
+import ManageOrders from './order/ManageOrders';
 
 /**
  * Layout
@@ -125,11 +126,12 @@ const Layout = () => {
       ],
     },
     customer: {
-      title: 'Customer Management',
+      title: 'Order Management',
       icon: Users,
       route: '/customer',
       topNavItems: [
-        { id: 'customer', label: 'Customer List', path: 'customer', component: PlaceOrder },
+        { id: 'place-order', label: 'Place Order', path: 'place-order', component: PlaceOrder },
+        { id: 'manage-orders', label: 'Manage Orders', path: 'manage-orders', component: ManageOrders },
       ],
     }
   }

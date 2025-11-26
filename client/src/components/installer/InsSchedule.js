@@ -28,90 +28,6 @@ const InstallationSchedule = () => {
   const [installationSchedules, setInstallationSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Generate mock data for demonstration
-  const generateMockData = () => {
-    const today = new Date().toISOString().split('T')[0];
-
-    const mockTeams = [
-      { id: 'TEAM_INSTALL_001', team_type: 'Installation Team A' },
-      { id: 'TEAM_INSTALL_002', team_type: 'Installation Team B' }
-    ];
-
-    const mockCustomers = [
-      { id: 'CUST_MOCK_001', full_name: 'Emily Wong', phone: '012-3334444', email: 'emily@example.com', address: '10 Jalan Bukit Bintang', city: 'Kuala Lumpur', postcode: '55100', state: 'WP Kuala Lumpur' },
-      { id: 'CUST_MOCK_002', full_name: 'David Lim', phone: '013-5556666', email: 'david@example.com', address: '25 Jalan Sultan Ismail', city: 'Kuala Lumpur', postcode: '50250', state: 'WP Kuala Lumpur' }
-    ];
-
-    const mockBuildings = [
-      { id: 'BLD_MOCK_001', building_name: 'Pavilion Residences', postal_code: '55100', housing_type: 'Condominium', lift_available: true, loading_bay_available: true, access_time_window_start: '08:00', access_time_window_end: '22:00', pre_registration_required: true, notes: 'Security strict' },
-      { id: 'BLD_MOCK_002', building_name: 'Mont Kiara Sophia', postal_code: '50480', housing_type: 'Apartment', lift_available: true, loading_bay_available: false, access_time_window_start: '09:00', access_time_window_end: '18:00', narrow_doorways: true }
-    ];
-
-    const mockProducts = [
-      { id: 'PROD_MOCK_001', product_name: 'Daikin Air Conditioner 2.5HP', estimated_installation_time_min: 120, estimated_installation_time_max: 180, installer_team_required_flag: true, fragile_flag: false, no_lie_down_flag: true, package_length_cm: 100, package_width_cm: 50, package_height_cm: 80 },
-      { id: 'PROD_MOCK_002', product_name: 'Samsung Smart TV 65"', estimated_installation_time_min: 45, estimated_installation_time_max: 60, installer_team_required_flag: true, fragile_flag: true, no_lie_down_flag: true, package_length_cm: 150, package_width_cm: 90, package_height_cm: 15 }
-    ];
-
-    const mockOrders = [
-      {
-        id: 'ORD_MOCK_001',
-        customer_id: 'CUST_MOCK_001',
-        building_id: 'BLD_MOCK_001',
-        order_status: 'Scheduled',
-        scheduled_start_date_time: `${today}T09:00:00`,
-        scheduled_end_date_time: `${today}T12:00:00`,
-        number_of_attempts: 1,
-        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'ORD_MOCK_002',
-        customer_id: 'CUST_MOCK_002',
-        building_id: 'BLD_MOCK_002',
-        order_status: 'Scheduled',
-        scheduled_start_date_time: `${today}T14:00:00`,
-        scheduled_end_date_time: `${today}T16:00:00`,
-        number_of_attempts: 1,
-        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    const mockOrderProducts = [
-      { order_id: 'ORD_MOCK_001', product_id: 'PROD_MOCK_001', quantity: 2 },
-      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_002', quantity: 1 },
-      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_001', quantity: 1 }
-    ];
-
-    const mockInstallationSchedules = [
-      {
-        id: 'INST_MOCK_001',
-        order_id: 'ORD_MOCK_001',
-        installation_team_id: 'TEAM_INSTALL_001',
-        estimated_arrival_time: `${today}T09:30:00`,
-        status: 'Scheduled',
-        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'INST_MOCK_002',
-        order_id: 'ORD_MOCK_002',
-        installation_team_id: 'TEAM_INSTALL_002',
-        estimated_arrival_time: `${today}T14:30:00`,
-        status: 'Scheduled',
-        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    return {
-      orders: mockOrders,
-      orderProducts: mockOrderProducts,
-      products: mockProducts,
-      customers: mockCustomers,
-      buildings: mockBuildings,
-      teams: mockTeams,
-      installationSchedules: mockInstallationSchedules,
-      employees: []
-    };
-  };
-
   // Load all data
   useEffect(() => {
     async function loadData() {
@@ -142,43 +58,27 @@ const InstallationSchedule = () => {
 
         const installSchedules = installationSchedulesResponse.success ? installationSchedulesResponse.schedules : [];
 
-        // Use real data if available, otherwise use mock data
-        const hasRealData = ordersData.length > 0 || installSchedules.length > 0;
-
-        // if (!hasRealData) {
-          const mockData = generateMockData();
-          setOrders(mockData.orders);
-          setOrderProducts(mockData.orderProducts);
-          setProducts(mockData.products);
-          setCustomers(mockData.customers);
-          setBuildings(mockData.buildings);
-          setEmployees(mockData.employees);
-          setTeams(mockData.teams);
-          setInstallationSchedules(mockData.installationSchedules);
-
-          console.log('[InsSchedule] ✅ Mock data set to state');
-        // } else {
-        //   console.log('[InsSchedule] ✅ Using real data from API');
-        //   setOrders(ordersData);
-        //   setOrderProducts(orderProductsData);
-        //   setProducts(productsData);
-        //   setCustomers(customersData);
-        //   setBuildings(buildingsData);
-        //   setEmployees(employeesData);
-        //   setTeams(teamsData);
-        //   setInstallationSchedules(installSchedules);
-        // }
+        // Always use real data from API
+        console.log('[InsSchedule] ✅ Using real data from API');
+        setOrders(Array.isArray(ordersData) ? ordersData : (ordersData?.data ?? []));
+        setOrderProducts(Array.isArray(orderProductsData) ? orderProductsData : (orderProductsData?.data ?? []));
+        setProducts(Array.isArray(productsData) ? productsData : (productsData?.data ?? []));
+        setCustomers(Array.isArray(customersData) ? customersData : (customersData?.data ?? []));
+        setBuildings(Array.isArray(buildingsData) ? buildingsData : (buildingsData?.data ?? []));
+        setEmployees(Array.isArray(employeesData) ? employeesData : (employeesData?.data ?? []));
+        setTeams(Array.isArray(teamsData) ? teamsData : (teamsData?.data ?? []));
+        setInstallationSchedules(installSchedules);
       } catch (error) {
-        // Use mock data on error
-        const mockData = generateMockData();
-        setOrders(mockData.orders);
-        setOrderProducts(mockData.orderProducts);
-        setProducts(mockData.products);
-        setCustomers(mockData.customers);
-        setBuildings(mockData.buildings);
-        setEmployees(mockData.employees);
-        setTeams(mockData.teams);
-        setInstallationSchedules(mockData.installationSchedules);
+        console.error('[InsSchedule] ❌ ERROR loading installation data:', error);
+        // Set empty arrays on error
+        setOrders([]);
+        setOrderProducts([]);
+        setProducts([]);
+        setCustomers([]);
+        setBuildings([]);
+        setEmployees([]);
+        setTeams([]);
+        setInstallationSchedules([]);
       } finally {
         setLoading(false);
       }

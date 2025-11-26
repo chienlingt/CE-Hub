@@ -65,10 +65,11 @@ async function scheduleOrders(options = {}) {
 
     if (availableTimeslots.length === 0) {
       console.log('No available timeslots found. All orders remain unscheduled.');
-      results.unscheduled = pendingOrders.map(o => ({
-        orderId: o.id,
-        reason: 'No available timeslots'
-      }));
+      // Return full order objects with reason
+      results.unscheduled = pendingOrders.map(o => {
+        o.unscheduled_reason = 'No available timeslots';
+        return o;
+      });
       return results;
     }
 
@@ -328,18 +329,26 @@ async function fetchTrucks() {
 }
 
 /**
- * Fetch available timeslots (not yet full)
+ * Fetch available timeslots (not yet full, and in the future)
  */
 async function fetchAvailableTimeslots() {
+  const today = dayjs().startOf('day');
+  const tomorrow = today.add(1, 'day').format('YYYY-MM-DD');
+
   const timeslots = await prisma.time_slots.findMany({
-    where: { available_flag: true },
+    where: {
+      available_flag: true,
+      date: {
+        gte: tomorrow  // Only future dates (tomorrow or later)
+      }
+    },
     orderBy: [
       { date: 'asc' },
       { time_window_start: 'asc' }
     ]
   });
 
-  console.log(`Available timeslots: ${timeslots.length}`);
+  console.log(`Available future timeslots: ${timeslots.length} (from ${tomorrow} onwards)`);
 
   return timeslots;
 }
@@ -367,9 +376,30 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, con
 
       const slotStart = dayjs(`${timeslot.date} ${timeslot.time_window_start}`);
       const slotEnd = dayjs(`${timeslot.date} ${timeslot.time_window_end}`);
-      const slotDuration = slotEnd.diff(slotStart, 'minute');
 
-      console.log(`\nTrying slot: ${timeslot.date} ${timeslot.time_window_start}-${timeslot.time_window_end} (${slotDuration} min)`);
+      // Check for existing scheduled orders in this timeslot to calculate remaining time
+      const existingOrdersCheck = await prisma.orders.findMany({
+        where: {
+          time_slot_id: timeslot.id,
+          order_status: 'Scheduled'
+        },
+        orderBy: {
+          scheduled_end_date_time: 'desc'
+        }
+      });
+
+      // Calculate available start time and remaining duration
+      let availableStartTime = slotStart.clone();
+      if (existingOrdersCheck.length > 0) {
+        const lastOrderEnd = dayjs(existingOrdersCheck[0].scheduled_end_date_time);
+        if (lastOrderEnd.isAfter(slotStart)) {
+          availableStartTime = lastOrderEnd.add(10, 'minute'); // 10 min buffer
+        }
+      }
+
+      const slotDuration = slotEnd.diff(availableStartTime, 'minute');
+
+      console.log(`\nTrying slot: ${timeslot.date} ${timeslot.time_window_start}-${timeslot.time_window_end} (${slotDuration} min remaining from ${availableStartTime.format('HH:mm')})`);
 
       // Find orders that can fit in this slot
       const suitableOrders = orders.filter(order => {
@@ -420,8 +450,8 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, con
         warehouseTeamIndex++;
       }
 
-      // Schedule orders in optimized route
-      let currentTime = slotStart.clone();
+      // Start scheduling from the available start time calculated above
+      let currentTime = availableStartTime.clone();
       let travelTimeAccumulated = 0;
 
       for (let i = 0; i < optimizedRoute.orders.length; i++) {
@@ -457,13 +487,18 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, con
 
         console.log(`   Scheduled Order ${order.id}: ${orderStart.format('HH:mm')}-${orderEnd.format('HH:mm')} (Load Seq: ${order.truck_loading_sequence})`);
 
-        scheduled.push({
-          orderId: order.id,
-          timeslotId: timeslot.id,
-          startTime: orderStart.toDate(),
-          endTime: orderEnd.toDate(),
-          loadingSequence: order.truck_loading_sequence
+        // Fetch the full order with all relations for UI display
+        const fullOrder = await prisma.orders.findUnique({
+          where: { id: order.id },
+          include: {
+            customers: true,
+            buildings: { include: { zone: true } },
+            order_products: { include: { products: true } },
+            time_slots: true
+          }
         });
+
+        scheduled.push(fullOrder);
 
         // Create installation schedule if needed
         if (order.requiresInstallation && teams.installationTeams.length > 0) {
@@ -503,10 +538,21 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, con
 
     // Any remaining orders are unscheduled
     for (const order of orders) {
-      unscheduled.push({
-        orderId: order.id,
-        reason: 'No suitable timeslot found (access window conflict or insufficient time)'
+      // Fetch the full order with all relations for UI display
+      const fullOrder = await prisma.orders.findUnique({
+        where: { id: order.id },
+        include: {
+          customers: true,
+          buildings: { include: { zone: true } },
+          order_products: { include: { products: true } },
+          time_slots: true
+        }
       });
+
+      // Add reason field to the order object
+      fullOrder.unscheduled_reason = 'No suitable timeslot found (access window conflict or insufficient time)';
+
+      unscheduled.push(fullOrder);
       console.log(`   Unscheduled Order ${order.id}: No suitable timeslot`);
     }
   }

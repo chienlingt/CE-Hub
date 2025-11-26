@@ -12,122 +12,21 @@ import {
   Settings,
   Save,
   Users,
-  Warehouse
+  Warehouse,
+  ChevronDown,
+  ChevronUp,
+  User
 } from "lucide-react";
 
 const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
 export default function AutoScheduleReview() {
-  // Generate mock data for initial display
-  const generateMockScheduleData = () => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowDate = tomorrow.toISOString();
-
-    return {
-      scheduled: [
-        {
-          id: 'ORD_MOCK_SCHED_001',
-          customer_id: 'CUST_001',
-          customers: { full_name: 'Ahmad Hassan', phone: '012-3456789', postcode: '50100' },
-          buildings: { building_name: 'Menara KLCC', postal_code: '50088', access_time_window_start: '08:00', access_time_window_end: '22:00' },
-          scheduled_start_date_time: `${tomorrowDate.split('T')[0]}T09:00:00`,
-          scheduled_end_date_time: `${tomorrowDate.split('T')[0]}T10:30:00`,
-          truck_loading_sequence: 2,
-          time_slot_id: 'TS_001',
-          time_slots: {
-            time_window_start: '08:00',
-            time_window_end: '12:00',
-            delivery_team: { team_type: 'Delivery Team A' },
-            warehouse_team: { team_type: 'Warehouse Team A' },
-            truck: { plate_no: 'WXY1234' }
-          },
-          order_products: [
-            { products: { product_name: 'Samsung Smart TV 55"' }, quantity: 1 }
-          ]
-        },
-        {
-          id: 'ORD_MOCK_SCHED_002',
-          customer_id: 'CUST_002',
-          customers: { full_name: 'Siti Aminah', phone: '013-9876543', postcode: '50450' },
-          buildings: { building_name: 'Pavilion Residences', postal_code: '55100', access_time_window_start: '09:00', access_time_window_end: '18:00' },
-          scheduled_start_date_time: `${tomorrowDate.split('T')[0]}T10:00:00`,
-          scheduled_end_date_time: `${tomorrowDate.split('T')[0]}T11:30:00`,
-          truck_loading_sequence: 1,
-          time_slot_id: 'TS_001',
-          time_slots: {
-            time_window_start: '08:00',
-            time_window_end: '12:00',
-            delivery_team: { team_type: 'Delivery Team A' },
-            warehouse_team: { team_type: 'Warehouse Team A' },
-            truck: { plate_no: 'WXY1234' }
-          },
-          order_products: [
-            { products: { product_name: 'LG Washing Machine' }, quantity: 1 },
-            { products: { product_name: 'Panasonic Dryer' }, quantity: 1 }
-          ]
-        }
-      ],
-      unscheduled: [
-        {
-          id: 'ORD_MOCK_UNSCHED_001',
-          customer_id: 'CUST_003',
-          customers: { full_name: 'David Tan', phone: '016-2345678', postcode: '47400' },
-          buildings: { building_name: 'Sunway Pyramid Tower', postal_code: '47500' },
-          reason: 'Outside building access time window (available 10:00-16:00, needed 08:00-12:00)',
-          order_products: [
-            { products: { product_name: 'Daikin Air Conditioner' }, quantity: 2 }
-          ]
-        }
-      ],
-      stats: {
-        scheduled: 2,
-        unscheduled: 1,
-        installationSchedulesCreated: 2,
-        timeslotsCreated: 1,
-        postalCodeGroups: 2,
-        apiRequestCount: 0,
-        warnings: ['Mock data - run scheduler to see real results']
-      },
-      installations: [
-        {
-          id: 'INST_MOCK_001',
-          order_id: 'ORD_MOCK_SCHED_001',
-          installation_team_id: 'TEAM_INST_001',
-          estimated_arrival_time: `${tomorrowDate.split('T')[0]}T09:30:00`,
-          status: 'Scheduled',
-          orders: {
-            id: 'ORD_MOCK_SCHED_001',
-            customers: { full_name: 'Ahmad Hassan' },
-            buildings: { building_name: 'Menara KLCC' }
-          },
-          team: { team_type: 'Installation Team A' }
-        },
-        {
-          id: 'INST_MOCK_002',
-          order_id: 'ORD_MOCK_SCHED_002',
-          installation_team_id: 'TEAM_INST_002',
-          estimated_arrival_time: `${tomorrowDate.split('T')[0]}T10:30:00`,
-          status: 'Scheduled',
-          orders: {
-            id: 'ORD_MOCK_SCHED_002',
-            customers: { full_name: 'Siti Aminah' },
-            buildings: { building_name: 'Pavilion Residences' }
-          },
-          team: { team_type: 'Installation Team B' }
-        }
-      ]
-    };
-  };
-
-  const mockData = generateMockScheduleData();
-
-  const [schedule, setSchedule] = useState(mockData.scheduled);
-  const [unscheduled, setUnscheduled] = useState(mockData.unscheduled);
-  const [installationSchedules, setInstallationSchedules] = useState(mockData.installations);
+  const [schedule, setSchedule] = useState([]);
+  const [unscheduled, setUnscheduled] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [scheduledAt, setScheduledAt] = useState(new Date(Date.now() - 30 * 60 * 1000)); // 30 minutes ago for mock
-  const [stats, setStats] = useState(mockData.stats);
+  const [scheduledAt, setScheduledAt] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
 
   // Configuration state
   const [showConfig, setShowConfig] = useState(false);
@@ -142,16 +41,8 @@ export default function AutoScheduleReview() {
 
   // Load configuration on mount
   useEffect(() => {
-    console.log('[AutoScheduleReview] ===== COMPONENT MOUNTED =====');
-    console.log('[AutoScheduleReview] Initial mock data loaded:');
-    console.log('[AutoScheduleReview] - Scheduled orders:', schedule.length);
-    console.log('[AutoScheduleReview] - Unscheduled orders:', unscheduled.length);
-    console.log('[AutoScheduleReview] - Installation schedules:', installationSchedules.length);
-    console.log('[AutoScheduleReview] - Stats:', stats);
-    console.log('[AutoScheduleReview] Sample scheduled order:', schedule[0]);
-
+    console.log('[AutoScheduleReview] Component mounted');
     loadConfiguration();
-    loadInstallationSchedules();
   }, []);
 
   const loadConfiguration = async () => {
@@ -199,19 +90,6 @@ export default function AutoScheduleReview() {
     }
   };
 
-  const loadInstallationSchedules = async () => {
-    try {
-      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/installation-schedules`);
-      const data = await response.json();
-
-      if (data.success) {
-        setInstallationSchedules(data.schedules || []);
-      }
-    } catch (error) {
-      console.error('Error loading installation schedules:', error);
-    }
-  };
-
   const handleSchedule = async () => {
     setLoading(true);
     setScheduledAt(new Date());
@@ -226,16 +104,14 @@ export default function AutoScheduleReview() {
       });
 
       const data = await response.json();
+      console.log('Scheduler response:', data);
 
       if (data.success) {
         setSchedule(data.details.scheduledOrders || []);
         setUnscheduled(data.details.unscheduledOrders || []);
         setStats(data.results);
-
-        // Reload installation schedules
-        await loadInstallationSchedules();
       } else {
-        alert(`Scheduler failed: ${data.error}`);
+        alert(`Scheduler failed: ${data.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Scheduling error:', error);
@@ -262,6 +138,24 @@ export default function AutoScheduleReview() {
       month: 'long',
       day: 'numeric'
     });
+  };
+
+  const getTotalProductCount = (orderProducts) => {
+    if (!orderProducts || !Array.isArray(orderProducts)) return 0;
+    return orderProducts.reduce((sum, op) => sum + (op.quantity || 0), 0);
+  };
+
+  const getServiceTypeLabel = (serviceType) => {
+    const types = {
+      delivery: 'Delivery Only',
+      delivery_installation: 'Delivery + Installation',
+      stock_transfer: 'Stock Transfer'
+    };
+    return types[serviceType] || serviceType || 'N/A';
+  };
+
+  const handleToggleExpand = (orderId) => {
+    setExpandedOrderId(expandedOrderId === orderId ? null : orderId);
   };
 
   return (
@@ -420,40 +314,27 @@ export default function AutoScheduleReview() {
 
         {/* Statistics */}
         {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <div className="flex items-center gap-2 text-green-600 mb-1">
-                <CheckCircle size={20} />
-                <span className="text-sm font-medium">Scheduled</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div className="flex items-center gap-3 text-green-600 mb-2">
+                <CheckCircle size={24} />
+                <span className="text-base font-semibold">Successfully Scheduled</span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{stats.scheduled}</p>
+              <p className="text-4xl font-bold text-gray-900">{stats.scheduled}</p>
+              <p className="text-sm text-gray-600 mt-1">orders assigned to timeslots</p>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <div className="flex items-center gap-2 text-red-600 mb-1">
-                <AlertCircle size={20} />
-                <span className="text-sm font-medium">Unscheduled</span>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div className="flex items-center gap-3 text-orange-600 mb-2">
+                <AlertCircle size={24} />
+                <span className="text-base font-semibold">Unscheduled</span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{stats.unscheduled}</p>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <div className="flex items-center gap-2 text-blue-600 mb-1">
-                <Package size={20} />
-                <span className="text-sm font-medium">Installations</span>
-              </div>
-              <p className="text-3xl font-bold text-gray-900">{stats.installationSchedulesCreated}</p>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <div className="flex items-center gap-2 text-purple-600 mb-1">
-                <MapPin size={20} />
-                <span className="text-sm font-medium">API Requests</span>
-              </div>
-              <p className="text-3xl font-bold text-gray-900">{stats.apiRequestCount}</p>
+              <p className="text-4xl font-bold text-gray-900">{stats.unscheduled}</p>
+              <p className="text-sm text-gray-600 mt-1">orders could not be scheduled</p>
             </div>
           </div>
         )}
+
 
         {/* Scheduled Orders */}
         {schedule.length > 0 && (
@@ -463,35 +344,44 @@ export default function AutoScheduleReview() {
               Scheduled Orders ({schedule.length})
             </h2>
 
-            <div className="space-y-3">
-              {schedule.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="bg-gradient-to-r from-green-50 to-blue-50 rounded-xl p-4 border-l-4 border-green-500 hover:shadow-md transition-shadow"
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
-                    <div>
-                      <span className="font-semibold text-gray-700">Order ID:</span>
-                      <p className="text-gray-900">{item.orderId}</p>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-gray-700">Start Time:</span>
-                      <p className="text-gray-900">{formatTime(item.startTime)}</p>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-gray-700">End Time:</span>
-                      <p className="text-gray-900">{formatTime(item.endTime)}</p>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-gray-700">Loading Sequence:</span>
-                      <p className="text-blue-600 font-bold">#{item.loadingSequence}</p>
-                      <p className="text-xs text-gray-500">
-                        {item.loadingSequence === 1 ? 'First to load, last to deliver' : 'Later loading position'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Order ID
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Customer
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Products
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Scheduled Time
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Loading Seq
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {schedule.map((order) => (
+                    <ScheduledOrderRow
+                      key={order.id}
+                      order={order}
+                      isExpanded={expandedOrderId === order.id}
+                      onToggleExpand={handleToggleExpand}
+                      getTotalProductCount={getTotalProductCount}
+                      getServiceTypeLabel={getServiceTypeLabel}
+                      formatTime={formatTime}
+                    />
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -522,54 +412,15 @@ export default function AutoScheduleReview() {
           </div>
         )}
 
-        {/* Installation Schedules */}
-        {installationSchedules.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Users size={24} className="text-blue-600" />
-              Installation Schedules ({installationSchedules.length})
-            </h2>
-
-            <div className="space-y-3">
-              {installationSchedules.map((schedule, idx) => (
-                <div
-                  key={idx}
-                  className="bg-blue-50 rounded-xl p-4 border-l-4 border-blue-500"
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                    <div>
-                      <span className="font-semibold text-gray-700">Order ID:</span>
-                      <p className="text-gray-900">{schedule.order_id}</p>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-gray-700">Estimated Arrival:</span>
-                      <p className="text-gray-900">{formatTime(schedule.estimated_arrival_time)}</p>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-gray-700">Status:</span>
-                      <p className={`font-medium ${
-                        schedule.status === 'Scheduled' ? 'text-blue-600' :
-                        schedule.status === 'Completed' ? 'text-green-600' :
-                        'text-gray-600'
-                      }`}>
-                        {schedule.status}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Empty State */}
-        {!loading && schedule.length === 0 && unscheduled.length === 0 && (
+        {!loading && !stats && (
           <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-12 text-center">
             <div className="max-w-md mx-auto">
               <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <AlertCircle size={40} className="text-gray-400" />
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Schedule Generated</h3>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Schedule Generated Yet</h3>
               <p className="text-gray-600 mb-4">
                 Click "Run Scheduler Now" to process pending orders and create an optimized schedule
               </p>
@@ -581,5 +432,161 @@ export default function AutoScheduleReview() {
         )}
       </div>
     </div>
+  );
+}
+
+// Scheduled Order Row Component with expandable details
+function ScheduledOrderRow({ order, isExpanded, onToggleExpand, getTotalProductCount, getServiceTypeLabel, formatTime }) {
+  const productCount = getTotalProductCount(order.order_products);
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50">
+        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+          {order.id?.substring(0, 8)}...
+        </td>
+        <td className="px-4 py-4 whitespace-nowrap">
+          <div className="text-sm font-medium text-gray-900">
+            {order.customers?.full_name || 'N/A'}
+          </div>
+          <div className="text-sm text-gray-500">{order.customers?.phone || ''}</div>
+        </td>
+        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
+          {productCount} {productCount === 1 ? 'item' : 'items'}
+        </td>
+        <td className="px-4 py-4 whitespace-nowrap">
+          <div className="text-sm text-gray-900">
+            {formatTime(order.scheduled_start_date_time)}
+          </div>
+          <div className="text-xs text-gray-500">
+            to {formatTime(order.scheduled_end_date_time)}
+          </div>
+        </td>
+        <td className="px-4 py-4 whitespace-nowrap">
+          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+            #{order.truck_loading_sequence || 'N/A'}
+          </span>
+        </td>
+        <td className="px-4 py-4 whitespace-nowrap text-center text-sm">
+          <button
+            onClick={() => onToggleExpand(order.id)}
+            className="text-blue-600 hover:text-blue-900"
+            title="View Details"
+          >
+            {isExpanded ? (
+              <ChevronUp className="w-5 h-5 inline" />
+            ) : (
+              <ChevronDown className="w-5 h-5 inline" />
+            )}
+          </button>
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr>
+          <td colSpan="6" className="px-4 py-4 bg-gradient-to-r from-green-50 to-blue-50">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Customer Info */}
+              <div>
+                <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <User className="w-4 h-4" />
+                  Customer Information
+                </h4>
+                <div className="space-y-1 text-sm">
+                  <p><span className="font-medium">Name:</span> {order.customers?.full_name || 'N/A'}</p>
+                  <p><span className="font-medium">Email:</span> {order.customers?.email || 'N/A'}</p>
+                  <p><span className="font-medium">Phone:</span> {order.customers?.phone || 'N/A'}</p>
+                  <p><span className="font-medium">Address:</span> {order.customers?.address || 'N/A'}</p>
+                  <p><span className="font-medium">Postcode:</span> {order.customers?.postcode || 'N/A'}</p>
+                </div>
+              </div>
+
+              {/* Building Info */}
+              <div>
+                <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <MapPin className="w-4 h-4" />
+                  Building Information
+                </h4>
+                <div className="space-y-1 text-sm">
+                  <p><span className="font-medium">Building:</span> {order.buildings?.building_name || 'N/A'}</p>
+                  <p><span className="font-medium">Type:</span> {order.buildings?.housing_type || 'N/A'}</p>
+                  <p><span className="font-medium">Postal Code:</span> {order.buildings?.postal_code || 'N/A'}</p>
+                  <p><span className="font-medium">Access Time:</span> {order.buildings?.access_time_window_start || 'N/A'} - {order.buildings?.access_time_window_end || 'N/A'}</p>
+                </div>
+              </div>
+
+              {/* Timeslot Info */}
+              {order.time_slots && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    Timeslot Assignment
+                  </h4>
+                  <div className="space-y-1 text-sm">
+                    <p><span className="font-medium">Date:</span> {order.time_slots.date || 'N/A'}</p>
+                    <p><span className="font-medium">Time Window:</span> {order.time_slots.time_window_start || 'N/A'} - {order.time_slots.time_window_end || 'N/A'}</p>
+                    {order.time_slots.truck && (
+                      <p><span className="font-medium">Truck:</span> {order.time_slots.truck.plate_no || 'N/A'}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Work & Travel Metrics */}
+              {(order.workMinutes || order.travelMinutes || order.travelDistanceKm) && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                    <Truck className="w-4 h-4" />
+                    Logistics Metrics
+                  </h4>
+                  <div className="space-y-1 text-sm">
+                    {order.workMinutes && <p><span className="font-medium">Work Time:</span> {order.workMinutes} min</p>}
+                    {order.travelMinutes && <p><span className="font-medium">Travel Time:</span> {order.travelMinutes} min (OSRM)</p>}
+                    {order.travelDistanceKm && <p><span className="font-medium">Travel Distance:</span> {order.travelDistanceKm} km</p>}
+                    <p><span className="font-medium">Loading Sequence:</span> #{order.truck_loading_sequence || 'N/A'}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Products */}
+              <div className="md:col-span-2">
+                <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Products ({order.order_products?.length || 0})
+                </h4>
+                <div className="space-y-2">
+                  {order.order_products?.map((op, idx) => (
+                    <div key={idx} className="bg-white p-3 rounded border border-gray-200 text-sm">
+                      <div className="flex justify-between">
+                        <span className="font-medium">{op.products?.product_name || 'Unknown Product'}</span>
+                        <span className="text-gray-600">Qty: {op.quantity}</span>
+                      </div>
+                      <div className="mt-1 text-gray-600">
+                        <span className="mr-4">Service: {getServiceTypeLabel(op.service_type)}</span>
+                        {op.dismantle_required && <span className="text-orange-600">Dismantle Required</span>}
+                      </div>
+                      {(op.custom_installation_time_min || op.custom_installation_time_max) && (
+                        <div className="mt-1 text-gray-600">
+                          Installation Time: {op.custom_installation_time_min || 0}-{op.custom_installation_time_max || 0} min
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Special Equipment */}
+              {order.special_equipment_needed && (
+                <div className="md:col-span-2">
+                  <h4 className="font-semibold text-gray-700 mb-2">Special Equipment</h4>
+                  <p className="text-sm text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">
+                    {order.special_equipment_needed}
+                  </p>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

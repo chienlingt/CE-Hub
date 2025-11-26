@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   getAllTimeSlots, addTimeSlot, updateTimeSlot, deleteTimeSlot,
-  getAllLorryTrips, addLorryTrip, updateLorryTrip,
   getAllTrucks, getAllTeams, getAllOrders, getAllOrderProducts,
   getAllEmployees, getAllEmployeeTeamAssignments,
   getAllCustomers, getAllBuildings, getAllProducts
@@ -25,10 +24,13 @@ export default function Schedule() {
   const [editingTimeSlot, setEditingTimeSlot] = useState(null);
   const [expandedSlots, setExpandedSlots] = useState(new Set());
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [showOrderEditModal, setShowOrderEditModal] = useState(false);
+  const [orderEditLoading, setOrderEditLoading] = useState(false);
+  const [orderEditError, setOrderEditError] = useState('');
 
   // Data
   const [timeSlots, setTimeSlots] = useState([]);
-  const [lorryTrips, setLorryTrips] = useState([]);
   const [trucks, setTrucks] = useState([]);
   const [teams, setTeams] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -51,133 +53,15 @@ export default function Schedule() {
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const [rescheduleMessage, setRescheduleMessage] = useState('');
 
-  // Generate mock data for demonstration
-  const generateMockData = () => {
-    const today = new Date().toISOString().split('T')[0];
-
-    const mockTrucks = [
-      { id: 'TRK_MOCK_001', plate_no: 'WXY1234', tone: 3, length_cm: 600, width_cm: 240, height_cm: 260 },
-      { id: 'TRK_MOCK_002', plate_no: 'ABC5678', tone: 5, length_cm: 800, width_cm: 250, height_cm: 280 }
-    ];
-
-    const mockTeams = [
-      { id: 'TEAM_DEL_001', team_type: 'Delivery Team A' },
-      { id: 'TEAM_WH_001', team_type: 'Warehouse Team A' }
-    ];
-
-    const mockTimeSlots = [
-      {
-        id: 'TS_MOCK_001',
-        date: today,
-        time_window_start: '08:00',
-        time_window_end: '12:00',
-        available_flag: false,
-        truck_id: 'TRK_MOCK_001',
-        delivery_team_id: 'TEAM_DEL_001',
-        warehouse_team_id: 'TEAM_WH_001'
-      },
-      {
-        id: 'TS_MOCK_002',
-        date: today,
-        time_window_start: '13:00',
-        time_window_end: '17:00',
-        available_flag: false,
-        truck_id: 'TRK_MOCK_002',
-        delivery_team_id: 'TEAM_DEL_001',
-        warehouse_team_id: 'TEAM_WH_001'
-      }
-    ];
-
-    const mockCustomers = [
-      { id: 'CUST_MOCK_001', full_name: 'John Tan', phone: '012-3456789' },
-      { id: 'CUST_MOCK_002', full_name: 'Sarah Lee', phone: '012-9876543' }
-    ];
-
-    const mockBuildings = [
-      { id: 'BLD_MOCK_001', building_name: 'Menara KLCC' },
-      { id: 'BLD_MOCK_002', building_name: 'Pavilion Tower' }
-    ];
-
-    const mockProducts = [
-      {
-        id: 'PROD_MOCK_001',
-        product_name: 'Samsung Smart TV 55"',
-        installer_team_required_flag: true,
-        estimated_installation_time_min: 30,
-        estimated_installation_time_max: 60
-      },
-      {
-        id: 'PROD_MOCK_002',
-        product_name: 'LG Washing Machine',
-        installer_team_required_flag: true,
-        estimated_installation_time_min: 45,
-        estimated_installation_time_max: 90
-      }
-    ];
-
-    const mockOrders = [
-      {
-        id: 'ORD_MOCK_001',
-        customer_id: 'CUST_MOCK_001',
-        building_id: 'BLD_MOCK_001',
-        time_slot_id: 'TS_MOCK_001',
-        order_status: 'Scheduled',
-        scheduled_start_date_time: `${today}T08:00:00`,
-        scheduled_end_date_time: `${today}T09:30:00`
-      },
-      {
-        id: 'ORD_MOCK_002',
-        customer_id: 'CUST_MOCK_002',
-        building_id: 'BLD_MOCK_002',
-        time_slot_id: 'TS_MOCK_002',
-        order_status: 'Scheduled',
-        scheduled_start_date_time: `${today}T13:00:00`,
-        scheduled_end_date_time: `${today}T14:30:00`
-      }
-    ];
-
-    const mockOrderProducts = [
-      { order_id: 'ORD_MOCK_001', product_id: 'PROD_MOCK_001', quantity: 1 },
-      { order_id: 'ORD_MOCK_002', product_id: 'PROD_MOCK_002', quantity: 1 }
-    ];
-
-    const mockLorryTrips = [];
-    const mockEmployees = [
-      { id: 'EMP_MOCK_001', name: 'Ahmad Abdullah', display_name: 'Ahmad' },
-      { id: 'EMP_MOCK_002', name: 'Siti Nurhaliza', display_name: 'Siti' },
-      { id: 'EMP_MOCK_003', name: 'Wong Wei Lun', display_name: 'Wei Lun' }
-    ];
-    const mockEmployeeAssignments = [
-      { employee_id: 'EMP_MOCK_001', team_id: 'TEAM_DEL_001' },
-      { employee_id: 'EMP_MOCK_002', team_id: 'TEAM_DEL_001' },
-      { employee_id: 'EMP_MOCK_003', team_id: 'TEAM_WH_001' }
-    ];
-
-    return {
-      timeSlots: mockTimeSlots,
-      lorryTrips: mockLorryTrips,
-      trucks: mockTrucks,
-      teams: mockTeams,
-      orders: mockOrders,
-      orderProducts: mockOrderProducts,
-      employees: mockEmployees,
-      employeeAssignments: mockEmployeeAssignments,
-      customers: mockCustomers,
-      buildings: mockBuildings,
-      products: mockProducts
-    };
-  };
-
   // --- Load all data once ---
   useEffect(() => {
     let mounted = true;
     async function loadAll() {
       try {
         const [
-          slots, trips, tks, tms, ords, ordProds, emps, empAssigns, custs, blds, prods
+          slots, tks, tms, ords, ordProds, emps, empAssigns, custs, blds, prods
         ] = await Promise.all([
           getAllTimeSlots(),
-          getAllLorryTrips(),
           getAllTrucks(),
           getAllTeams(),
           getAllOrders(),
@@ -192,38 +76,19 @@ export default function Schedule() {
         if (!mounted) return;
 
         const slotsArray = Array.isArray(slots) ? slots : (slots?.data ?? []);
-        const tripsArray = Array.isArray(trips) ? trips : (trips?.data ?? []);
         const ordsArray = Array.isArray(ords) ? ords : (ords?.data ?? []);
 
-        // Use real data if available, otherwise use mock data
-        const hasRealData = slotsArray.length > 0 || ordsArray.length > 0;
-
-        // if (!hasRealData) {
-          const mockData = generateMockData();
-          setTimeSlots(mockData.timeSlots);
-          setLorryTrips(mockData.lorryTrips);
-          setTrucks(mockData.trucks);
-          setTeams(mockData.teams);
-          setOrders(mockData.orders);
-          setOrderProducts(mockData.orderProducts);
-          setEmployees(mockData.employees);
-          setEmployeeAssignments(mockData.employeeAssignments);
-          setCustomers(mockData.customers);
-          setBuildings(mockData.buildings);
-          setProductsList(mockData.products);
-        // } else {
-        //   setTimeSlots(slotsArray);
-        //   setLorryTrips(tripsArray);
-        //   setTrucks(Array.isArray(tks) ? tks : (tks?.data ?? []));
-        //   setTeams(Array.isArray(tms) ? tms : (tms?.data ?? []));
-        //   setOrders(ordsArray);
-        //   setOrderProducts(Array.isArray(ordProds) ? ordProds : (ordProds?.data ?? []));
-        //   setEmployees(Array.isArray(emps) ? emps : (emps?.data ?? []));
-        //   setEmployeeAssignments(Array.isArray(empAssigns) ? empAssigns : (empAssigns?.data ?? []));
-        //   setCustomers(Array.isArray(custs) ? custs : (custs?.data ?? []));
-        //   setBuildings(Array.isArray(blds) ? blds : (blds?.data ?? []));
-        //   setProductsList(Array.isArray(prods) ? prods : (prods?.data ?? []));
-        // }
+        // Always use real data from API
+        setTimeSlots(slotsArray);
+        setTrucks(Array.isArray(tks) ? tks : (tks?.data ?? []));
+        setTeams(Array.isArray(tms) ? tms : (tms?.data ?? []));
+        setOrders(ordsArray);
+        setOrderProducts(Array.isArray(ordProds) ? ordProds : (ordProds?.data ?? []));
+        setEmployees(Array.isArray(emps) ? emps : (emps?.data ?? []));
+        setEmployeeAssignments(Array.isArray(empAssigns) ? empAssigns : (empAssigns?.data ?? []));
+        setCustomers(Array.isArray(custs) ? custs : (custs?.data ?? []));
+        setBuildings(Array.isArray(blds) ? blds : (blds?.data ?? []));
+        setProductsList(Array.isArray(prods) ? prods : (prods?.data ?? []));
 
       } catch (err) {
         console.error('[Schedule] loadAll error:', err);
@@ -241,16 +106,9 @@ export default function Schedule() {
     timeSlotStart: (ts) => ts?.time_window_start ?? ts?.TimeWindowStart ?? ts?.TimeWindowStart,
     timeSlotEnd: (ts) => ts?.time_window_end ?? ts?.TimeWindowEnd ?? ts?.TimeWindowEnd,
     timeSlotAvailable: (ts) => (ts?.available_flag ?? ts?.AvailableFlag ?? ts?.Available ?? true),
-    timeSlotLorryTripId: (ts) => ts?.lorry_trip_id ?? ts?.LorryTripID ?? ts?.LorryTripId ?? ts?.lorryTripId,
     timeSlotTruckId: (ts) => ts?.truck_id ?? ts?.TruckID ?? ts?.truckId,
     timeSlotDeliveryTeamId: (ts) => ts?.delivery_team_id ?? ts?.DeliveryTeamID ?? ts?.deliveryTeamId,
     timeSlotWarehouseTeamId: (ts) => ts?.warehouse_team_id ?? ts?.WarehouseTeamID ?? ts?.warehouseTeamId,
-
-    // LorryTrip
-    lorryTripId: (lt) => lt?.id ?? lt?.LorryTripID ?? lt?.lorry_trip_id,
-    lorryTripTruckId: (lt) => lt?.truck_id ?? lt?.TruckID ?? lt?.TruckId,
-    lorryTripDeliveryTeamId: (lt) => lt?.delivery_team_id ?? lt?.DeliveryTeamID ?? lt?.DeliveryTeamId,
-    lorryTripWarehouseTeamId: (lt) => lt?.warehouse_team_id ?? lt?.WarehouseTeamID ?? lt?.WarehouseTeamId,
 
     // Truck
     truckId: (t) => t?.id ?? t?.truck_id ?? t?.TruckID,
@@ -302,7 +160,6 @@ export default function Schedule() {
   }), []);
 
   // --- lookup helpers using normalized keys ---
-  const getLorryTrip = (tripId) => lorryTrips.find(t => String(field.lorryTripId(t)) === String(tripId));
   const getTruck = (truckId) => trucks.find(t => String(field.truckId(t)) === String(truckId));
   const getTeam = (teamId) => teams.find(t => String(field.teamId(t)) === String(teamId));
   const getOrdersForSlot = (timeSlotId) => orders.filter(o => String(field.orderTimeSlotId(o)) === String(timeSlotId));
@@ -345,8 +202,7 @@ export default function Schedule() {
   // --- CRUD handlers ---
   const handleEditTimeSlot = (slot) => {
     setAddOrEdit('edit');
-    const lorryTrip = getLorryTrip(field.timeSlotLorryTripId(slot)) || {};
-    // normalize editing object to expected fields for the modal
+    // Directly use time_slot fields - no need for lorry_trips
     setEditingTimeSlot({
       ...slot,
       TimeSlotID: field.timeSlotId(slot),
@@ -354,8 +210,9 @@ export default function Schedule() {
       TimeWindowStart: field.timeSlotStart(slot),
       TimeWindowEnd: field.timeSlotEnd(slot),
       AvailableFlag: field.timeSlotAvailable(slot),
-      LorryTripID: field.timeSlotLorryTripId(slot),
-      lorryTrip: { ...lorryTrip }
+      truck_id: field.timeSlotTruckId(slot),
+      delivery_team_id: field.timeSlotDeliveryTeamId(slot),
+      warehouse_team_id: field.timeSlotWarehouseTeamId(slot)
     });
     setShowAddModal(true);
   };
@@ -378,8 +235,9 @@ export default function Schedule() {
       TimeWindowStart: '',
       TimeWindowEnd: '',
       AvailableFlag: true,
-      LorryTripID: '',
-      lorryTrip: {}
+      truck_id: null,
+      delivery_team_id: null,
+      warehouse_team_id: null
     });
     setShowAddModal(true);
   };
@@ -388,22 +246,15 @@ export default function Schedule() {
     setModalLoading(true);
     setModalError('');
     try {
-      let lorryTripID = editingTimeSlot?.LorryTripID;
-      const tripData = { ...(editingTimeSlot?.lorryTrip || {}) };
-
-      if (!lorryTripID) {
-        const newTrip = await addLorryTrip(tripData);
-        lorryTripID = newTrip?.LorryTripID ?? newTrip?.id ?? newTrip?.lorry_trip_id;
-      } else {
-        await updateLorryTrip(lorryTripID, tripData);
-      }
-
+      // Prepare time slot data - directly save to time_slots table
       const slotData = {
-        Date: editingTimeSlot.Date,
-        TimeWindowStart: editingTimeSlot.TimeWindowStart,
-        TimeWindowEnd: editingTimeSlot.TimeWindowEnd,
-        AvailableFlag: !!editingTimeSlot.AvailableFlag,
-        LorryTripID: lorryTripID
+        date: editingTimeSlot.Date,
+        time_window_start: editingTimeSlot.TimeWindowStart,
+        time_window_end: editingTimeSlot.TimeWindowEnd,
+        available_flag: !!editingTimeSlot.AvailableFlag,
+        truck_id: editingTimeSlot.truck_id || null,
+        delivery_team_id: editingTimeSlot.delivery_team_id || null,
+        warehouse_team_id: editingTimeSlot.warehouse_team_id || null
       };
 
       if (addOrEdit === 'edit') {
@@ -412,8 +263,9 @@ export default function Schedule() {
         await addTimeSlot(slotData);
       }
 
-      const refreshed = await getAllTimeSlots();
-      setTimeSlots(Array.isArray(refreshed) ? refreshed : (refreshed?.data ?? []));
+      // Refresh time slots to get latest data
+      const refreshedSlots = await getAllTimeSlots();
+      setTimeSlots(Array.isArray(refreshedSlots) ? refreshedSlots : (refreshedSlots?.data ?? []));
       setEditingTimeSlot(null);
       setShowAddModal(false);
     } catch (e) {
@@ -425,13 +277,67 @@ export default function Schedule() {
 
   // --- assign helpers used in modal ---
   const handleAssignTruck = (truckId) => {
-    setEditingTimeSlot(ts => ({ ...ts, lorryTrip: { ...ts.lorryTrip, TruckID: truckId } }));
+    setEditingTimeSlot(ts => ({
+      ...ts,
+      truck_id: truckId
+    }));
   };
   const handleAssignTeam = (teamId) => {
-    setEditingTimeSlot(ts => ({ ...ts, lorryTrip: { ...ts.lorryTrip, DeliveryTeamID: teamId } }));
+    setEditingTimeSlot(ts => ({
+      ...ts,
+      delivery_team_id: teamId
+    }));
   };
   const handleAssignWarehouseTeam = (teamId) => {
-    setEditingTimeSlot(ts => ({ ...ts, lorryTrip: { ...ts.lorryTrip, WarehouseTeamID: teamId } }));
+    setEditingTimeSlot(ts => ({
+      ...ts,
+      warehouse_team_id: teamId
+    }));
+  };
+
+  // --- Order reassignment handlers ---
+  const handleEditOrder = (order) => {
+    setEditingOrder({
+      ...order,
+      OrderID: field.orderId(order),
+      CurrentTimeSlotID: field.orderTimeSlotId(order),
+      NewTimeSlotID: field.orderTimeSlotId(order)
+    });
+    setShowOrderEditModal(true);
+  };
+
+  const handleReassignOrder = async () => {
+    setOrderEditLoading(true);
+    setOrderEditError('');
+    try {
+      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          time_slot_id: editingOrder.NewTimeSlotID
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to reassign order');
+      }
+
+      // Refresh orders to get latest data
+      const refreshedOrders = await getAllOrders();
+      setOrders(Array.isArray(refreshedOrders) ? refreshedOrders : (refreshedOrders?.data ?? []));
+
+      setShowOrderEditModal(false);
+      setEditingOrder(null);
+      alert('Order reassigned successfully!');
+    } catch (e) {
+      console.error('Order reassignment error:', e);
+      setOrderEditError(e.message || 'Failed to reassign order');
+    }
+    setOrderEditLoading(false);
   };
 
   // --- UI helpers ---
@@ -518,10 +424,9 @@ export default function Schedule() {
             <div className="space-y-2">
               {getTimeSlotsForDate(date).map(slot => {
                 const slotId = field.timeSlotId(slot) ?? `${formatDate(date)}-${field.timeSlotStart(slot)}-${field.timeSlotEnd(slot)}`;
-                const trip = getLorryTrip(field.timeSlotLorryTripId(slot)) || {};
-                // Check for direct truck/team IDs on time slot first, then fall back to lorry trip
-                const truckId = field.timeSlotTruckId(slot) || field.lorryTripTruckId(trip);
-                const deliveryTeamId = field.timeSlotDeliveryTeamId(slot) || field.lorryTripDeliveryTeamId(trip);
+                // Get truck/team IDs directly from time_slots table
+                const truckId = field.timeSlotTruckId(slot);
+                const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
                 const truck = getTruck(truckId) || {};
                 const deliveryTeam = getTeam(deliveryTeamId) || {};
                 const teamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
@@ -544,9 +449,6 @@ export default function Schedule() {
                   // console.log('[Schedule] Enriched order', { orderId: field.orderId(order), customer, building, productsSample: products.slice(0,3) });
                   return enriched;
                 });
-
-                // debug for slot
-                // console.log('[Schedule] Slot debug', { slotId, rawSlot: slot, lorryTripId: field.timeSlotLorryTripId(slot), trip, ordersCount: slotOrders.length });
 
                 return (
                   <div
@@ -576,7 +478,14 @@ export default function Schedule() {
                         {slotOrders.map((order, orderIdx) => {
                           const orderKey = field.orderId(order) || `${slotId}-order-${orderIdx}`;
                           return (
-                            <div key={orderKey} className="bg-white p-2 rounded mt-1">
+                            <div key={orderKey} className="bg-white p-2 rounded mt-1 relative">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleEditOrder(order); }}
+                                className="absolute top-2 right-2 p-1 hover:bg-blue-100 rounded text-blue-600"
+                                title="Reassign to different timeslot"
+                              >
+                                <Edit size={14} />
+                              </button>
                               <div><strong>{order.CustomerName}</strong></div>
                               <div>{order.BuildingName}</div>
                               <div className="text-green-600">{field.orderStatus(order)}</div>
@@ -615,10 +524,9 @@ export default function Schedule() {
           {slots.length === 0 && <div className="text-center text-gray-500 text-sm py-8">No time slots scheduled for this day</div>}
           {slots.map(slot => {
             const slotId = field.timeSlotId(slot) ?? `${formatDate(selectedDate)}-${field.timeSlotStart(slot)}-${field.timeSlotEnd(slot)}`;
-            const trip = getLorryTrip(field.timeSlotLorryTripId(slot)) || {};
-            // Check for direct truck/team IDs on time slot first, then fall back to lorry trip
-            const truckId = field.timeSlotTruckId(slot) || field.lorryTripTruckId(trip);
-            const deliveryTeamId = field.timeSlotDeliveryTeamId(slot) || field.lorryTripDeliveryTeamId(trip);
+            // Get truck/team IDs directly from time_slots table
+            const truckId = field.timeSlotTruckId(slot);
+            const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
             const truck = getTruck(truckId) || {};
             const deliveryTeam = getTeam(deliveryTeamId) || {};
             const teamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
@@ -677,8 +585,15 @@ export default function Schedule() {
                       {slotOrders.length > 0 ? slotOrders.map((order, orderIdx) => {
                         const orderKey = field.orderId(order) || `${slotId}-order-${orderIdx}`;
                         return (
-                          <div key={orderKey} className="mb-2 last:mb-0 pb-2 last:pb-0 border-b last:border-b-0">
-                            <div className="font-medium text-sm">{order.CustomerName}</div>
+                          <div key={orderKey} className="mb-2 last:mb-0 pb-2 last:pb-0 border-b last:border-b-0 relative">
+                            <button
+                              onClick={() => handleEditOrder(order)}
+                              className="absolute top-0 right-0 p-1 hover:bg-blue-100 rounded text-blue-600"
+                              title="Reassign to different timeslot"
+                            >
+                              <Edit size={12} />
+                            </button>
+                            <div className="font-medium text-sm pr-6">{order.CustomerName}</div>
                             <div className="text-xs text-gray-600 flex items-center gap-1"><MapPin size={10} />{order.BuildingName}</div>
                             <div className="text-xs text-green-600">{field.orderStatus(order)}</div>
                             <div className="mt-1 space-y-1">
@@ -753,7 +668,6 @@ export default function Schedule() {
 
   const renderTimeSlotModal = () => {
     if (!editingTimeSlot) return null;
-    const trip = editingTimeSlot.lorryTrip || {};
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-md">
@@ -785,7 +699,7 @@ export default function Schedule() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Assign Truck</label>
-              <select value={field.lorryTripTruckId(trip) || ''} onChange={e => handleAssignTruck(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
+              <select value={editingTimeSlot.truck_id || ''} onChange={e => handleAssignTruck(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
                 <option value="">-- Select Truck --</option>
                 {trucks.map(truck => <option key={String(field.truckId(truck))} value={field.truckId(truck)}>{field.truckPlate(truck)} ({field.truckTone(truck)}T)</option>)}
               </select>
@@ -793,24 +707,104 @@ export default function Schedule() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Assign Delivery Team</label>
-              <select value={field.lorryTripDeliveryTeamId(trip) || ''} onChange={e => handleAssignTeam(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
+              <select value={editingTimeSlot.delivery_team_id || ''} onChange={e => handleAssignTeam(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
                 <option value="">-- Select Team --</option>
-                {teams.map(team => <option key={String(field.teamId(team))} value={field.teamId(team)}>{field.teamType(team)}</option>)}
+                {teams.filter(t => field.teamType(t)?.toLowerCase().includes('delivery')).map(team => <option key={String(field.teamId(team))} value={field.teamId(team)}>{field.teamType(team)}</option>)}
               </select>
+              <p className="text-xs text-gray-500 mt-1">Select delivery team for this time slot</p>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Assign Warehouse Team</label>
-              <select value={field.lorryTripWarehouseTeamId(trip) || ''} onChange={e => handleAssignWarehouseTeam(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
+              <select value={editingTimeSlot.warehouse_team_id || ''} onChange={e => handleAssignWarehouseTeam(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
                 <option value="">-- Select Team --</option>
-                {teams.map(team => <option key={`w-${String(field.teamId(team))}`} value={field.teamId(team)}>{field.teamType(team)}</option>)}
+                {teams.filter(t => field.teamType(t)?.toLowerCase().includes('warehouse')).map(team => <option key={`w-${String(field.teamId(team))}`} value={field.teamId(team)}>{field.teamType(team)}</option>)}
               </select>
+              <p className="text-xs text-gray-500 mt-1">Select warehouse team for loading</p>
             </div>
           </div>
 
           <div className="flex gap-2 mt-4">
             <button onClick={handleSaveEdit} disabled={modalLoading} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm font-medium"><Save size={14} />{modalLoading ? 'Saving...' : 'Save'}</button>
             <button onClick={() => { setEditingTimeSlot(null); setShowAddModal(false); }} className="flex-1 px-3 py-2 border border-gray-300 rounded-md hover:bg-gray-50 text-sm font-medium text-gray-700">Cancel</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderOrderEditModal = () => {
+    if (!editingOrder) return null;
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-md">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Reassign Order to Timeslot</h3>
+            <button onClick={() => { setEditingOrder(null); setShowOrderEditModal(false); }} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          {orderEditError && <div className="text-red-600 text-sm mb-3">{orderEditError}</div>}
+
+          <div className="space-y-3">
+            <div className="bg-blue-50 p-3 rounded-md">
+              <div className="text-sm font-medium text-gray-700 mb-2">Order Details</div>
+              <div className="text-xs space-y-1">
+                <div><strong>Order ID:</strong> {editingOrder.OrderID?.substring(0, 12)}...</div>
+                <div><strong>Customer:</strong> {editingOrder.CustomerName}</div>
+                <div><strong>Building:</strong> {editingOrder.BuildingName}</div>
+                <div><strong>Status:</strong> {field.orderStatus(editingOrder)}</div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Current Timeslot</label>
+              <div className="p-2 bg-gray-100 rounded-md text-sm">
+                {(() => {
+                  const currentSlot = timeSlots.find(ts => field.timeSlotId(ts) === editingOrder.CurrentTimeSlotID);
+                  return currentSlot ? `${field.timeSlotDate(currentSlot)} ${field.timeSlotStart(currentSlot)} - ${field.timeSlotEnd(currentSlot)}` : 'Not assigned';
+                })()}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Reassign to Timeslot</label>
+              <select
+                value={editingOrder.NewTimeSlotID || ''}
+                onChange={e => setEditingOrder(o => ({ ...o, NewTimeSlotID: e.target.value }))}
+                className="w-full p-2 border border-gray-300 rounded-md text-sm"
+              >
+                <option value="">-- Select Timeslot --</option>
+                {timeSlots.map(slot => {
+                  const slotDate = field.timeSlotDate(slot);
+                  const slotStart = field.timeSlotStart(slot);
+                  const slotEnd = field.timeSlotEnd(slot);
+                  const slotId = field.timeSlotId(slot);
+                  const orderCount = orders.filter(o => field.orderTimeSlotId(o) === slotId).length;
+                  return (
+                    <option key={slotId} value={slotId}>
+                      {slotDate} {slotStart}-{slotEnd} ({orderCount} orders)
+                    </option>
+                  );
+                })}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Select a new timeslot for this order</p>
+            </div>
+          </div>
+
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={handleReassignOrder}
+              disabled={orderEditLoading || !editingOrder.NewTimeSlotID}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-medium disabled:bg-gray-400"
+            >
+              <Save size={14} />
+              {orderEditLoading ? 'Reassigning...' : 'Reassign Order'}
+            </button>
+            <button
+              onClick={() => { setEditingOrder(null); setShowOrderEditModal(false); }}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md hover:bg-gray-50 text-sm font-medium text-gray-700"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       </div>
@@ -876,6 +870,7 @@ export default function Schedule() {
       </div>
 
       {showAddModal && renderTimeSlotModal()}
+      {showOrderEditModal && renderOrderEditModal()}
     </div>
   );
 }
