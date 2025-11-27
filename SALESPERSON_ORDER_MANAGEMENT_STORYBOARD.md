@@ -11,9 +11,10 @@ This document describes the complete workflow for salespersons to create, view, 
 3. [Scenario 1: Creating a New Order](#scenario-1-creating-a-new-order)
 4. [Scenario 2: Viewing and Searching Orders](#scenario-2-viewing-and-searching-orders)
 5. [Scenario 3: Editing an Existing Order](#scenario-3-editing-an-existing-order)
-6. [Scenario 4: Order Edit Deadline Management](#scenario-4-order-edit-deadline-management)
-7. [System Rules and Constraints](#system-rules-and-constraints)
-8. [Technical Implementation](#technical-implementation)
+6. [Scenario 4: Assigning Orders to Timeslots](#scenario-4-assigning-orders-to-timeslots)
+7. [Scenario 5: Order Edit Deadline Management](#scenario-5-order-edit-deadline-management)
+8. [System Rules and Constraints](#system-rules-and-constraints)
+9. [Functional Requirements Summary](#functional-requirements-summary)
 
 ---
 
@@ -688,7 +689,243 @@ System checks before allowing save:
 
 ---
 
-## Scenario 4: Order Edit Deadline Management
+## Scenario 4: Assigning Orders to Timeslots
+
+### Overview
+Salespersons can now directly assign pending orders to available delivery timeslots without requiring admin intervention. This streamlines the order fulfillment process and allows faster customer service.
+
+### Starting Point
+**Navigation**: Customer Management → Manage Orders
+
+### Prerequisites
+- Order must have status "Pending"
+- Available timeslots must exist in the system
+
+---
+
+### Step 4.1: Identify Assignable Orders
+
+**What Salesperson Sees**: Orders table with action buttons
+
+**Visual Indicators for Pending Orders**:
+- Status badge: Yellow "Pending"
+- Calendar icon button visible in Actions column (purple color)
+- Edit button visible (green, if editable)
+- View details button (blue)
+
+**Visual Indicators for Other Statuses**:
+- Scheduled orders: Calendar button NOT visible
+- Delivered orders: Calendar button NOT visible
+- Only pending orders show the assignment button
+
+---
+
+### Step 4.2: Initiate Timeslot Assignment
+
+**What Salesperson Sees**: Calendar icon button in Actions column
+
+**Actions Available**:
+1. Click calendar icon button (purple)
+2. System validates:
+   - ✓ Order status is "Pending"
+   - ✗ If not pending, alert shows: "Only pending orders can be assigned to timeslots"
+
+**Button Behavior**:
+- Hover: Shows tooltip "Assign to Timeslot"
+- Disabled for non-pending orders
+- Enabled only for pending orders (purple, clickable)
+
+**Success**:
+- Assignment modal opens
+- Loading state shows briefly while fetching timeslots
+
+**Error Handling**:
+- If timeslots fail to load: Alert "Failed to load timeslots: [error message]"
+- Modal does not open
+- Can retry by clicking button again
+
+---
+
+### Step 4.3: Assign to Timeslot Modal Interface
+
+**What Salesperson Sees**: Large modal overlay (3-column width) with scrollable content
+
+#### Modal Header:
+- Title: "Assign Order to Timeslot"
+- Order summary line: "Order ID: a3f7b2c1... • Customer: John Doe"
+- X close button (top-right)
+
+#### Modal Layout:
+
+**Section 1: Order Summary** (Blue background box)
+Displays key order information for verification:
+
+| Field | Display |
+|-------|---------|
+| **Customer** | Full name (e.g., "John Doe") |
+| **Building** | Building name (e.g., "Sunny Apartments") |
+| **Products** | Product count (e.g., "3 items") |
+| **Status** | Current status (e.g., "Pending") |
+
+**Purpose**: Allows salesperson to verify they're assigning the correct order
+
+---
+
+**Section 2: Select Delivery Timeslot**
+
+**What Salesperson Sees**: Grouped timeslot cards organized by date
+
+#### Timeslot Display Structure:
+
+**If No Timeslots Available**:
+- Empty state message
+- Calendar icon (gray, large)
+- Text: "No timeslots available"
+- Instructions: Contact admin to create timeslots
+
+**If Timeslots Available**:
+- Timeslots grouped by date (collapsible sections)
+- Each date group shows:
+  - Date header with calendar icon (e.g., "Monday, January 27, 2025")
+  - Grid of timeslot cards (2 columns on desktop, 1 on mobile)
+
+#### Individual Timeslot Card:
+
+**Available Timeslot** (White background, gray border):
+- Clock icon
+- Time window (e.g., "08:00 AM - 12:00 PM")
+- Clickable
+- Hover effect: Purple border
+
+**Selected Timeslot** (Purple background, purple border):
+- Clock icon
+- Time window
+- Checkmark icon (white, in circle)
+- Purple highlight
+
+**Unavailable Timeslot** (Gray background, disabled):
+- Clock icon (gray)
+- Time window (gray text)
+- "Not available" label (red, small)
+- Cannot be clicked
+- Cursor shows "not-allowed" on hover
+
+**Selection Behavior**:
+1. Click any available timeslot card
+2. Previous selection clears automatically (single selection only)
+3. Selected card highlights in purple
+4. Checkmark appears
+5. "Assign to Timeslot" button enables
+
+---
+
+### Step 4.4: Confirm Assignment
+
+**What Salesperson Sees**: Action buttons at bottom of modal
+
+**Button Layout**:
+- **Cancel** button (left, gray outlined)
+  - Always enabled
+  - Closes modal without saving
+  - Returns to orders table
+
+- **Assign to Timeslot** button (right, purple solid)
+  - Disabled if no timeslot selected (gray, unclickable)
+  - Enabled when timeslot selected (purple, clickable)
+  - Shows calendar icon + text
+
+**Actions Available**:
+
+**Option A: Cancel Assignment**
+1. Click "Cancel" button
+2. Modal closes immediately
+3. No changes made to order
+4. Returns to orders table
+5. Order remains "Pending"
+
+**Option B: Confirm Assignment**
+1. Select a timeslot (card highlights purple)
+2. "Assign to Timeslot" button becomes enabled
+3. Click "Assign to Timeslot" button
+4. Button shows loading state:
+   - Spinner icon
+   - Text: "Assigning..."
+   - Button disabled
+5. System processes assignment:
+   - Updates order with timeslot ID
+   - Changes order status to "Scheduled"
+   - Sets scheduled start/end times
+   - Updates timestamp
+
+**Success State**:
+- Modal closes automatically
+- Success alert: "Order assigned to timeslot successfully!" (green)
+- Orders table refreshes automatically
+- Order now shows:
+  - Status badge: Blue "Scheduled"
+  - Scheduled column: Shows assigned date/time
+  - Calendar button: No longer visible (cannot reassign)
+
+**Error Handling**:
+- If assignment fails:
+  - Error message shows at top of modal (red background)
+  - Message examples:
+    - "Failed to assign order to timeslot"
+    - "Timeslot not found"
+    - "Cannot reassign delivered orders"
+  - Modal stays open
+  - Selection preserved
+  - Can retry or select different timeslot
+  - Can cancel to abort
+
+---
+
+### Step 4.5: View Assigned Order
+
+**What Salesperson Sees After Assignment**:
+
+**In Orders Table**:
+- Status badge: Changes from Yellow "Pending" to Blue "Scheduled"
+- Scheduled column: Now shows date/time (e.g., "Jan 27, 2025 9:00 AM")
+- Actions column: Calendar button disappears (already scheduled)
+- Edit button: May be enabled or disabled depending on edit deadline
+
+**In Expanded View**:
+- Order status shows "Scheduled"
+- Timeslot information appears
+- Scheduled start/end times visible
+- Edit deadline countdown begins (if applicable)
+
+---
+
+### Business Rules for Timeslot Assignment
+
+**Assignment Eligibility**:
+- ✓ Order must be in "Pending" status
+- ✗ Cannot assign if order is "Scheduled" (already assigned)
+- ✗ Cannot assign if order is "Delivered" (completed)
+- ✗ Cannot assign if order is "Cancelled"
+
+**Timeslot Availability**:
+- System shows only future timeslots (tomorrow or later)
+- Timeslots with `available_flag = false` are disabled
+- Full timeslots may still be shown but disabled (configurable)
+
+**Status Changes**:
+- Assigning updates order status from "Pending" → "Scheduled"
+- Scheduled orders can be reassigned by admin if needed
+- Salesperson cannot reassign once assigned (admin-only)
+
+**Benefits of Salesperson Assignment**:
+1. **Faster Service**: No waiting for admin to schedule
+2. **Customer Satisfaction**: Can confirm delivery time immediately during order call
+3. **Reduced Workload**: Admin focuses on complex scheduling only
+4. **Transparency**: Salesperson sees exact timeslot availability
+5. **Error Reduction**: Real-time validation prevents double-booking
+
+---
+
+## Scenario 5: Order Edit Deadline Management
 
 ### Understanding Edit Deadlines
 
@@ -898,314 +1135,252 @@ Pending → Scheduled → Delivered
 
 ---
 
-## Technical Implementation
+## Functional Requirements Summary
 
-### Frontend Components
+This section provides a consolidated view of functional requirements for the Salesperson Order Management System, suitable for inclusion in project reports and technical documentation.
 
-#### 1. PlaceOrder.js
-**Path**: `client/src/components/order/PlaceOrder.js`
+### FR-1: Order Creation and Management
 
-**Purpose**: Create new orders
+**FR-1.1: Create New Orders**
+- **Description**: Salesperson shall be able to create new customer orders with complete product and service details
+- **Inputs**: Customer information, product list, service types, special equipment
+- **Outputs**: Order confirmation with unique order ID, status "Pending"
+- **Validations**:
+  - Customer name, email, and phone are required
+  - At least one product must be added to order
+  - Service type must be selected for each product
+  - Installation times required for delivery+installation service
+- **Success Criteria**: Order is created in database with all related records
 
-**Key Features**:
-- Customer selection/creation with inline editing
-- Product search and cart management
-- Service type selection per product
-- Custom installation time input
-- Order-level special equipment
-- Building auto-detection from address
-- Form validation and error handling
-- Success/error feedback
+**FR-1.2: Customer Management During Order Creation**
+- **Description**: System shall support both new customer creation and existing customer selection
+- **Features**:
+  - Search existing customers by name, email, or phone
+  - Create new customer with inline form
+  - Prevent duplicate customers via email validation
+  - Auto-populate customer fields when selected
+- **Success Criteria**: Customer record is created or selected correctly
 
-**User Flow**:
-1. Load page → Fetch customers, products, buildings
-2. Select/add customer → Auto-detect building → Pre-fill equipment
-3. Search products → Add to cart → Configure each item
-4. Enter special equipment
-5. Submit → Validate → Create order → Show success
-
----
-
-#### 2. ManageOrders.js
-**Path**: `client/src/components/order/ManageOrders.js`
-
-**Purpose**: View, search, filter, and edit orders
-
-**Key Features**:
-- Statistics dashboard (4 cards)
-- Advanced filtering (search, status, date, sort)
-- Expandable order rows with full details
-- Edit modal with full CRUD capabilities
-- Edit deadline validation and countdown
-- Real-time editability checks
-
-**Components Within**:
-- `ManageOrders` (main component)
-- `StatCard` (statistics display)
-- `OrderRow` (table row with expand/collapse)
-- `ExpandedOrderDetails` (detailed view)
-- `EditOrderModal` (full edit interface)
-
-**User Flow**:
-1. Load page → Fetch orders, settings
-2. View stats → Apply filters → Search
-3. Expand row → View details
-4. Click edit → Check editability → Open modal
-5. Modify fields → Validate → Save → Refresh list
+**FR-1.3: Building Auto-Detection**
+- **Description**: System shall automatically detect building from customer address
+- **Process**:
+  - Extract building name from address field
+  - Search for existing building in database
+  - Create new building if not found
+  - Pre-fill special equipment from building defaults
+- **Success Criteria**: Building is correctly identified or created
 
 ---
 
-#### 3. orderHelpers.js
-**Path**: `client/src/utils/orderHelpers.js`
+### FR-2: Order Viewing and Filtering
 
-**Purpose**: Utility functions for order management
+**FR-2.1: Dashboard Statistics**
+- **Description**: System shall display real-time order statistics on dashboard
+- **Metrics Displayed**:
+  - Total pending orders
+  - Total scheduled orders
+  - Total delivered orders
+  - Orders created today
+- **Update Frequency**: Real-time (on page load and after order changes)
+- **Success Criteria**: Statistics match actual database counts
 
-**Exported Functions**:
-- `isOrderEditable(order, deadlineHours)` - Check if order can be edited
-- `calculateEditDeadline(scheduledDateTime, deadlineHours)` - Calculate deadline timestamp
-- `getRemainingEditTime(scheduledDateTime, deadlineHours)` - Get countdown time
-- `getOrderStatusBadge(status)` - Get styling for status badges
-- `formatDateTime(dateTime)` - Format date/time for display
-- `formatDate(dateTime)` - Format date only
-- `getTotalProductCount(orderProducts)` - Sum product quantities
-- `getServiceTypeLabel(serviceType)` - Human-readable service type
-- `filterOrdersByDateRange(orders, range, start, end)` - Date filtering
-- `searchOrders(orders, keyword)` - Search implementation
+**FR-2.2: Advanced Order Filtering**
+- **Description**: Salesperson shall be able to filter orders using multiple criteria
+- **Filter Options**:
+  - **Search**: By order ID, customer name, phone number, building name
+  - **Status**: All, Pending, Scheduled, Delivered, Cancelled
+  - **Date Range**: All Time, Today, This Week, This Month, Custom Range
+  - **Sort Order**: Latest first, Oldest first, Scheduled (earliest/latest), Customer name
+- **Behavior**: Filters work in combination (AND logic)
+- **Success Criteria**: Filtered results match all applied criteria
 
----
-
-### Backend API Endpoints
-
-#### 1. GET /api/orders
-**Purpose**: Fetch orders with filtering
-
-**Query Parameters**:
-- `status` - Filter by order status (Pending, Scheduled, Delivered, Cancelled, all)
-- `search` - Search by order ID, customer name, phone, building name
-- `date_from` - Start date for date range filter (ISO format)
-- `date_to` - End date for date range filter (ISO format)
-- `sort` - Sort order (created_desc, created_asc, scheduled_desc, scheduled_asc, customer)
-
-**Response**: Array of orders with relations:
-```json
-[
-  {
-    "id": "uuid",
-    "customer_id": "uuid",
-    "order_status": "Pending",
-    "special_equipment_needed": "Crane needed",
-    "created_at": "2025-01-15T09:00:00Z",
-    "scheduled_start_date_time": null,
-    "customers": { "full_name": "John Doe", "email": "...", "phone": "..." },
-    "buildings": { "building_name": "...", "housing_type": "..." },
-    "order_products": [
-      {
-        "quantity": 2,
-        "service_type": "delivery_installation",
-        "dismantle_required": true,
-        "custom_installation_time_min": 45,
-        "custom_installation_time_max": 90,
-        "products": { "product_name": "King Size Bed" }
-      }
-    ]
-  }
-]
-```
+**FR-2.3: Order Details Expansion**
+- **Description**: System shall display complete order details in expandable view
+- **Information Shown**:
+  - Customer information (name, email, phone, address)
+  - Building information (name, type, postal code)
+  - Product list (name, quantity, service type, installation time)
+  - Special equipment notes
+  - Edit deadline status (if scheduled)
+- **Success Criteria**: All order details are accurately displayed
 
 ---
 
-#### 2. POST /api/orders
-**Purpose**: Create new order
+### FR-3: Order Editing and Modification
 
-**Request Body**:
-```json
-{
-  "customer": {
-    "id": "uuid (if existing)" OR {
-      "full_name": "string",
-      "email": "string",
-      "phone": "string",
-      "address": "string",
-      "city": "string",
-      "state": "string",
-      "postcode": "string"
-    }
-  },
-  "products": [
-    {
-      "product_id": "uuid",
-      "quantity": 2,
-      "service_type": "delivery_installation",
-      "dismantle_required": true,
-      "custom_installation_time_min": 45,
-      "custom_installation_time_max": 90
-    }
-  ],
-  "service_type": "delivery",
-  "special_equipment_needed": "Crane needed"
-}
-```
+**FR-3.1: Edit Eligibility Check**
+- **Description**: System shall validate order editability before allowing modifications
+- **Edit Allowed If**:
+  - Order status is NOT "Delivered"
+  - AND (Order is "Pending" OR current time is before edit deadline)
+- **Edit Denied If**:
+  - Order status is "Delivered"
+  - OR (Order is "Scheduled" AND current time > edit deadline)
+- **Success Criteria**: Edit button enabled/disabled correctly based on eligibility
 
-**Backend Process**:
-1. Create or fetch customer
-2. Extract building name from address
-3. Find or create building
-4. Create order with status "Pending"
-5. Create order_products records
-6. Return created order with all relations
+**FR-3.2: Customer Information Updates**
+- **Description**: Salesperson shall be able to update customer information within order
+- **Editable Fields**: Full name, email, phone, address, city, state, postcode
+- **Impact**: Changes affect customer record globally (all orders for that customer)
+- **Validations**: Required fields (name, email, phone) must be filled
+- **Success Criteria**: Customer record is updated in database
 
----
+**FR-3.3: Product Modification**
+- **Description**: Salesperson shall be able to add, remove, and modify products in order
+- **Operations**:
+  - Add new products via search
+  - Remove existing products
+  - Change quantities (minimum 1)
+  - Change service types
+  - Toggle dismantling requirement
+  - Set custom installation times
+- **Constraints**: Minimum 1 product required in order
+- **Success Criteria**: Order products are updated correctly
 
-#### 3. PUT /api/orders/:id
-**Purpose**: Update existing order
-
-**Request Body**:
-```json
-{
-  "customer": {
-    "id": "uuid",
-    "full_name": "string",
-    "email": "string",
-    "phone": "string",
-    "address": "string",
-    "city": "string",
-    "state": "string",
-    "postcode": "string"
-  },
-  "products": [
-    {
-      "product_id": "uuid",
-      "quantity": 3,
-      "service_type": "delivery",
-      "dismantle_required": false,
-      "custom_installation_time_min": null,
-      "custom_installation_time_max": null
-    }
-  ],
-  "special_equipment_needed": "Crane needed - high floor"
-}
-```
-
-**Backend Validation**:
-1. Fetch existing order
-2. Check order_status ≠ "Delivered"
-3. If scheduled, check edit deadline:
-   - Fetch `order_edit_deadline_hours` from system_settings
-   - Calculate deadline: `scheduled_time - deadline_hours`
-   - Verify `current_time < deadline`
-4. If checks pass, update:
-   - Delete all order_products
-   - Create new order_products from request
-   - Update order's special_equipment_needed
-   - Update order's updated_at
-5. Return updated order
-
-**Error Responses**:
-- 404: Order not found
-- 400: Cannot edit delivered orders
-- 400: Edit deadline has passed
+**FR-3.4: Edit Deadline Enforcement**
+- **Description**: System shall enforce edit deadline for scheduled orders
+- **Backend Validation**:
+  - Fetch deadline hours from system_settings table
+  - Calculate deadline: scheduled_time - deadline_hours
+  - Reject edit if current_time > deadline
+- **Error Messages**: Clear explanation of why edit was denied
+- **Success Criteria**: Edits prevented after deadline, API returns 400 error
 
 ---
 
-#### 4. PUT /api/customers/:id
-**Purpose**: Update customer information
+### FR-4: Timeslot Assignment
 
-**Request Body**:
-```json
-{
-  "full_name": "string",
-  "email": "string",
-  "phone": "string",
-  "address": "string",
-  "city": "string",
-  "state": "string",
-  "postcode": "string"
-}
-```
+**FR-4.1: Assign Pending Orders to Timeslots**
+- **Description**: Salesperson shall be able to assign pending orders to available delivery timeslots
+- **Preconditions**:
+  - Order status must be "Pending"
+  - Available timeslots must exist in system
+- **Process**:
+  - Display available timeslots grouped by date
+  - Allow single timeslot selection
+  - Update order status to "Scheduled" on assignment
+  - Set scheduled start/end times
+- **Success Criteria**: Order is successfully assigned and status updated
 
-**Backend Process**:
-1. Validate customer exists
-2. Update customer record
-3. Return updated customer
+**FR-4.2: Timeslot Display and Filtering**
+- **Description**: System shall display only appropriate timeslots for assignment
+- **Display Rules**:
+  - Show only future timeslots (tomorrow or later)
+  - Group by date with clear headers
+  - Show time windows (e.g., 08:00 AM - 12:00 PM)
+  - Disable unavailable timeslots
+- **Visual Indicators**:
+  - Available: White background, clickable
+  - Selected: Purple background, checkmark
+  - Unavailable: Gray background, disabled
+- **Success Criteria**: Timeslots are correctly filtered and displayed
 
-**Note**: This updates the customer globally, affecting all their orders.
+**FR-4.3: Assignment Validation**
+- **Description**: System shall validate timeslot assignment before saving
+- **Backend Checks**:
+  - Order must exist
+  - Order status must be "Pending"
+  - Timeslot must exist
+  - Timeslot must be available
+- **Error Handling**: Display clear error messages on validation failure
+- **Success Criteria**: Invalid assignments are prevented
 
----
-
-#### 5. GET /api/settings/order_edit_deadline_hours
-**Purpose**: Fetch edit deadline setting
-
-**Response**:
-```json
-{
-  "success": true,
-  "data": {
-    "key": "order_edit_deadline_hours",
-    "value": "24",
-    "description": "Hours before scheduled delivery that orders can no longer be edited"
-  }
-}
-```
-
----
-
-### Database Schema
-
-#### orders table:
-```sql
-id                        UUID PRIMARY KEY
-customer_id               UUID FK → customers(id)
-building_id               UUID FK → buildings(id)
-order_status              VARCHAR (Pending, Scheduled, Delivered, Cancelled)
-special_equipment_needed  TEXT
-scheduled_start_date_time TIMESTAMP
-created_at                TIMESTAMP
-updated_at                TIMESTAMP
-```
-
-#### order_products table:
-```sql
-id                           SERIAL PRIMARY KEY
-order_id                     UUID FK → orders(id) ON DELETE CASCADE
-product_id                   UUID FK → products(id)
-quantity                     INTEGER
-service_type                 VARCHAR(50)
-dismantle_required           BOOLEAN
-custom_installation_time_min INTEGER (minutes)
-custom_installation_time_max INTEGER (minutes)
-```
-
-#### system_settings table:
-```sql
-id            UUID PRIMARY KEY
-setting_key   VARCHAR(100) UNIQUE
-setting_value TEXT
-description   TEXT
-created_at    TIMESTAMP
-updated_at    TIMESTAMP
-```
+**FR-4.4: Post-Assignment Status Update**
+- **Description**: System shall update order status and display after timeslot assignment
+- **Changes Applied**:
+  - Order status: "Pending" → "Scheduled"
+  - Scheduled column: Shows assigned date/time
+  - Calendar button: Hidden (cannot reassign)
+  - Edit deadline: Countdown begins
+- **Success Criteria**: UI reflects new order status immediately
 
 ---
 
-## Summary of Salesperson Capabilities
+### FR-5: Edit Deadline Management
+
+**FR-5.1: Countdown Timer Display**
+- **Description**: System shall display countdown timer for scheduled orders
+- **Timer Behavior**:
+  - Updates every minute
+  - Shows format "Xh Ym" (e.g., "23h 15m")
+  - Color coding: Green (>12h), Yellow (3-12h), Red (<3h)
+- **Display Locations**:
+  - Expanded order details
+  - Edit modal header (if editing)
+- **Success Criteria**: Timer displays accurate time remaining
+
+**FR-5.2: Edit Deadline Configuration**
+- **Description**: Admin shall be able to configure system-wide edit deadline
+- **Configuration**:
+  - Setting: order_edit_deadline_hours
+  - Default value: 24 hours
+  - Typical range: 12-48 hours
+- **Application**: Applies to all future deadline calculations
+- **Success Criteria**: New deadline value is used for all subsequent edits
+
+---
+
+### FR-6: Data Validation and Integrity
+
+**FR-6.1: Customer Data Validation**
+- **Required Fields**: Full name, email, phone
+- **Email Format**: Must be valid email format
+- **Phone Number**: Minimum 8 characters
+- **Duplicate Prevention**: Email must be unique per customer
+
+**FR-6.2: Product Validation**
+- **Minimum Products**: At least 1 product per order
+- **Quantity Range**: Must be ≥ 1 per product
+- **Service Type**: Must be one of: delivery, delivery_installation, stock_transfer
+- **Installation Time**: Required if service_type = delivery_installation
+  - Minimum ≥ 0
+  - Maximum ≥ Minimum
+
+**FR-6.3: Order Status Validation**
+- **Status Flow**: Pending → Scheduled → Delivered (linear progression)
+- **Edit Restrictions**: Based on current status and deadline
+- **Backend Enforcement**: Server validates all state transitions
+
+---
+
+### FR-7: User Feedback and Notifications
+
+**FR-7.1: Success Notifications**
+- **Order Created**: "Order created successfully!" (green alert)
+- **Order Updated**: "Order updated successfully!" (green alert)
+- **Timeslot Assigned**: "Order assigned to timeslot successfully!" (green alert)
+
+**FR-7.2: Error Messages**
+- **Validation Errors**: Field-specific error messages with clear instructions
+- **Permission Errors**: "Cannot edit order: [reason]"
+- **Deadline Errors**: "Edit deadline has passed. Orders cannot be edited within X hours of scheduled delivery."
+
+**FR-7.3: Loading States**
+- **Form Submission**: Button shows "Submitting..." with disabled state
+- **Data Loading**: Spinner or loading message while fetching data
+- **Modal Loading**: "Loading..." state while fetching related data
+
+---
+
+### Summary of Salesperson Capabilities
 
 ### ✅ What Salesperson CAN Do:
 
-1. **Create Orders**:
+1. **Order Creation**:
    - Select existing customers or create new ones
    - Add multiple products with different service types
    - Set custom installation times per product
    - Specify special equipment for entire order
    - Submit orders with immediate validation
 
-2. **View Orders**:
-   - See dashboard statistics (Pending, Scheduled, Delivered, Today)
+2. **Order Viewing**:
+   - View dashboard statistics (Pending, Scheduled, Delivered, Today)
    - Filter by status, date range, and custom dates
    - Search by order ID, customer name, phone, building
    - Sort by creation date, scheduled date, or customer name
    - Expand rows to see full order details
 
-3. **Edit Orders** (with constraints):
+3. **Order Editing** (with constraints):
    - Edit customer information (name, email, phone, address)
    - Add new products to existing order
    - Remove products from order
@@ -1216,28 +1391,33 @@ updated_at    TIMESTAMP
    - Edit special equipment notes
    - **Only if**: Order not delivered AND before edit deadline
 
-4. **Monitor Deadlines**:
-   - See countdown timer for scheduled orders
+4. **Timeslot Assignment**:
+   - Assign pending orders to available delivery timeslots
+   - View available timeslots grouped by date
+   - Select timeslot with visual confirmation
+   - Change order status from Pending to Scheduled
+
+5. **Deadline Monitoring**:
+   - View countdown timer for scheduled orders
    - Know exactly when edit deadline expires
    - Receive clear feedback on editability
 
 ### ❌ What Salesperson CANNOT Do:
 
-1. **Cannot edit**:
+1. **Cannot Edit**:
    - Delivered orders (completed)
    - Scheduled orders past edit deadline
    - Order ID (immutable)
-   - Order status (only admin can change)
-   - Scheduled delivery time (only admin can assign)
+   - Order status manually (auto-updated)
+   - Building association after creation
 
-2. **Cannot change**:
-   - Building association (determined by address at creation)
-   - Customer ID (linked at creation)
-   - Creation timestamp
+2. **Cannot Reassign**:
+   - Scheduled orders to different timeslots (admin only)
+   - Timeslot once assigned (admin can reassign)
 
-3. **Cannot configure**:
+3. **Cannot Configure**:
    - System-wide edit deadline (admin only)
-   - Time slot assignments (admin only)
+   - Timeslot availability (admin only)
    - Order status workflow (admin only)
 
 ---

@@ -50,6 +50,14 @@ export default function ManageOrders() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
 
+  // Timeslot assignment states
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assigningOrder, setAssigningOrder] = useState(null);
+  const [availableTimeslots, setAvailableTimeslots] = useState([]);
+  const [selectedTimeslot, setSelectedTimeslot] = useState(null);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignError, setAssignError] = useState('');
+
   // Fetch edit deadline setting
   useEffect(() => {
     fetchEditDeadlineSetting();
@@ -172,6 +180,73 @@ export default function ManageOrders() {
       console.error('Error updating order:', err);
       alert(err.message);
     }
+  };
+
+  // Timeslot assignment handlers
+  const handleAssignToTimeslot = async (order) => {
+    // Only allow assignment for pending orders
+    if (order.order_status !== 'Pending') {
+      alert('Only pending orders can be assigned to timeslots');
+      return;
+    }
+
+    setAssigningOrder(order);
+    setSelectedTimeslot(null);
+    setAssignError('');
+
+    // Fetch available timeslots
+    try {
+      const res = await fetch(`${API_BASE}/api/time-slots`);
+      if (!res.ok) throw new Error('Failed to fetch timeslots');
+      const data = await res.json();
+      setAvailableTimeslots(Array.isArray(data) ? data : []);
+      setShowAssignModal(true);
+    } catch (err) {
+      console.error('Error fetching timeslots:', err);
+      alert('Failed to load timeslots: ' + err.message);
+    }
+  };
+
+  const handleConfirmAssignment = async () => {
+    if (!selectedTimeslot) {
+      setAssignError('Please select a timeslot');
+      return;
+    }
+
+    setAssignLoading(true);
+    setAssignError('');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${assigningOrder.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time_slot_id: selectedTimeslot })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to assign order to timeslot');
+      }
+
+      // Refresh orders
+      await fetchOrders();
+      setShowAssignModal(false);
+      setAssigningOrder(null);
+      setSelectedTimeslot(null);
+      alert('Order assigned to timeslot successfully!');
+    } catch (err) {
+      console.error('Error assigning order:', err);
+      setAssignError(err.message);
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const handleCloseAssignModal = () => {
+    setShowAssignModal(false);
+    setAssigningOrder(null);
+    setSelectedTimeslot(null);
+    setAssignError('');
   };
 
   if (loading) {
@@ -348,6 +423,7 @@ export default function ManageOrders() {
                     isExpanded={expandedOrderId === order.id}
                     onView={handleView}
                     onEdit={handleEdit}
+                    onAssignTimeslot={handleAssignToTimeslot}
                     editDeadlineHours={editDeadlineHours}
                   />
                 ))
@@ -364,6 +440,20 @@ export default function ManageOrders() {
           onClose={handleCloseEditModal}
           onSave={handleSaveEdit}
           editDeadlineHours={editDeadlineHours}
+        />
+      )}
+
+      {/* Assign Timeslot Modal */}
+      {showAssignModal && assigningOrder && (
+        <AssignTimeslotModal
+          order={assigningOrder}
+          timeslots={availableTimeslots}
+          selectedTimeslot={selectedTimeslot}
+          onSelectTimeslot={setSelectedTimeslot}
+          onConfirm={handleConfirmAssignment}
+          onClose={handleCloseAssignModal}
+          loading={assignLoading}
+          error={assignError}
         />
       )}
     </div>
@@ -393,10 +483,11 @@ function StatCard({ title, value, color, icon }) {
 }
 
 // Order Row Component (with expandable details)
-function OrderRow({ order, isExpanded, onView, onEdit, editDeadlineHours }) {
+function OrderRow({ order, isExpanded, onView, onEdit, onAssignTimeslot, editDeadlineHours }) {
   const statusBadge = getOrderStatusBadge(order.order_status);
   const editCheck = isOrderEditable(order, editDeadlineHours);
   const productCount = getTotalProductCount(order.order_products);
+  const isPending = order.order_status === 'Pending';
 
   return (
     <>
@@ -432,6 +523,15 @@ function OrderRow({ order, isExpanded, onView, onEdit, editDeadlineHours }) {
           >
             {isExpanded ? <ChevronUp className="w-5 h-5 inline" /> : <ChevronDown className="w-5 h-5 inline" />}
           </button>
+          {isPending && (
+            <button
+              onClick={() => onAssignTimeslot(order)}
+              className="text-purple-600 hover:text-purple-900 mr-3"
+              title="Assign to Timeslot"
+            >
+              <Calendar className="w-5 h-5 inline" />
+            </button>
+          )}
           <button
             onClick={() => onEdit(order)}
             disabled={!editCheck.editable}
@@ -1044,6 +1144,176 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// Assign Timeslot Modal Component
+function AssignTimeslotModal({ order, timeslots, selectedTimeslot, onSelectTimeslot, onConfirm, onClose, loading, error }) {
+  // Group timeslots by date
+  const groupedTimeslots = useMemo(() => {
+    const groups = {};
+    timeslots.forEach(ts => {
+      const date = ts.date || 'Unknown';
+      if (!groups[date]) {
+        groups[date] = [];
+      }
+      groups[date].push(ts);
+    });
+    return groups;
+  }, [timeslots]);
+
+  const formatTimeWindow = (start, end) => {
+    if (!start || !end) return 'Time not specified';
+    return `${start} - ${end}`;
+  };
+
+  const isTimeslotAvailable = (timeslot) => {
+    return timeslot.available_flag !== false;
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">Assign Order to Timeslot</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              Order ID: {order.id.substring(0, 8)}... • Customer: {order.customers?.full_name || 'N/A'}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        <div className="p-6">
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <span className="text-red-700 text-sm">{error}</span>
+            </div>
+          )}
+
+          {/* Order Summary */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <h3 className="font-semibold text-gray-800 mb-2">Order Summary</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="text-gray-600">Customer:</span>
+                <span className="ml-2 font-medium">{order.customers?.full_name || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Building:</span>
+                <span className="ml-2 font-medium">{order.buildings?.building_name || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Products:</span>
+                <span className="ml-2 font-medium">{getTotalProductCount(order.order_products)} items</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Status:</span>
+                <span className="ml-2 font-medium">{order.order_status}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Timeslots Selection */}
+          <h3 className="font-semibold text-gray-800 mb-3">Select Delivery Timeslot</h3>
+          {Object.keys(groupedTimeslots).length === 0 ? (
+            <div className="text-center py-8 bg-gray-50 rounded-lg">
+              <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500">No timeslots available</p>
+            </div>
+          ) : (
+            <div className="space-y-4 max-h-96 overflow-y-auto">
+              {Object.entries(groupedTimeslots).map(([date, slots]) => (
+                <div key={date} className="border border-gray-200 rounded-lg p-4">
+                  <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                    <Calendar className="w-4 h-4" />
+                    {date}
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {slots.map((timeslot) => {
+                      const available = isTimeslotAvailable(timeslot);
+                      const isSelected = selectedTimeslot === timeslot.id;
+
+                      return (
+                        <button
+                          key={timeslot.id}
+                          type="button"
+                          onClick={() => available && onSelectTimeslot(timeslot.id)}
+                          disabled={!available}
+                          className={`p-3 rounded-lg border-2 text-left transition-all ${
+                            isSelected
+                              ? 'border-purple-500 bg-purple-50'
+                              : available
+                              ? 'border-gray-200 hover:border-purple-300 bg-white'
+                              : 'border-gray-200 bg-gray-100 cursor-not-allowed opacity-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-gray-600" />
+                              <span className="font-medium text-sm">
+                                {formatTimeWindow(timeslot.time_window_start, timeslot.time_window_end)}
+                              </span>
+                            </div>
+                            {isSelected && (
+                              <div className="w-5 h-5 bg-purple-600 rounded-full flex items-center justify-center">
+                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                            )}
+                          </div>
+                          {!available && (
+                            <p className="text-xs text-red-600 mt-1">Not available</p>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={!selectedTimeslot || loading}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Assigning...
+                </>
+              ) : (
+                <>
+                  <Calendar className="w-4 h-4" />
+                  Assign to Timeslot
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
