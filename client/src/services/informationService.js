@@ -27,7 +27,9 @@ const endpointMap = {
   TimeSlot: 'time-slots',
   LorryTrip: 'lorry-trips',
   Roles: 'roles',
-  TruckZoneList: 'truck-zones'
+  TruckZoneList: 'truck-zones',
+  Installer: 'installers',
+  Outlet: 'outlets'
 };
 
 // Generic fetch wrapper that attaches auth token if present.
@@ -233,6 +235,14 @@ export const getAllLorryTrips = () => getAllDocs("LorryTrip");
 export const addLorryTrip = (data) => addDocGeneric("LorryTrip", data, { idField: "LorryTripID", prefix: "TRP_" });
 export const updateLorryTrip = (id, data) => updateDocGeneric("LorryTrip", id, data);
 export const deleteLorryTrip = (id) => deleteDocGeneric("LorryTrip", id);
+
+// -- Outlets --
+export const getAllOutlets = () => getAllDocs("Outlet");
+
+// -- Installer --
+export const getInstallerByEmployeeId = (id) => apiFetch(`installers/employee/${id}`);
+export const addInstaller = (data) => addDocGeneric("Installer", data);
+export const updateInstaller = (id, data) => updateDocGeneric("Installer", id, data);
 
 // -- Roles
 export const getRoles = () => getAllDocs("Roles");

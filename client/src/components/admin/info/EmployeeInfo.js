@@ -7,124 +7,78 @@ import {
     getAllTeams,
     getAllEmployeeTeamAssignments,
     assignOrUpdateEmployeeTeam,
-    getRoles
+    getRoles,
+    getInstallerByEmployeeId,
+    addInstaller,
+    updateInstaller
 } from "../../../services/informationService";
-import { TeamBadge } from "./TeamInfo";
+import { StatusBadge, TeamBadge } from "../../common/Badge";
+import Modal from "../../common/Modal";
 
-const TABLE_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag"];
-const FORM_KEYS = ["name", "role", "contact_number", "email", "team", "active_flag", "password"];
+const TABLE_KEYS = ["name", "email", "contact_number", "roleName", "team", "active_flag"];
+const FORM_KEYS = ["name", "email", "contact_number", "role", "team", "active_flag", "password"];
 
 const FIELD_LABELS = {
-    name: "Name",
+    name: "Full Name",
+    email: "Email Address",
     role: "Role",
-    contact_number: "Contact Number",
-    email: "Email",
+    roleName: "Role",
     team: "Team",
-    active_flag: "Active Flag",
-    password: "Password"
+    contact_number: "Contact Number",
+    active_flag: "Status",
+    password: "Password",
+    company_name: "Company Name",
+    product_category: "Product Category",
+    collection_point: "Collection Point"
 };
 
 const FIELD_GUIDANCE = {
-    name: "First letter uppercase, e.g. Lee Tian Le",
-    role: "E.g. installer, admin, etc.",
-    contact_number: "Format: 01XXXXXXXX (no dashes/spaces)",
-    team: "Select the team this employee belongs to",
-    email: "Press Tab to accept suggested email or type your own",
-    password: "Minimum 6 characters"
+    name: "Enter the employee's full name.",
+    email: "A valid email address where the employee can be reached.",
+    contact_number: "Malaysian phone number format (e.g., 0123456789).",
+    role: "Select the employee's role.",
+    password: "Password must be at least 6 characters. Leave blank on edit to keep it unchanged.",
+    company_name: "The name of the installer's company.",
+    product_category: "The product category the installer is specialized in.",
+    collection_point: "The collection point for the installer."
 };
 
+/**
+ * Generates email suggestions based on a name and checks for duplicates.
+ */
+function generateEmailSuggestions(name, existingEmails) {
+    if (!name) return [];
 
-// Helper function to generate email suggestions from name
-function generateEmailSuggestions(name, existingEmails = []) {
-    if (!name || name.trim().length === 0) return [];
+    const nameParts = name.toLowerCase().split(' ').filter(Boolean);
+    if (nameParts.length === 0) return [];
 
-    const cleanName = name.trim().toLowerCase();
-    const nameParts = cleanName.split(/\s+/);
+    const [firstName, ...lastNames] = nameParts;
+    const lastName = lastNames.join('');
+
     const suggestions = [];
+    if (lastName) {
+        suggestions.push(`${firstName.charAt(0)}${lastName}@example.com`);
+    }
+    if (lastName) {
+        suggestions.push(`${firstName}.${lastName}@example.com`);
+    }
+    suggestions.push(`${firstName}@example.com`);
 
-    // Remove special characters
-    const sanitize = (str) => str.replace(/[^a-z0-9]/g, '');
+    const uniqueSuggestions = suggestions.filter(email => !existingEmails.includes(email));
 
-    if (nameParts.length >= 2) {
-        const firstName = sanitize(nameParts[0]);
-        const lastName = sanitize(nameParts[nameParts.length - 1]);
-
-        // Strategy 1: firstname.lastname@gmail.com
-        suggestions.push(`${firstName}.${lastName}@gmail.com`);
-
-        // Strategy 2: firstnamelastname@gmail.com
-        suggestions.push(`${firstName}${lastName}@gmail.com`);
-
-        // Strategy 3: firstname_lastname@gmail.com
-        suggestions.push(`${firstName}_${lastName}@gmail.com`);
-
-        // Strategy 4: firstinitial + lastname@gmail.com (e.g., jsmith@gmail.com)
-        suggestions.push(`${firstName.charAt(0)}${lastName}@gmail.com`);
-
-        // Strategy 5: lastname.firstname@gmail.com (reversed)
-        suggestions.push(`${lastName}.${firstName}@gmail.com`);
-    } else {
-        // Single name - just sanitize
-        const singleName = sanitize(cleanName);
-        suggestions.push(`${singleName}@gmail.com`);
+    if (uniqueSuggestions.length === 0 && suggestions.length > 0) {
+        let counter = 1;
+        let newSuggestion;
+        do {
+            newSuggestion = suggestions[0].replace('@', `${counter}@`);
+            counter++;
+        } while (existingEmails.includes(newSuggestion));
+        return [newSuggestion];
     }
 
-    // Filter out suggestions that already exist
-    const availableSuggestions = suggestions.filter(email =>
-        !existingEmails.some(existing =>
-            existing.toLowerCase() === email.toLowerCase()
-        )
-    );
-
-    // If all suggestions are taken, add numbered versions
-    if (availableSuggestions.length === 0 && suggestions.length > 0) {
-        const baseSuggestion = suggestions[0].replace('@gmail.com', '');
-        for (let i = 1; i <= 5; i++) {
-            const numberedEmail = `${baseSuggestion}${i}@gmail.com`;
-            if (!existingEmails.some(e => e.toLowerCase() === numberedEmail.toLowerCase())) {
-                availableSuggestions.push(numberedEmail);
-                break;
-            }
-        }
-    }
-
-    return availableSuggestions;
+    return uniqueSuggestions;
 }
 
-function Modal({ show, onClose, children }) {
-    if (!show) return null;
-    return (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-40">
-            <div
-                className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg relative max-h-[90vh] overflow-y-auto"
-                tabIndex={-1}
-            >
-                <button
-                    onClick={onClose}
-                    className="absolute top-2 right-3 text-gray-400 hover:text-black text-lg"
-                    aria-label="Close"
-                >
-                    &times;
-                </button>
-                {children}
-            </div>
-        </div>
-    );
-}
-
-function ActiveFlagBadge({ value }) {
-    return value
-        ? (
-            <span className="inline-flex items-center px-2 py-1 rounded-full bg-green-100 text-green-800 font-medium gap-1 text-xs">
-                <span className="w-2 h-2 bg-green-500 rounded-full"></span> Active
-            </span>
-        )
-        : (
-            <span className="inline-flex items-center px-2 py-1 rounded-full bg-red-100 text-red-700 font-medium gap-1 text-xs">
-                <span className="w-2 h-2 bg-red-500 rounded-full"></span> Inactive
-            </span>
-        );
-}
 
 export default function EmployeeInfo() {
     const [employees, setEmployees] = useState([]);
@@ -143,6 +97,7 @@ export default function EmployeeInfo() {
     const [showPassword, setShowPassword] = useState(false);
     const [visiblePasswords, setVisiblePasswords] = useState(new Set());
     const [rolesList, setRolesList] = useState([]);
+    const [selectedRoleName, setSelectedRoleName] = useState("");
 
 
     // Email suggestion states
@@ -157,7 +112,6 @@ export default function EmployeeInfo() {
     async function loadAllData() {
         setLoading(true);
         try {
-            // Load roles using the informationService helper `getRoles`
             const [employeesData, teamsData, assignmentsData, rolesData] = await Promise.all([
                 getAllEmployees(),
                 getAllTeams(),
@@ -165,23 +119,12 @@ export default function EmployeeInfo() {
                 getRoles()
             ]);
 
-            console.log('[EmployeeInfo] Data loaded:', {
-                employees: employeesData?.length || 0,
-                teams: teamsData?.length || 0,
-                assignments: assignmentsData?.length || 0,
-                roles: rolesData?.length || 0,
-                sampleEmployee: employeesData?.[0],
-                sampleTeam: teamsData?.[0]
-            });
-
-            // Build role id -> name map and set roles list state
             const roleMap = new Map();
             (rolesData || []).forEach(r => {
                 roleMap.set(r.id, r.name || r.id);
             });
             setRolesList(rolesData || []);
 
-            // Handle both PascalCase and snake_case field names
             const teamMap = new Map();
             (teamsData || []).forEach(team => {
                 const teamId = team.TeamID || team.id;
@@ -202,14 +145,11 @@ export default function EmployeeInfo() {
 
             const enriched = (employeesData || []).map(emp => {
                 const empId = emp.id;
-
-                // Handle role - API returns it as object from Prisma include
                 let roleId, roleName;
                 if (typeof emp.role === 'object' && emp.role !== null) {
                     roleId = emp.role.id;
                     roleName = emp.role.name;
                 } else {
-                    // Fallback if role is just an ID string
                     roleId = emp.roleId || emp.role_id;
                     roleName = roleMap.get(roleId) || '';
                 }
@@ -227,8 +167,6 @@ export default function EmployeeInfo() {
                 };
             });
 
-            console.log('[EmployeeInfo] Enriched employees sample:', enriched[0]);
-
             setEmployees(employeesData || []);
             setTeams(teamsData || []);
             setEmployeeTeamMap(empTeamMap);
@@ -239,6 +177,7 @@ export default function EmployeeInfo() {
         }
         setLoading(false);
     }
+    
     function openAddModal() {
         setModalMode("add");
         setModalData({
@@ -248,8 +187,13 @@ export default function EmployeeInfo() {
             contact_number: "",
             team: "",
             active_flag: true,
-            password: ""
+            password: "",
+            company_name: "",
+            product_category: "",
+            collection_point: ""
         });
+        const role = rolesList.find(r => r.id === (rolesList[0]?.id || ""));
+        setSelectedRoleName(role ? role.name : "");
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
@@ -258,16 +202,35 @@ export default function EmployeeInfo() {
     }
 
 
-    function openEditModal(idx) {
+    async function openEditModal(idx) {
         setModalMode("edit");
         setEditIdx(idx);
         const employee = enrichedEmployees[idx];
-        // set modalData.role to the stored role value (usually role id or string)
+        const role = rolesList.find(r => r.id === employee.role);
+        setSelectedRoleName(role ? role.name : "");
+
+        let installerData = {};
+        if (role && role.name.toLowerCase() === "installer") {
+            try {
+                const installer = await getInstallerByEmployeeId(employee.EmployeeID);
+                if (installer) {
+                     installerData = {
+                        company_name: installer.company_name,
+                        product_category: installer.product_category,
+                        collection_point: installer.collection_point
+                    };
+                }
+            } catch (error) {
+                console.error("Failed to fetch installer data", error);
+            }
+        }
+
         setModalData({
             ...employee,
+            ...installerData,
             team: employee.teamId || "",
             password: "",
-            role: employee.role || "" // keep stored role id/string so select can pre-select
+            role: employee.role || "" 
         });
         setModalOpen(true);
         setSuccessMsg("");
@@ -287,9 +250,12 @@ export default function EmployeeInfo() {
 
         setModalData(prev => ({ ...prev, [name]: val }));
 
-        // Handle email suggestion when name changes
+        if (name === "role") {
+            const role = rolesList.find(r => r.id === val);
+            setSelectedRoleName(role ? role.name : "");
+        }
+
         if (name === "name" && modalMode === "add") {
-            // Get existing emails
             const existingEmails = employees.map(emp => emp.email).filter(Boolean);
             const suggestions = generateEmailSuggestions(val, existingEmails);
 
@@ -303,7 +269,6 @@ export default function EmployeeInfo() {
         }
     }
 
-    // Handle Tab key press for email suggestion
     function handleEmailKeyDown(e) {
         if (e.key === "Tab" && showEmailSuggestion && suggestedEmail) {
             e.preventDefault();
@@ -312,7 +277,6 @@ export default function EmployeeInfo() {
         }
     }
 
-    // Handle email input focus/blur
     function handleEmailFocus() {
         if (modalMode === "add" && modalData.name && !modalData.email) {
             setShowEmailSuggestion(true);
@@ -320,12 +284,10 @@ export default function EmployeeInfo() {
     }
 
     function handleEmailBlur() {
-        // Hide suggestion after a short delay to allow tab key to work
         setTimeout(() => setShowEmailSuggestion(false), 150);
     }
 
     async function handleModalSubmit() {
-        // Validation
         const requiredFields = {
             name: 'Name',
             role: 'Role',
@@ -337,7 +299,6 @@ export default function EmployeeInfo() {
             requiredFields.password = 'Password';
         }
 
-        // Check required fields
         const missingFields = [];
         for (const [field, label] of Object.entries(requiredFields)) {
             if (!modalData[field] || modalData[field].toString().trim() === '') {
@@ -350,14 +311,12 @@ export default function EmployeeInfo() {
             return;
         }
 
-        // Validate email format
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(modalData.email)) {
             setError('Please enter a valid email address');
             return;
         }
 
-        // Check for duplicate email
         const currentEmployeeId = modalMode === "edit" ? (modalData.EmployeeID || modalData.id) : null;
         const isDuplicateEmail = employees.some(emp =>
             emp.email &&
@@ -370,7 +329,6 @@ export default function EmployeeInfo() {
             return;
         }
 
-        // Validate contact number (basic format check)
         if (modalData.contact_number) {
             const contactRegex = /^01[0-9]{8,9}$/;
             if (!contactRegex.test(modalData.contact_number)) {
@@ -379,7 +337,6 @@ export default function EmployeeInfo() {
             }
         }
 
-        // Validate password length for new employees
         if (modalMode === "add" && modalData.password && modalData.password.length < 6) {
             setError('Password must be at least 6 characters long');
             return;
@@ -391,29 +348,55 @@ export default function EmployeeInfo() {
         try {
             const employeeData = {
                 name: modalData.name,
-                role: modalData.role,
+                role_id: modalData.role,
                 email: modalData.email,
                 contact_number: modalData.contact_number,
                 active_flag: modalData.active_flag
             };
-            console.log('!!!!!!!!!Updated employee:', employeeData);
+
+            const role = rolesList.find(r => r.id === modalData.role);
+            const isInstaller = role && role.name.toLowerCase() === "installer";
+
             if (modalMode === "add") {
-                employeeData.password = modalData.password; // add password
+                employeeData.password = modalData.password;
                 const newEmp = await addEmployee(employeeData);
-                const newEmpId = newEmp.EmployeeID || newEmp.id;
+                const newEmpId = newEmp.id;
                 if (modalData.team) {
                     await assignOrUpdateEmployeeTeam(newEmpId, modalData.team);
+                }
+                if (isInstaller) {
+                    const installerData = {
+                        employee_id: newEmpId,
+                        company_name: modalData.company_name,
+                        product_category: modalData.product_category,
+                        collection_point: modalData.collection_point
+                    };
+                    await addInstaller(installerData);
                 }
 
                 setSuccessMsg("Employee added successfully!");
             } else {
-                // update existing employee
                 if (modalData.password && modalData.password.trim() !== '') {
-                    employeeData.password = modalData.password; // only update if entered
+                    employeeData.password = modalData.password;
                 }
                 const empId = modalData.EmployeeID || modalData.id;
 
                 await updateEmployee(empId, employeeData);
+
+                if (isInstaller) {
+                    const installer = await getInstallerByEmployeeId(empId);
+                    const installerData = {
+                        company_name: modalData.company_name,
+                        product_category: modalData.product_category,
+                        collection_point: modalData.collection_point
+                    };
+                    if (installer) {
+                        await updateInstaller(installer.id, installerData);
+                    } else {
+                        installerData.employee_id = empId;
+                        await addInstaller(installerData);
+                    }
+                }
 
                 const oldTeam = modalData.teamId ?? null;
                 const newTeam = modalData.team ?? null;
@@ -425,18 +408,15 @@ export default function EmployeeInfo() {
                 setSuccessMsg("Employee updated successfully!");
             }
 
-
-            await loadAllData(); // Refresh data
+            await loadAllData();
             setModalOpen(false);
         } catch (e) {
-            // Parse error message for specific issues
             const errorMsg = e?.message || String(e);
 
             if (errorMsg.includes('email') && errorMsg.includes('unique')) {
                 setError("This email address is already in use. Please use a different email.");
             } else if (errorMsg.includes('Failed to create assignment')) {
                 setError("Employee created but team assignment failed. You can assign a team later from the Team Info page.");
-                // Still refresh data to show the new employee
                 await loadAllData();
                 setModalOpen(false);
             } else {
@@ -461,7 +441,7 @@ export default function EmployeeInfo() {
         try {
             await deleteEmployee(employeeId);
             setSuccessMsg("Employee deleted successfully!");
-            await loadAllData(); // Refresh all data
+            await loadAllData();
         } catch (e) {
             setError("Failed to delete employee: " + (e?.message || e));
             console.error(e);
@@ -469,9 +449,7 @@ export default function EmployeeInfo() {
         setSaving(false);
     }
 
-    // Render form field
     function renderInputField(k, val, onChange) {
-        // Required when adding (modalMode === 'add'); when editing, only required for fields you want to enforce
         const requiredWhenAdd = modalMode === "add" && k !== "team";
 
         if (k === "active_flag") {
@@ -596,7 +574,7 @@ export default function EmployeeInfo() {
                         onChange={onChange}
                         className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 pr-10"
                         placeholder="Enter password"
-                        required={modalMode === "add"} // required only when adding
+                        required={modalMode === "add"}
                     />
                     <button
                         type="button"
@@ -619,8 +597,6 @@ export default function EmployeeInfo() {
                 </div>
             );
         }
-
-
 
         return (
             <input
@@ -702,7 +678,7 @@ export default function EmployeeInfo() {
                                     {TABLE_KEYS.map(k => (
                                         <td className="px-4 py-3 text-sm text-gray-900" key={k}>
                                             {k === "active_flag" ? (
-                                                <ActiveFlagBadge value={emp[k]} />
+                                                <StatusBadge isActive={emp[k]} />
                                             ) : k === "team" ? (
                                                 <TeamBadge teamType={emp[k]} />
                                             ) : k === "password" ? (
@@ -734,7 +710,7 @@ export default function EmployeeInfo() {
                                                     )}
                                                     </button>
                                                 </div>
-                                            ) : k === "role" ? (
+                                            ) : k === "roleName" ? (
                                                 <span>{emp.roleName || emp.role || "—"}</span>
                                             ) : (
                                                 <span>{emp[k] ?? "—"}</span>
@@ -777,13 +753,19 @@ export default function EmployeeInfo() {
                 <h3 className="text-xl font-semibold mb-6 text-gray-800">
                     {modalMode === "add" ? "Add New Employee" : "Edit Employee"}
                 </h3>
+                {error && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
+                        {error}
+                    </div>
+                )}
                 <div className="space-y-4">
                     {FORM_KEYS.map(k => {
-                        // Skip password field initially - we'll show it separately
+                        // Skip password field initially - we'll show it separately at the very bottom
                         if (k === "password") {
                             return null;
                         }
-                        return (
+
+                        const field = (
                             <div key={k}>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">
                                     {FIELD_LABELS[k] || k}
@@ -795,6 +777,49 @@ export default function EmployeeInfo() {
                                 )}
                             </div>
                         );
+
+                        // If this is the "role" field AND role is Installer, append the extra fields immediately
+                        if (k === "role" && selectedRoleName.toLowerCase() === "installer") {
+                            return (
+                                <React.Fragment key={k}>
+                                    {field}
+                                    <div className="bg-blue-50 p-4 rounded-md border border-blue-100 space-y-4">
+                                        <p className="text-sm font-semibold text-blue-800 border-b border-blue-200 pb-2">
+                                            Installer Details
+                                        </p>
+                                        <div key="company_name">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                {FIELD_LABELS["company_name"]}
+                                            </label>
+                                            {renderInputField("company_name", modalData["company_name"], handleModalChange)}
+                                            {FIELD_GUIDANCE["company_name"] && (
+                                                <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["company_name"]}</p>
+                                            )}
+                                        </div>
+                                        <div key="product_category">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                {FIELD_LABELS["product_category"]}
+                                            </label>
+                                            {renderInputField("product_category", modalData["product_category"], handleModalChange)}
+                                            {FIELD_GUIDANCE["product_category"] && (
+                                                <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["product_category"]}</p>
+                                            )}
+                                        </div>
+                                        <div key="collection_point">
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                {FIELD_LABELS["collection_point"]}
+                                            </label>
+                                            {renderInputField("collection_point", modalData["collection_point"], handleModalChange)}
+                                            {FIELD_GUIDANCE["collection_point"] && (
+                                                <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["collection_point"]}</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </React.Fragment>
+                            );
+                        }
+
+                        return field;
                     })}
 
                     {/* Password field - required for add, optional for edit */}
@@ -809,6 +834,7 @@ export default function EmployeeInfo() {
                             <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["password"]}</p>
                         )}
                     </div>
+                    
                     <div className="flex gap-3 pt-4">
                         <button
                             type="button"

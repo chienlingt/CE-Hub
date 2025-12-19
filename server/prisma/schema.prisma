@@ -8,7 +8,7 @@ datasource db {
 }
 
 model roles {
-  id          String      @id @default(uuid())
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name        String
   permissions String[]    @default([])
   created_at  DateTime    @default(now())
@@ -17,25 +17,30 @@ model roles {
 }
 
 model employees {
-  id              String                      @id @default(uuid())
-  name            String?
-  display_name    String?
-  email           String?                     @unique
-  contact_number  String?
-  role_id         String?
-  active_flag     Boolean                     @default(true)
-  password        String?
-  bio             String?
-  created_at      DateTime                    @default(now())
-  updated_at      DateTime                    @updatedAt
-  teamAssignments employee_team_assignments[]
-  role            roles?                      @relation(fields: [role_id], references: [id], onUpdate: NoAction)
-  orders          orders[]
-  reports         reports[]                   @relation("EmployeeReports")
+  id                                    String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                                  String?
+  display_name                          String?
+  email                                 String?                     @unique
+  contact_number                        String?
+  role_id                               String?                     @db.Uuid
+  active_flag                           Boolean                     @default(true)
+  password                              String?
+  bio                                   String?
+  created_at                            DateTime                    @default(now())
+  updated_at                            DateTime                    @updatedAt
+  outlet_id                             String?                     @db.Uuid
+  teamAssignments                       employee_team_assignments[]
+  role                                  roles?                      @relation(fields: [role_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  outlets                               outlets?                    @relation(fields: [outlet_id], references: [id], onUpdate: NoAction, map: "fk_employees_outlet")
+  installers                            installers?
+  orders                                orders[]
+  reports                               reports[]                   @relation("EmployeeReports")
+  trucks_trucks_assistant_idToemployees trucks[]                    @relation("trucks_assistant_idToemployees")
+  trucks_trucks_driver_idToemployees    trucks[]                    @relation("trucks_driver_idToemployees")
 }
 
 model teams {
-  id                     String                      @id @default(uuid())
+  id                     String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   team_type              String?
   created_at             DateTime                    @default(now())
   assignments            employee_team_assignments[]
@@ -46,17 +51,17 @@ model teams {
 
 model employee_team_assignments {
   id          Int       @id @default(autoincrement())
-  employee_id String
-  team_id     String?
+  employee_id String    @db.Uuid
+  team_id     String?   @db.Uuid
   assigned_at DateTime?
   employee    employees @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  team        teams?    @relation(fields: [team_id], references: [id], onUpdate: NoAction)
+  team        teams?    @relation(fields: [team_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([employee_id, team_id])
 }
 
 model zones {
-  id          String        @id @default(uuid())
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   zone_name   String?
   created_at  DateTime      @default(now())
   buildings   buildings[]
@@ -64,7 +69,7 @@ model zones {
 }
 
 model buildings {
-  id                        String    @id @default(dbgenerated("uuid_generate_v4()"))
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   building_name             String?
   housing_type              String?
   special_equipment_needed  String?
@@ -76,7 +81,7 @@ model buildings {
   access_time_window_start  String?
   access_time_window_end    String?
   pre_registration_required Boolean?
-  zone_id                   String?
+  zone_id                   String?   @db.Uuid
   lift_available            Boolean?
   lift_dimensions           String?
   notes                     String?
@@ -87,18 +92,18 @@ model buildings {
   address                   String?
   latitude                  Decimal?  @db.Decimal(10, 8)
   longitude                 Decimal?  @db.Decimal(11, 8)
-  zone                      zones?    @relation(fields: [zone_id], references: [id], onUpdate: NoAction)
+  zone                      zones?    @relation(fields: [zone_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   orders                    orders[]
 }
 
 model access_logs {
-  id         String    @id @default(uuid())
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   changed_at DateTime?
   changes    Json?
 }
 
 model chats {
-  id              String    @id @default(uuid())
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   order_number    String?
   members         Json?
   names           Json?
@@ -107,7 +112,7 @@ model chats {
 }
 
 model customers {
-  id                            String      @id @default(uuid())
+  id                            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   full_name                     String?
   email                         String?
   phone                         String?
@@ -127,19 +132,19 @@ model customers {
 }
 
 model lorry_trips {
-  id                String    @id @default(uuid())
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   delivery_team_id  String?
   warehouse_team_id String?
-  truck_id          String?
+  truck_id          String?   @db.Uuid
   created_at        DateTime  @default(now())
   updated_at        DateTime?
-  trucks            trucks?   @relation(fields: [truck_id], references: [id], onUpdate: NoAction)
+  trucks            trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model order_products {
   id                           Int      @id @default(autoincrement())
-  order_id                     String
-  product_id                   String
+  order_id                     String   @db.Uuid
+  product_id                   String   @db.Uuid
   quantity                     Int?
   dismantle_required           Boolean?
   dismantle_time_min           Int?
@@ -148,20 +153,20 @@ model order_products {
   custom_installation_time_min Int?
   custom_installation_time_max Int?
   orders                       orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  products                     products @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  products                     products @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model orders {
-  id                        String                  @id @default(uuid())
-  customer_id               String?
-  building_id               String?
-  employee_id               String?
+  id                        String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id               String?                 @db.Uuid
+  building_id               String?                 @db.Uuid
+  employee_id               String?                 @db.Uuid
   order_status              String?
   number_of_attempts        Int?
   customer_rating           Float?
   proof_of_delivery_url     String?
   customer_feedback         String?
-  time_slot_id              String?
+  time_slot_id              String?                 @db.Uuid
   scheduled_start_date_time DateTime?
   scheduled_end_date_time   DateTime?
   actual_start_date_time    DateTime?
@@ -177,14 +182,14 @@ model orders {
   installation_schedules    installation_schedules?
   order_products            order_products[]
   buildings                 buildings?              @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  customers                 customers?              @relation(fields: [customer_id], references: [id], onUpdate: NoAction)
-  employees                 employees?              @relation(fields: [employee_id], references: [id], onUpdate: NoAction)
-  time_slots                time_slots?             @relation(fields: [time_slot_id], references: [id], onUpdate: NoAction)
+  customers                 customers?              @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees                 employees?              @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  time_slots                time_slots?             @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rating                    rating[]
 }
 
 model products {
-  id                              String           @id @default(uuid())
+  id                              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   product_name                    String?
   package_length_cm               Int?
   package_height_cm               Int?
@@ -201,56 +206,61 @@ model products {
 }
 
 model reports {
-  id          String     @id @default(uuid())
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   content     String?
   status      String?
   created_at  DateTime?
-  employee_id String?
-  employee    employees? @relation("EmployeeReports", fields: [employee_id], references: [id], onUpdate: NoAction)
+  employee_id String?    @db.Uuid
+  employee    employees? @relation("EmployeeReports", fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model time_slots {
-  id                String    @id @default(uuid())
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   date              String?
   time_window_start String?
   time_window_end   String?
   available_flag    Boolean?
   created_at        DateTime?
-  delivery_team_id  String?
-  warehouse_team_id String?
-  truck_id          String?
+  delivery_team_id  String?   @db.Uuid
+  warehouse_team_id String?   @db.Uuid
+  truck_id          String?   @db.Uuid
+  orders            orders[]
   delivery_team     teams?    @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
   truck             trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
   warehouse_team    teams?    @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
-  orders            orders[]
 }
 
 model truck_zones {
-  id              String   @id @default(uuid())
-  zone_id         String?
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  zone_id         String?  @db.Uuid
   is_primary_zone Boolean?
-  truck_id        String?
+  truck_id        String?  @db.Uuid
   trucks          trucks?  @relation(fields: [truck_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  zones           zones?   @relation(fields: [zone_id], references: [id], onUpdate: NoAction)
+  zones           zones?   @relation(fields: [zone_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model trucks {
-  id          String        @id @default(uuid())
-  plate_no    String?
-  length_cm   Int?
-  width_cm    Int?
-  height_cm   Int?
-  tone        Int?
-  created_at  DateTime      @default(now())
-  lorry_trips lorry_trips[]
-  time_slots  time_slots[]
-  truck_zones truck_zones[]
+  id                                       String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  plate_no                                 String?
+  length_cm                                Int?
+  width_cm                                 Int?
+  height_cm                                Int?
+  tone                                     Int?
+  created_at                               DateTime      @default(now())
+  off_day                                  String?       @db.VarChar(255)
+  driver_id                                String?       @db.Uuid
+  assistant_id                             String?       @db.Uuid
+  lorry_trips                              lorry_trips[]
+  time_slots                               time_slots[]
+  truck_zones                              truck_zones[]
+  employees_trucks_assistant_idToemployees employees?    @relation("trucks_assistant_idToemployees", fields: [assistant_id], references: [id], onUpdate: NoAction, map: "fk_assistant")
+  employees_trucks_driver_idToemployees    employees?    @relation("trucks_driver_idToemployees", fields: [driver_id], references: [id], onUpdate: NoAction, map: "fk_driver")
 }
 
 model installation_schedules {
-  id                     String    @id @default(dbgenerated("gen_random_uuid()"))
-  order_id               String    @unique
-  installation_team_id   String?
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id               String    @unique @db.Uuid
+  installation_team_id   String?   @db.Uuid
   estimated_arrival_time DateTime? @db.Timestamp(6)
   status                 String?   @default("Scheduled")
   created_at             DateTime? @default(now()) @db.Timestamp(6)
@@ -272,10 +282,10 @@ model scheduler_config {
 
 model complaint {
   complaint_id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customer_id                String    @db.VarChar(50)
-  employee_id                String?   @db.VarChar(50)
+  customer_id                String    @db.Uuid
+  employee_id                String?   @db.Uuid
   employee_name              String?   @db.VarChar(100)
-  order_id                   String?   @db.VarChar(50)
+  order_id                   String?   @db.Uuid
   product_name               String?   @db.VarChar(100)
   delivery_date              String?   @db.VarChar(20)
   reason                     String?   @db.VarChar(100)
@@ -290,8 +300,8 @@ model complaint {
 
 model rating {
   rating_id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customer_id                String    @db.VarChar(50)
-  order_id                   String    @db.VarChar(50)
+  customer_id                String    @db.Uuid
+  order_id                   String    @db.Uuid
   product_name               String    @db.VarChar(100)
   driver_id                  String?   @db.VarChar(50)
   driver_name                String?   @db.VarChar(100)
@@ -314,4 +324,22 @@ model system_settings {
   description   String?
   created_at    DateTime? @default(now()) @db.Timestamp(6)
   updated_at    DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model installers {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id      String    @unique @db.Uuid
+  company_name     String?   @db.VarChar(255)
+  product_category String?   @db.VarChar(255)
+  collection_point String?   @db.VarChar(255)
+  employees        employees @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_employee")
+}
+
+model outlets {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  outlet_code String      @unique @db.VarChar(255)
+  name        String?     @db.VarChar(255)
+  created_at  DateTime    @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime    @default(now()) @db.Timestamptz(6)
+  employees   employees[]
 }

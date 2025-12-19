@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ShoppingCart, Package, User, CheckCircle, AlertCircle, Plus, Minus, X, Edit2, Save, Search } from 'lucide-react';
+import ResultModal from '../common/ResultModal';
 import { getAllProducts, getAllZones, addCustomer, addProduct, updateCustomer } from '../../services/informationService';
 
 const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
@@ -18,7 +19,12 @@ export default function PlaceOrder() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
+  const [resultModal, setResultModal] = useState({
+    open: false,
+    type: null,
+    title: '',
+    message: ''
+  });
   const [orderNumber, setOrderNumber] = useState(null);
   const [buildingInfo, setBuildingInfo] = useState(null);
   const [selectedBuilding, setSelectedBuilding] = useState(null);
@@ -277,19 +283,53 @@ export default function PlaceOrder() {
 
   // Submit order
   const handleSubmitOrder = async () => {
+    setError(null);
     // Validation
     if (customerMode === 'select' && !selectedCustomerId) {
-      setError('Please select a customer');
+      showResultModal({
+        type: 'error',
+        title: 'Select a customer',
+        message: 'Please choose an existing customer before placing the order.'
+      });
       return;
     }
 
     if (customerMode === 'new' && (!newCustomer.full_name || !newCustomer.email)) {
-      setError('Please fill in customer name and email');
+      showResultModal({
+        type: 'error',
+        title: 'Customer details incomplete',
+        message: 'Please provide the customer name and email.'
+      });
       return;
     }
 
+    // New validation for customer details completeness
+    if (customerMode === 'select') {
+      const customer = customers.find(c => c.id === selectedCustomerId);
+      if (
+        !customer.full_name ||
+        !customer.email ||
+        !customer.phone ||
+        !customer.address ||
+        !customer.city ||
+        !customer.postcode ||
+        !customer.state
+      ) {
+        showResultModal({
+          type: 'error',
+          title: 'Customer profile incomplete',
+          message: 'Cannot save order, customer details are incomplete. Please edit the customer profile first.'
+        });
+        return;
+      }
+    }
+    
     if (cart.length === 0) {
-      setError('Please add products to cart');
+      showResultModal({
+        type: 'error',
+        title: 'Cart is empty',
+        message: 'Cannot place order, cart cannot be empty.'
+      });
       return;
     }
 
@@ -304,7 +344,11 @@ export default function PlaceOrder() {
                                     item.customInstallTime.max > 0;
 
         if (!hasProductInstallTime && !hasCustomInstallTime) {
-          setError(`Product "${item.product.product_name}" requires installation but has no installation time. Please provide estimated installation time.`);
+          showResultModal({
+            type: 'error',
+            title: 'Installation time required',
+            message: `Product "${item.product.product_name}" requires installation but has no installation time. Please provide estimated installation time.`
+          });
           return;
         }
       }
@@ -364,13 +408,41 @@ export default function PlaceOrder() {
       const data = await response.json();
       setOrderNumber(data.order?.id);
       setBuildingInfo(data.buildingInfo);
-      setSuccess(true);
+      setResultModal({
+        open: true,
+        type: 'success',
+        title: 'Order Placed Successfully!',
+        message: 'Your order has been confirmed.'
+      });
     } catch (err) {
       console.error('Order submission error:', err);
-      setError('Failed to place order. Please try again.');
+      setResultModal({
+        open: true,
+        type: 'error',
+        title: 'Order Not Placed',
+        message: 'Failed to place order. Please try again.'
+      });
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const closeResultModal = () => {
+    setResultModal({
+      open: false,
+      type: null,
+      title: '',
+      message: ''
+    });
+  };
+
+  const showResultModal = ({ type = 'info', title, message }) => {
+    setResultModal({
+      open: true,
+      type,
+      title,
+      message
+    });
   };
 
   if (loading) {
@@ -384,41 +456,81 @@ export default function PlaceOrder() {
     );
   }
 
-  if (success) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
-        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full text-center">
-          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Order Placed Successfully!</h2>
-          <p className="text-gray-600 mb-4">Your order has been confirmed.</p>
-          <div className="bg-blue-50 rounded-lg p-4 mb-4">
-            <p className="text-sm text-gray-600">Order Number</p>
-            <p className="text-xl font-bold text-blue-600">{orderNumber}</p>
-          </div>
-          {buildingInfo && (
-            <div className="bg-green-50 rounded-lg p-4 mb-6">
-              <p className="text-sm text-gray-600">Building</p>
-              <p className="text-lg font-semibold text-green-700">{buildingInfo.buildingName}</p>
-              <p className="text-xs text-gray-600 mt-1">
-                {buildingInfo.isExisting ? 'Using existing building (shared access constraints)' : 'New building created'}
-              </p>
-            </div>
-          )}
-          <button
-            onClick={() => window.location.reload()}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Place Another Order
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
+      {resultModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full relative">
+            <button
+              onClick={closeResultModal}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div className="p-6 text-center">
+              {resultModal.type === 'success' ? (
+                <CheckCircle className="w-14 h-14 text-green-500 mx-auto mb-3" />
+              ) : (
+                <AlertCircle className="w-14 h-14 text-red-500 mx-auto mb-3" />
+              )}
+              <h2 className="text-xl font-bold text-gray-900 mb-2">{resultModal.title}</h2>
+              <p className="text-gray-600 mb-4">{resultModal.message}</p>
+
+              {resultModal.type === 'success' && (
+                <>
+                  <div className="bg-blue-50 rounded-lg p-4 mb-4 text-left">
+                    <p className="text-sm text-gray-600">Order Number</p>
+                    <p className="text-xl font-bold text-blue-600">{orderNumber}</p>
+                  </div>
+                  {buildingInfo && (
+                    <div className="bg-green-50 rounded-lg p-4 mb-4 text-left">
+                      <p className="text-sm text-gray-600">Building</p>
+                      <p className="text-lg font-semibold text-green-700">{buildingInfo.buildingName}</p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        {buildingInfo.isExisting ? 'Using existing building (shared access constraints)' : 'New building created'}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {resultModal.type === 'error' && (
+                <p className="text-xs text-gray-500 mb-4">
+                  Please review the order details and try again.
+                </p>
+              )}
+
+              <div className="space-y-2">
+                {resultModal.type === 'success' ? (
+                  <>
+                    <button
+                      onClick={() => window.location.reload()}
+                      className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors"
+                    >
+                      Place Another Order
+                    </button>
+                    <button
+                      onClick={closeResultModal}
+                      className="w-full border border-gray-200 text-gray-700 py-3 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Close
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={closeResultModal}
+                    className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    Try Again
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto">
         {/* <h1 className="text-3xl font-bold text-gray-900 mb-6">Place Order (Salesperson)</h1> */}
 

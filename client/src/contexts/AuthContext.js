@@ -99,7 +99,7 @@ export function AuthProvider({ children }) {
 
       const data = await response.json();
       if (!data.employee) {
-        throw new Error('No employee data returned from server');
+        throw new Error('Incorrect Password');
       }
 
       // Login successful - now set up the session and fetch permissions
