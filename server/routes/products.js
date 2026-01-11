@@ -3,6 +3,23 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 
+function normalizeNullableBoolean(value) {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (value === 'null' || value === '') return null;
+  return value;
+}
+
+function normalizeProductPayload(payload) {
+  return {
+    ...payload,
+    fragile_flag: normalizeNullableBoolean(payload.fragile_flag),
+    installer_team_required_flag: normalizeNullableBoolean(payload.installer_team_required_flag),
+    no_lie_down_flag: normalizeNullableBoolean(payload.no_lie_down_flag),
+    dismantle_required_flag: normalizeNullableBoolean(payload.dismantle_required_flag)
+  };
+}
+
 router.get('/', async (req, res) => {
   try {
     const products = await prisma.products.findMany();
@@ -15,7 +32,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const product = await prisma.products.create({ data: req.body });
+    const product = await prisma.products.create({ data: normalizeProductPayload(req.body) });
     res.status(201).json(product);
   } catch (err) {
     console.error('POST /api/products error', err);
@@ -27,7 +44,7 @@ router.put('/:id', async (req, res) => {
   try {
     const product = await prisma.products.update({
       where: { id: req.params.id },
-      data: req.body
+      data: normalizeProductPayload(req.body)
     });
     res.json(product);
   } catch (err) {

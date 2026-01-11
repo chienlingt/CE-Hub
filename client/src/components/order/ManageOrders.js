@@ -657,6 +657,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [resetToPending, setResetToPending] = useState(false);
 
   // Data
   const [customers, setCustomers] = useState([]);
@@ -822,6 +823,15 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
         // Update special equipment
         special_equipment_needed: specialEquipment || null
       };
+
+      if (resetToPending) {
+        updateData.order_status = 'Pending';
+        updateData.scheduled_start_date_time = null;
+        updateData.scheduled_end_date_time = null;
+        updateData.time_slot_id = null;
+        updateData.truck_loading_sequence = null;
+        updateData.notified_scheduled = false;
+      }
 
       // First update customer
       await fetch(`${API_BASE}/api/customers/${order.customer_id}`, {
@@ -1124,6 +1134,22 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
               placeholder="Enter any special equipment needed for this order..."
             />
+          </div>
+
+          {/* Reset scheduling */}
+          <div className="mt-6">
+            <label className="inline-flex items-center text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={resetToPending}
+                onChange={(e) => setResetToPending(e.target.checked)}
+                className="mr-2"
+              />
+              Reset to Pending (clear scheduled times)
+            </label>
+            <p className="text-xs text-gray-500 mt-1">
+              This will clear scheduled start/end times and allow the order to be rescheduled.
+            </p>
           </div>
 
           {/* Actions */}

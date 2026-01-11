@@ -117,21 +117,22 @@ async function calculateRoute(waypoints, departureTime = new Date()) {
     const route = response.data.routes[0];
     const distanceMeters = route.distance; // meters
     const durationSeconds = route.duration; // seconds
+    const legDurationsSeconds = Array.isArray(route.legs)
+      ? route.legs.map(leg => leg.duration || 0)
+      : [];
 
-    // Calculate traffic multiplier based on departure time
-    const hour = departureTime.getHours();
-    const trafficMultiplier = getTrafficMultiplier(hour);
-    const durationWithTrafficSeconds = durationSeconds * trafficMultiplier;
+    const durationWithTrafficSeconds = durationSeconds;
+    const legDurationsWithTrafficSeconds = legDurationsSeconds;
 
     console.log(`   Distance: ${(distanceMeters / 1000).toFixed(2)} km`);
     console.log(`   Base Duration: ${Math.round(durationSeconds / 60)} minutes`);
-    console.log(`   Traffic Multiplier (${hour}:00): ${trafficMultiplier}x`);
     console.log(`   Duration with Traffic: ${Math.round(durationWithTrafficSeconds / 60)} minutes`);
 
     return {
       distance: distanceMeters, // meters
       duration: durationSeconds, // seconds (no traffic)
       durationWithTraffic: durationWithTrafficSeconds, // seconds (with traffic)
+      legsDurationWithTrafficSeconds: legDurationsWithTrafficSeconds,
       geometry: route.geometry,
       waypoints: route.waypoints || []
     };
@@ -153,34 +154,39 @@ async function calculateRoute(waypoints, departureTime = new Date()) {
  */
 function estimateRouteFallback(waypoints, departureTime = new Date()) {
   let totalDistance = 0;
+  const segmentDistances = [];
 
   // Calculate straight-line distance between consecutive waypoints
   for (let i = 0; i < waypoints.length - 1; i++) {
-    totalDistance += haversineDistance(waypoints[i], waypoints[i + 1]);
+    const segmentDistance = haversineDistance(waypoints[i], waypoints[i + 1]);
+    segmentDistances.push(segmentDistance);
+    totalDistance += segmentDistance;
   }
 
   // Add 40% for road network in Malaysia (winding roads, detours)
   totalDistance *= 1.4;
+  const adjustedSegmentDistances = segmentDistances.map(d => d * 1.4);
 
   // Estimate duration: average 30 km/h in city, 50 km/h outside
   const averageSpeed = 30; // km/h (conservative for urban delivery)
   const durationHours = totalDistance / averageSpeed;
   const durationSeconds = durationHours * 3600;
 
-  // Apply traffic multiplier
-  const hour = departureTime.getHours();
-  const trafficMultiplier = getTrafficMultiplier(hour);
-  const durationWithTrafficSeconds = durationSeconds * trafficMultiplier;
+  const durationWithTrafficSeconds = durationSeconds;
+  const legDurationsWithTrafficSeconds = adjustedSegmentDistances.map(distanceKm => {
+    const segmentSeconds = (distanceKm / averageSpeed) * 3600;
+    return segmentSeconds;
+  });
 
   console.log(`   Estimated Distance: ${totalDistance.toFixed(2)} km`);
   console.log(`   Estimated Duration: ${Math.round(durationSeconds / 60)} minutes`);
-  console.log(`   Traffic Multiplier (${hour}:00): ${trafficMultiplier}x`);
   console.log(`   Duration with Traffic: ${Math.round(durationWithTrafficSeconds / 60)} minutes`);
 
   return {
     distance: totalDistance * 1000, // convert to meters
     duration: durationSeconds,
     durationWithTraffic: durationWithTrafficSeconds,
+    legsDurationWithTrafficSeconds: legDurationsWithTrafficSeconds,
     geometry: null
   };
 }
@@ -296,6 +302,9 @@ async function calculateCompleteRoute(orders, warehouseAddress, departureTime = 
 
     // Calculate route through all waypoints
     const route = await calculateRoute(waypoints, departureTime);
+    const legTimesMinutes = Array.isArray(route.legsDurationWithTrafficSeconds)
+      ? route.legsDurationWithTrafficSeconds.map(seconds => Math.max(1, Math.ceil(seconds / 60)))
+      : [];
 
     console.log(`\n   COMPLETE ROUTE SUMMARY:`);
     console.log(`   ========================================`);
@@ -309,6 +318,7 @@ async function calculateCompleteRoute(orders, warehouseAddress, departureTime = 
       totalDistance: route.distance,
       totalTravelTime: route.duration,
       totalTravelTimeWithTraffic: route.durationWithTraffic,
+      legTravelTimesMinutes: legTimesMinutes,
       waypoints: waypoints,
       geometry: route.geometry
     };

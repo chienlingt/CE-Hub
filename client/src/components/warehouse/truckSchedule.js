@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Truck, Package, Clock, Users, MapPin, AlertTriangle, CheckCircle, RotateCcw, Maximize, Info, Calendar, User } from 'lucide-react';
+import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User } from 'lucide-react';
 import {
   getAllOrders,
   getAllOrderProducts,
@@ -8,11 +8,16 @@ import {
   getAllBuildings,
   getAllTimeSlots,
   getAllTeams,
+  getAllEmployeeTeamAssignments,
   getAllTrucks
 } from '../../services/informationService';
+import { useAuth } from '../../contexts/AuthContext';
 
 const WarehouseLoadingSchedule = () => {
+  const { currentUser } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedTeam, setSelectedTeam] = useState('all');
+  const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
   const [selectedTruck, setSelectedTruck] = useState('all');
   const [viewMode, setViewMode] = useState('schedule'); // 'schedule' or 'optimization'
 
@@ -24,6 +29,7 @@ const WarehouseLoadingSchedule = () => {
   const [buildings, setBuildings] = useState([]);
   const [timeSlots, setTimeSlots] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [trucks, setTrucks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -39,6 +45,7 @@ const WarehouseLoadingSchedule = () => {
           buildingsData,
           timeSlotsData,
           teamsData,
+          assignmentsData,
           trucksData
         ] = await Promise.all([
           getAllOrders(),
@@ -48,6 +55,7 @@ const WarehouseLoadingSchedule = () => {
           getAllBuildings(),
           getAllTimeSlots(),
           getAllTeams(),
+          getAllEmployeeTeamAssignments(),
           getAllTrucks()
         ]);
 
@@ -60,6 +68,7 @@ const WarehouseLoadingSchedule = () => {
         setBuildings(Array.isArray(buildingsData) ? buildingsData : (buildingsData?.data ?? []));
         setTimeSlots(Array.isArray(timeSlotsData) ? timeSlotsData : (timeSlotsData?.data ?? []));
         setTeams(Array.isArray(teamsData) ? teamsData : (teamsData?.data ?? []));
+        setAssignments(Array.isArray(assignmentsData) ? assignmentsData : (assignmentsData?.data ?? []));
         setTrucks(Array.isArray(trucksData) ? trucksData : (trucksData?.data ?? []));
       } catch (error) {
         console.error('[TruckSchedule] ❌ ERROR loading warehouse data:', error);
@@ -71,6 +80,7 @@ const WarehouseLoadingSchedule = () => {
         setBuildings([]);
         setTimeSlots([]);
         setTeams([]);
+        setAssignments([]);
         setTrucks([]);
       } finally {
         setLoading(false);
@@ -123,6 +133,43 @@ const WarehouseLoadingSchedule = () => {
     orderProductDismantle: (op) => op.dismantle_required ?? op.DismantleRequired ?? false
   };
 
+  const getEmployeeId = () => {
+    return currentUser?.employeeId || sessionStorage.getItem('employeeId') || '';
+  };
+
+  const getAssignmentTeamId = (assignment) => {
+    return assignment?.team_id || assignment?.TeamID || assignment?.teamId || assignment?.team?.id || assignment?.team?.TeamID || null;
+  };
+
+  const getAssignmentEmployeeId = (assignment) => {
+    return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
+  };
+
+  const warehouseTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('warehouse'));
+
+  useEffect(() => {
+    if (!teamAutoSelectEnabled) return;
+    if (selectedTeam !== 'all') return;
+    if (warehouseTeams.length === 0) return;
+
+    const employeeId = getEmployeeId();
+    const assignment = assignments.find(a => String(getAssignmentEmployeeId(a)) === String(employeeId));
+    if (!assignment) {
+      const randomTeam = warehouseTeams[Math.floor(Math.random() * warehouseTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+      return;
+    }
+
+    const assignedTeamId = getAssignmentTeamId(assignment);
+    const matchedTeam = warehouseTeams.find(team => String(field.teamId(team)) === String(assignedTeamId));
+    if (matchedTeam) {
+      setSelectedTeam(field.teamId(matchedTeam));
+    } else {
+      const randomTeam = warehouseTeams[Math.floor(Math.random() * warehouseTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+    }
+  }, [assignments, warehouseTeams, currentUser, selectedTeam, teamAutoSelectEnabled]);
+
   // Convert trucks data to object format for easy lookup
   const trucksObj = trucks.reduce((acc, truck) => {
     acc[field.truckId(truck)] = {
@@ -163,6 +210,32 @@ const WarehouseLoadingSchedule = () => {
     console.log('[TruckSchedule] Sample lorry trip:', lorryTrips[0]);
   }
 
+  const priorityByOrderId = useMemo(() => {
+    const bySlot = new Map();
+    orders.forEach(order => {
+      const slotId = field.orderTimeSlotId(order);
+      if (!slotId) return;
+      if (!bySlot.has(slotId)) bySlot.set(slotId, []);
+      bySlot.get(slotId).push(order);
+    });
+
+    const map = new Map();
+    bySlot.forEach(slotOrders => {
+      const sorted = [...slotOrders].sort((a, b) => {
+        const aStart = field.orderScheduledStart(a);
+        const bStart = field.orderScheduledStart(b);
+        return new Date(aStart || 0) - new Date(bStart || 0);
+      });
+      const total = sorted.length;
+      sorted.forEach((order, index) => {
+        const orderId = field.orderId(order);
+        if (orderId) map.set(orderId, total - index);
+      });
+    });
+
+    return map;
+  }, [orders]);
+
   // Convert orders data to expected format
   const ordersData = orders.map(order => ({
     OrderID: field.orderId(order),
@@ -174,7 +247,7 @@ const WarehouseLoadingSchedule = () => {
     OrderStatus: field.orderStatus(order),
     ScheduledStartDateTime: field.orderScheduledStart(order) ? new Date(field.orderScheduledStart(order)) : null,
     ScheduledEndDateTime: field.orderScheduledEnd(order) ? new Date(field.orderScheduledEnd(order)) : null,
-    Priority: 1,
+    Priority: priorityByOrderId.get(field.orderId(order)) || 1,
     LoadingSequence: field.orderLoadingSequence(order) || 1,
     CreatedAt: field.orderCreatedAt(order) ? new Date(field.orderCreatedAt(order)) : new Date()
   }));
@@ -343,7 +416,8 @@ const WarehouseLoadingSchedule = () => {
   const filteredTrips = lorryTrips.filter(trip => {
     const dateMatch = trip.Date === selectedDate;
     const truckMatch = selectedTruck === 'all' || trip.TruckID === selectedTruck;
-    return dateMatch && truckMatch;
+    const teamMatch = selectedTeam === 'all' || String(trip.WarehouseTeamID) === String(selectedTeam);
+    return dateMatch && truckMatch && teamMatch;
   });
 
   const optimizationData = useMemo(() => {
@@ -367,7 +441,7 @@ const WarehouseLoadingSchedule = () => {
       <div className="max-w-7xl mx-auto">
         {/* Filters and View Toggle */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
               <input
@@ -376,6 +450,24 @@ const WarehouseLoadingSchedule = () => {
                 onChange={(e) => setSelectedDate(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Team</label>
+              <select
+                value={selectedTeam}
+                onChange={(e) => {
+                  setSelectedTeam(e.target.value);
+                  setTeamAutoSelectEnabled(false);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Teams</option>
+                {warehouseTeams.map(team => (
+                  <option key={field.teamId(team)} value={field.teamId(team)}>
+                    {field.teamType(team)}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Truck</label>
@@ -636,31 +728,6 @@ const WarehouseLoadingSchedule = () => {
                         </div>
                       </div>
 
-                      {/* Loading Tips */}
-                      <div className="bg-yellow-50 rounded-lg p-4">
-                        <h4 className="font-medium text-gray-900 mb-3 flex items-center">
-                          <AlertTriangle className="w-4 h-4 mr-2 text-yellow-600" />
-                          Loading Guidelines
-                        </h4>
-                        <div className="space-y-2 text-sm text-gray-700">
-                          <div className="flex items-center space-x-2">
-                            <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                            <span>Load fragile items on top and secure properly</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                            <span>Keep upright items in designated positions</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                            <span>Load in reverse delivery order (LIFO)</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            <span>Distribute weight evenly across truck bed</span>
-                          </div>
-                        </div>
-                      </div>
                     </div>
 
                     {/* Optimized Loading Sequence */}
@@ -718,87 +785,6 @@ const WarehouseLoadingSchedule = () => {
                     </div>
                   </div>
 
-                  {/* Visual Loading Layout */}
-                  <div className="mt-6">
-                    <h4 className="font-medium text-gray-900 mb-4">Truck Loading Layout</h4>
-                    <div className="bg-gray-100 rounded-lg p-4">
-                      <div className="relative">
-                        {/* Truck Outline */}
-                        <div 
-                          className="border-2 border-gray-400 rounded-lg bg-white relative"
-                          style={{ 
-                            width: '100%', 
-                            height: '200px'
-                          }}
-                        >
-                          {/* Truck Cab */}
-                          <div className="absolute -left-8 top-1/2 transform -translate-y-1/2 w-6 h-16 bg-blue-600 rounded-l-lg"></div>
-                          
-                          {/* Loading Areas */}
-                          <div className="grid grid-cols-4 gap-2 h-full p-2">
-                            {optimizedItems.slice(0, 8).map((item, index) => {
-                              const priorityColor = item.orderInfo.Priority === 1 ? 'bg-red-200 border-red-400' : 
-                                                   item.orderInfo.Priority === 2 ? 'bg-yellow-200 border-yellow-400' : 
-                                                   'bg-blue-200 border-blue-400';
-                              
-                              return (
-                                <div
-                                  key={index}
-                                  className={`rounded border-2 ${priorityColor} p-1 flex flex-col justify-center items-center text-xs text-center relative`}
-                                  title={`${item.ProductName} - ${item.customerInfo?.name}`}
-                                >
-                                  <div className="font-medium truncate w-full">{item.ProductName.split(' ')[0]}</div>
-                                  <div className="text-xs text-gray-600">{item.WeightKG}kg</div>
-                                  {item.FragileFlag && (
-                                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center text-white text-xs">!</div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                          
-                          {/* Legend */}
-                          <div className="absolute -bottom-12 left-0 right-0 flex justify-center space-x-4 text-xs">
-                            <div className="flex items-center space-x-1">
-                              <div className="w-3 h-3 bg-red-200 border border-red-400 rounded"></div>
-                              <span>Priority 1</span>
-                            </div>
-                            <div className="flex items-center space-x-1">
-                              <div className="w-3 h-3 bg-yellow-200 border border-yellow-400 rounded"></div>
-                              <span>Priority 2</span>
-                            </div>
-                            <div className="flex items-center space-x-1">
-                              <div className="w-3 h-3 bg-blue-200 border border-blue-400 rounded"></div>
-                              <span>Priority 3+</span>
-                            </div>
-                            <div className="flex items-center space-x-1">
-                              <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                              <span>Fragile</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {optimizedItems.length > 8 && (
-                        <div className="mt-4 text-center text-sm text-gray-600">
-                          + {optimizedItems.length - 8} more items (use multiple levels or optimize further)
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="mt-6 flex justify-end space-x-3">
-                    <button className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium">
-                      Export Layout
-                    </button>
-                    <button className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 font-medium">
-                      Re-optimize
-                    </button>
-                    <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-                      Confirm Loading Plan
-                    </button>
-                  </div>
                 </div>
               );
             })}

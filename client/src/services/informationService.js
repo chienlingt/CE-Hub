@@ -168,6 +168,7 @@ export async function assignOrUpdateEmployeeTeam(employeeId, teamId) {
 
 // -- Order / OrderProduct --
 export const getAllOrders = () => getAllDocs("Order");
+export const getAllOrdersSummary = () => apiFetch('orders?include_products=false');
 export const getOrder = (id) => getDocById("Order", id);
 export const addOrder = (data) => addDocGeneric("Order", data, { idField: "OrderID", prefix: "ORD_" });
 export const updateOrder = (id, data) => updateDocGeneric("Order", id, data);

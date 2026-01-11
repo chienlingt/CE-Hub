@@ -104,8 +104,9 @@ function InfoModal({
                 </div>
             )}
             <form onSubmit={onFormSubmit} className="space-y-3">
-                {formFields.map(field => (
-                    <div key={field.key}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {formFields.map(field => (
+                        <div key={field.key}>
                         <label className="block font-medium mb-1 text-sm">{field.label}</label>
                         {field.type === 'select' ? (
                             <select
@@ -132,8 +133,9 @@ function InfoModal({
                             />
                         )}
                         {field.guidance && <div className="text-xs text-gray-400 mt-1">{field.guidance}</div>}
-                    </div>
-                ))}
+                        </div>
+                    ))}
+                </div>
                 <div className="flex gap-3 pt-2">
                     <button
                         type="submit"

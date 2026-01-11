@@ -491,6 +491,11 @@ export default function PlaceOrder() {
                       <p className="text-xs text-gray-600 mt-1">
                         {buildingInfo.isExisting ? 'Using existing building (shared access constraints)' : 'New building created'}
                       </p>
+                      {(buildingInfo.accessTimeWindowStart || buildingInfo.accessTimeWindowEnd) && (
+                        <p className="text-xs text-gray-600 mt-1">
+                          Access window: {buildingInfo.accessTimeWindowStart || 'N/A'} - {buildingInfo.accessTimeWindowEnd || 'N/A'}
+                        </p>
+                      )}
                     </div>
                   )}
                 </>
@@ -1108,6 +1113,11 @@ export default function PlaceOrder() {
                 {selectedBuilding && selectedBuilding.special_equipment_needed && (
                   <p className="text-xs text-gray-500 mt-1">
                     Building default: {selectedBuilding.special_equipment_needed}
+                  </p>
+                )}
+                {selectedBuilding && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Access window: {selectedBuilding.access_time_window_start || 'N/A'} - {selectedBuilding.access_time_window_end || 'N/A'}
                   </p>
                 )}
               </div>

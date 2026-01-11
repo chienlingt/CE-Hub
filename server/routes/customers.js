@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
+const { extractBuildingName } = require('../utils/addressParser');
 
 router.get('/', async (req, res) => {
   try {
@@ -25,10 +26,39 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    const existingCustomer = await prisma.customers.findUnique({
+      where: { id: req.params.id }
+    });
+
+    if (!existingCustomer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
     const customer = await prisma.customers.update({
       where: { id: req.params.id },
       data: req.body
     });
+
+    if (req.body.address && req.body.address !== existingCustomer.address) {
+      const areaName = extractBuildingName(req.body.address);
+      const latestOrder = await prisma.orders.findFirst({
+        where: { customer_id: customer.id, building_id: { not: null } },
+        orderBy: { created_at: 'desc' }
+      });
+
+      if (latestOrder?.building_id) {
+        await prisma.buildings.update({
+          where: { id: latestOrder.building_id },
+          data: {
+            building_name: areaName,
+            address: req.body.address,
+            postal_code: req.body.postcode || undefined,
+            updated_at: new Date()
+          }
+        });
+      }
+    }
+
     res.json(customer);
   } catch (err) {
     console.error('PUT /api/customers/:id error', err);

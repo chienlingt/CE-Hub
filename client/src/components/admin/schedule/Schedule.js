@@ -28,6 +28,8 @@ export default function Schedule() {
   const [showOrderEditModal, setShowOrderEditModal] = useState(false);
   const [orderEditLoading, setOrderEditLoading] = useState(false);
   const [orderEditError, setOrderEditError] = useState('');
+  const [showMonthlyOrdersModal, setShowMonthlyOrdersModal] = useState(false);
+  const [monthlyOrdersDate, setMonthlyOrdersDate] = useState(null);
 
   // Data
   const [timeSlots, setTimeSlots] = useState([]);
@@ -162,7 +164,15 @@ export default function Schedule() {
   // --- lookup helpers using normalized keys ---
   const getTruck = (truckId) => trucks.find(t => String(field.truckId(t)) === String(truckId));
   const getTeam = (teamId) => teams.find(t => String(field.teamId(t)) === String(teamId));
-  const getOrdersForSlot = (timeSlotId) => orders.filter(o => String(field.orderTimeSlotId(o)) === String(timeSlotId));
+  const getOrdersForSlot = (timeSlotId) => {
+    return orders
+      .filter(o => String(field.orderTimeSlotId(o)) === String(timeSlotId))
+      .sort((a, b) => {
+        const aStart = a.scheduled_start_date_time || a.ScheduledStartDateTime;
+        const bStart = b.scheduled_start_date_time || b.ScheduledStartDateTime;
+        return new Date(aStart || 0) - new Date(bStart || 0);
+      });
+  };
   const getOrderProductsForOrder = (orderId) => orderProducts.filter(op => String(field.orderProductOrderId(op)) === String(orderId));
 
   const getEmployeesForTeam = (teamId) => {
@@ -186,6 +196,13 @@ export default function Schedule() {
   };
 
   const formatDate = (date) => (date instanceof Date ? date.toISOString().split('T')[0] : String(date));
+  const formatTimeRange = (start, end) => {
+    if (!start || !end) return 'Not scheduled';
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 'Not scheduled';
+    return `${startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+  };
 
   const getTimeSlotsForDate = (date) => {
     const dateStr = formatDate(date);
@@ -196,6 +213,25 @@ export default function Schedule() {
       if (typeof slotDate === 'string') return slotDate.startsWith(dateStr);
       if (slotDate instanceof Date) return formatDate(slotDate) === dateStr;
       return String(slotDate) === dateStr;
+    }).sort((a, b) => {
+      const aStart = field.timeSlotStart(a) || '';
+      const bStart = field.timeSlotStart(b) || '';
+      return String(aStart).localeCompare(String(bStart));
+    });
+  };
+
+  const getOrdersForDate = (date) => {
+    const dateStr = formatDate(date);
+    return orders.filter(order => {
+      const start = order.scheduled_start_date_time || order.ScheduledStartDateTime;
+      if (!start) return false;
+      const startDate = new Date(start);
+      if (Number.isNaN(startDate.getTime())) return false;
+      return formatDate(startDate) === dateStr;
+    }).sort((a, b) => {
+      const aStart = a.scheduled_start_date_time || a.ScheduledStartDateTime;
+      const bStart = b.scheduled_start_date_time || b.ScheduledStartDateTime;
+      return new Date(aStart || 0) - new Date(bStart || 0);
     });
   };
 
@@ -312,15 +348,31 @@ export default function Schedule() {
     try {
       const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
-      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          time_slot_id: editingOrder.NewTimeSlotID
-        })
+      const attemptReassign = async (payload) => {
+        const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json().catch(() => ({}));
+        return { response, data };
+      };
+
+      let { response, data } = await attemptReassign({
+        time_slot_id: editingOrder.NewTimeSlotID
       });
 
-      const data = await response.json();
+      if (!response.ok || !data.success) {
+        if (data?.code === 'TRUCK_UPGRADE_REQUIRED') {
+          const confirmUpgrade = window.confirm(`${data.error || 'Truck space not enough.'} Reassign to 3-ton truck?`);
+          if (confirmUpgrade) {
+            ({ response, data } = await attemptReassign({
+              time_slot_id: editingOrder.NewTimeSlotID,
+              force_truck_tone: data.recommended_tone || 3
+            }));
+          }
+        }
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Failed to reassign order');
@@ -340,6 +392,35 @@ export default function Schedule() {
     setOrderEditLoading(false);
   };
 
+  const handleUnassignOrder = async () => {
+    setOrderEditLoading(true);
+    setOrderEditError('');
+    try {
+      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time_slot_id: null })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to unassign order');
+      }
+
+      const refreshedOrders = await getAllOrders();
+      setOrders(Array.isArray(refreshedOrders) ? refreshedOrders : (refreshedOrders?.data ?? []));
+
+      setShowOrderEditModal(false);
+      setEditingOrder(null);
+      alert('Order unassigned successfully!');
+    } catch (e) {
+      console.error('Order unassign error:', e);
+      setOrderEditError(e.message || 'Failed to unassign order');
+    }
+    setOrderEditLoading(false);
+  };
+
   // --- UI helpers ---
   const getStatusColor = (available, orderCount) => {
     if (!available) return 'bg-gray-100 border-gray-300';
@@ -354,6 +435,11 @@ export default function Schedule() {
       else next.add(slotId);
       return next;
     });
+  };
+
+  const openMonthlyOrders = (date) => {
+    setMonthlyOrdersDate(formatDate(date));
+    setShowMonthlyOrdersModal(true);
   };
 
   // --- Scheduler trigger ---
@@ -544,7 +630,13 @@ export default function Schedule() {
                   EstimatedInstallationTimeMax: field.productInstallMax(product)
                 };
               });
-              return { ...order, CustomerName: field.customerName(customer), BuildingName: field.buildingName(building), products };
+              return {
+                ...order,
+                CustomerName: field.customerName(customer),
+                BuildingName: field.buildingName(building),
+                BuildingAddress: building?.address ?? customer?.address ?? '',
+                products
+              };
             });
 
             return (
@@ -560,7 +652,7 @@ export default function Schedule() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Truck size={16} /> Truck Details</h3>
                     <div className="bg-white p-3 rounded-md border text-sm">
@@ -578,10 +670,15 @@ export default function Schedule() {
                       <div><strong>Members:</strong> {teamMembers.map(e => field.employeeName(e)).join(', ')}</div>
                     </div>
                   </div>
+                </div>
 
-                  <div className="space-y-2">
-                    <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Package size={16} /> Orders ({slotOrders.length})</h3>
-                    <div className="bg-white p-3 rounded-md border max-h-32 overflow-y-auto text-sm">
+                <div className="mt-4">
+                  <details className="bg-white rounded-md border text-sm">
+                    <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer text-gray-700 font-medium">
+                      <Package size={16} />
+                      Orders ({slotOrders.length})
+                    </summary>
+                    <div className="p-3 border-t">
                       {slotOrders.length > 0 ? slotOrders.map((order, orderIdx) => {
                         const orderKey = field.orderId(order) || `${slotId}-order-${orderIdx}`;
                         return (
@@ -594,7 +691,13 @@ export default function Schedule() {
                               <Edit size={12} />
                             </button>
                             <div className="font-medium text-sm pr-6">{order.CustomerName}</div>
-                            <div className="text-xs text-gray-600 flex items-center gap-1"><MapPin size={10} />{order.BuildingName}</div>
+                            <div className="text-xs text-gray-600 flex items-center gap-1">
+                              <MapPin size={10} />
+                              {order.BuildingAddress || order.BuildingName}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {formatTimeRange(order.scheduled_start_date_time, order.scheduled_end_date_time)}
+                            </div>
                             <div className="text-xs text-green-600">{field.orderStatus(order)}</div>
                             <div className="mt-1 space-y-1">
                               {order.products.map((product, idx) => {
@@ -611,7 +714,7 @@ export default function Schedule() {
                         );
                       }) : (<div className="text-gray-500 text-center text-xs">No orders assigned</div>)}
                     </div>
-                  </div>
+                  </details>
                 </div>
               </div>
             );
@@ -643,6 +746,7 @@ export default function Schedule() {
             const cellKey = date ? formatDate(date) : `empty-${idx}`;
             if (!date) return <div key={cellKey} className="h-24 bg-gray-50" />;
             const slots = getTimeSlotsForDate(date);
+            const ordersForDate = getOrdersForDate(date);
             return (
               <div key={cellKey} className="h-24 border bg-white relative group">
                 <div className="absolute top-1 left-1 text-xs text-gray-500">{date.getDate()}</div>
@@ -657,6 +761,14 @@ export default function Schedule() {
                   })}
                   {slots.length > 2 && <div key={`${cellKey}-more`} className="text-xs text-blue-600 cursor-pointer" onClick={() => { setSelectedDate(date); setViewMode("daily"); }}>+{slots.length - 2} more</div>}
                 </div>
+                {ordersForDate.length > 0 && (
+                  <button
+                    className="absolute bottom-1 left-1 text-xs text-blue-600 hover:text-blue-800"
+                    onClick={e => { e.stopPropagation(); openMonthlyOrders(date); }}
+                  >
+                    Orders: {ordersForDate.length}
+                  </button>
+                )}
                 <button key={`${cellKey}-add`} className="absolute bottom-1 right-1 text-blue-500 hover:text-blue-700 opacity-0 group-hover:opacity-100" title="Add TimeSlot" onClick={e => { e.stopPropagation(); setSelectedDate(date); handleAddTimeSlot(); }}><Plus size={12} /></button>
               </div>
             );
@@ -670,7 +782,7 @@ export default function Schedule() {
     if (!editingTimeSlot) return null;
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-md">
+        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-lg">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-800">{addOrEdit === 'add' ? 'Add TimeSlot' : 'Edit TimeSlot'}</h3>
             <button onClick={() => { setEditingTimeSlot(null); setShowAddModal(false); }} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
@@ -735,9 +847,12 @@ export default function Schedule() {
 
   const renderOrderEditModal = () => {
     if (!editingOrder) return null;
+    const buildingRecord = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(editingOrder)));
+    const accessStart = buildingRecord?.access_time_window_start ?? buildingRecord?.AccessTimeWindowStart ?? null;
+    const accessEnd = buildingRecord?.access_time_window_end ?? buildingRecord?.AccessTimeWindowEnd ?? null;
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-md">
+        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-lg">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-800">Reassign Order to Timeslot</h3>
             <button onClick={() => { setEditingOrder(null); setShowOrderEditModal(false); }} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
@@ -752,6 +867,7 @@ export default function Schedule() {
                 <div><strong>Customer:</strong> {editingOrder.CustomerName}</div>
                 <div><strong>Building:</strong> {editingOrder.BuildingName}</div>
                 <div><strong>Status:</strong> {field.orderStatus(editingOrder)}</div>
+                <div><strong>Access window:</strong> {accessStart || 'N/A'} - {accessEnd || 'N/A'}</div>
               </div>
             </div>
 
@@ -800,12 +916,68 @@ export default function Schedule() {
               {orderEditLoading ? 'Reassigning...' : 'Reassign Order'}
             </button>
             <button
+              onClick={handleUnassignOrder}
+              disabled={orderEditLoading}
+              className="flex-1 px-3 py-2 border border-red-300 text-red-600 rounded-md hover:bg-red-50 text-sm font-medium disabled:text-gray-400"
+            >
+              Unassign
+            </button>
+            <button
               onClick={() => { setEditingOrder(null); setShowOrderEditModal(false); }}
               className="flex-1 px-3 py-2 border border-gray-300 rounded-md hover:bg-gray-50 text-sm font-medium text-gray-700"
             >
               Cancel
             </button>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderMonthlyOrdersModal = () => {
+    if (!showMonthlyOrdersModal || !monthlyOrdersDate) return null;
+    const dateObj = new Date(monthlyOrdersDate);
+    const dayOrders = getOrdersForDate(dateObj).map(order => {
+      const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
+      const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
+      return {
+        ...order,
+        CustomerName: field.customerName(customer),
+        BuildingName: field.buildingName(building)
+      };
+    });
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white p-4 rounded-md shadow-sm w-full max-w-lg">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Orders on {monthlyOrdersDate}</h3>
+            <button onClick={() => setShowMonthlyOrdersModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          {dayOrders.length === 0 ? (
+            <div className="text-sm text-gray-500 text-center py-6">No orders scheduled</div>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {dayOrders.map((order, idx) => {
+                const orderKey = field.orderId(order) || `monthly-order-${idx}`;
+                return (
+                  <div key={orderKey} className="border rounded-md p-3 relative">
+                    <button
+                      onClick={() => { setShowMonthlyOrdersModal(false); handleEditOrder(order); }}
+                      className="absolute top-2 right-2 p-1 hover:bg-blue-100 rounded text-blue-600"
+                      title="Reassign to different timeslot"
+                    >
+                      <Edit size={14} />
+                    </button>
+                    <div className="font-medium text-sm pr-6">{order.CustomerName}</div>
+                    <div className="text-xs text-gray-600">{order.BuildingName}</div>
+                    <div className="text-xs text-gray-500">{formatTimeRange(order.scheduled_start_date_time, order.scheduled_end_date_time)}</div>
+                    <div className="text-xs text-green-600">{field.orderStatus(order)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -871,6 +1043,7 @@ export default function Schedule() {
 
       {showAddModal && renderTimeSlotModal()}
       {showOrderEditModal && renderOrderEditModal()}
+      {showMonthlyOrdersModal && renderMonthlyOrdersModal()}
     </div>
   );
 }

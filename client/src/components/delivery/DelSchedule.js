@@ -25,12 +25,15 @@ import {
   getAllCustomers,
   getAllBuildings,
   getAllEmployees,
+  getAllEmployeeTeamAssignments,
   getAllTimeSlots,
   getAllTeams,
   getAllTrucks
 } from '../../services/informationService';
+import { useAuth } from '../../contexts/AuthContext';
 
 export default function DeliverySchedule() {
+  const { currentUser } = useAuth();
   const [orders, setOrders] = useState([]);
   const [orderProducts, setOrderProducts] = useState([]);
   const [products, setProducts] = useState([]);
@@ -38,10 +41,12 @@ export default function DeliverySchedule() {
   const [buildings, setBuildings] = useState([]);
   const [timeSlots, setTimeSlots] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [trucks, setTrucks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTeam, setSelectedTeam] = useState("all");
+  const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
   const [currentOrder, setCurrentOrder] = useState(null);
 
 
@@ -55,6 +60,7 @@ export default function DeliverySchedule() {
           productsData,
           customersData,
           buildingsData,
+          assignmentsData,
           timeSlotsData,
           teamsData,
           trucksData
@@ -64,6 +70,7 @@ export default function DeliverySchedule() {
           getAllProducts(),
           getAllCustomers(),
           getAllBuildings(),
+          getAllEmployeeTeamAssignments(),
           getAllTimeSlots(),
           getAllTeams(),
           getAllTrucks()
@@ -76,6 +83,7 @@ export default function DeliverySchedule() {
         setProducts(Array.isArray(productsData) ? productsData : (productsData?.data ?? []));
         setCustomers(Array.isArray(customersData) ? customersData : (customersData?.data ?? []));
         setBuildings(Array.isArray(buildingsData) ? buildingsData : (buildingsData?.data ?? []));
+        setAssignments(Array.isArray(assignmentsData) ? assignmentsData : (assignmentsData?.data ?? []));
         setTimeSlots(Array.isArray(timeSlotsData) ? timeSlotsData : (timeSlotsData?.data ?? []));
         setTeams(Array.isArray(teamsData) ? teamsData : (teamsData?.data ?? []));
         setTrucks(Array.isArray(trucksData) ? trucksData : (trucksData?.data ?? []));
@@ -87,6 +95,7 @@ export default function DeliverySchedule() {
         setProducts([]);
         setCustomers([]);
         setBuildings([]);
+        setAssignments([]);
         setTimeSlots([]);
         setTeams([]);
         setTrucks([]);
@@ -151,6 +160,43 @@ export default function DeliverySchedule() {
     truckPlate: (truck) => truck.plate_no || truck.PlateNo || truck.CarPlate || ''
   };
 
+  const getEmployeeId = () => {
+    return currentUser?.employeeId || sessionStorage.getItem('employeeId') || '';
+  };
+
+  const getAssignmentTeamId = (assignment) => {
+    return assignment?.team_id || assignment?.TeamID || assignment?.teamId || assignment?.team?.id || assignment?.team?.TeamID || null;
+  };
+
+  const getAssignmentEmployeeId = (assignment) => {
+    return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
+  };
+
+  const deliveryTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('delivery'));
+
+  useEffect(() => {
+    if (!teamAutoSelectEnabled) return;
+    if (selectedTeam !== 'all') return;
+    if (deliveryTeams.length === 0) return;
+
+    const employeeId = getEmployeeId();
+    const assignment = assignments.find(a => String(getAssignmentEmployeeId(a)) === String(employeeId));
+    if (!assignment) {
+      const randomTeam = deliveryTeams[Math.floor(Math.random() * deliveryTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+      return;
+    }
+
+    const assignedTeamId = getAssignmentTeamId(assignment);
+    const matchedTeam = deliveryTeams.find(team => String(field.teamId(team)) === String(assignedTeamId));
+    if (matchedTeam) {
+      setSelectedTeam(field.teamId(matchedTeam));
+    } else {
+      const randomTeam = deliveryTeams[Math.floor(Math.random() * deliveryTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+    }
+  }, [assignments, deliveryTeams, currentUser, selectedTeam, teamAutoSelectEnabled]);
+
   // Filter orders for delivery (scheduled orders only)
   const deliveryOrders = orders.filter(order => {
     const status = field.orderStatus(order);
@@ -160,9 +206,14 @@ export default function DeliverySchedule() {
   // Filter orders by selected date
   const filteredOrders = deliveryOrders.filter(order => {
     const scheduledStart = field.orderScheduledStart(order);
-    if (!scheduledStart) return false;
-    const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
-    return orderDate === selectedDate;
+    const timeSlot = timeSlots.find(ts => String(field.timeSlotId(ts)) === String(field.orderTimeSlotId(order)));
+    const slotDate = timeSlot ? field.timeSlotDate(timeSlot) : null;
+    const orderDate = slotDate || (scheduledStart ? new Date(scheduledStart).toISOString().split('T')[0] : null);
+    if (!orderDate) return false;
+    if (orderDate !== selectedDate) return false;
+    if (selectedTeam === 'all') return true;
+    const deliveryTeamId = timeSlot ? field.timeSlotDeliveryTeamId(timeSlot) : null;
+    return String(deliveryTeamId) === String(selectedTeam);
   });
 
 
@@ -299,6 +350,24 @@ export default function DeliverySchedule() {
                   onChange={(e) => setSelectedDate(e.target.value)}
                   className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+              </div>
+              <div className="flex items-center space-x-2">
+                <User className="h-4 w-4 text-gray-500" />
+                <select
+                  value={selectedTeam}
+                  onChange={(e) => {
+                    setSelectedTeam(e.target.value);
+                    setTeamAutoSelectEnabled(false);
+                  }}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="all">All Teams</option>
+                  {deliveryTeams.map(team => (
+                    <option key={field.teamId(team)} value={field.teamId(team)}>
+                      {field.teamType(team)}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>

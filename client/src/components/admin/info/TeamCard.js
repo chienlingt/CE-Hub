@@ -4,6 +4,8 @@ const TeamCard = ({ team, members, onEdit, onDelete, saving }) => {
     const { id, team_type } = team;
     const activeMembers = members.filter(m => m.active_flag);
     const memberCount = activeMembers.length;
+    const getMemberName = (member) => member?.name || member?.display_name || "Unknown";
+    const getMemberRole = (member) => member?.role?.name || member?.roleName || member?.role || "Unassigned";
 
     return (
         <div className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow duration-200">
@@ -50,13 +52,13 @@ const TeamCard = ({ team, members, onEdit, onDelete, saving }) => {
                         {members.map(member => (
                             <div key={member.id} className="flex justify-between items-center text-sm">
                                 <span className={member.active_flag ? "text-gray-800" : "text-gray-400"}>
-                                    {member.name}
+                                    {getMemberName(member)}
                                 </span>
                                 <span className={`text-xs px-2 py-1 rounded ${member.active_flag
                                         ? "bg-green-100 text-green-700"
                                         : "bg-gray-100 text-gray-500"
                                     }`}>
-                                    {member.role.name}
+                                    {getMemberRole(member)}
                                 </span>
                             </div>
                         ))}

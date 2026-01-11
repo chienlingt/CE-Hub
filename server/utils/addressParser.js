@@ -18,11 +18,18 @@ function extractBuildingName(address) {
   }
 
   const trimmedAddress = address.trim();
+  const addressParts = trimmedAddress.split(',').map(part => part.trim()).filter(Boolean);
+
+  // Pattern 0: Area codes like "SS2", "SS 15", "SS-15"
+  const areaMatch = trimmedAddress.match(/\bSS[\s-]?\d{1,2}\b/i);
+  if (areaMatch) {
+    return areaMatch[0].replace(/[\s-]/g, '').toUpperCase();
+  }
 
   // Pattern 1: "Unit X, Building Name" or "No X, Building Name"
   // Extract everything after the last comma
   if (trimmedAddress.includes(',')) {
-    const parts = trimmedAddress.split(',');
+    const parts = addressParts;
     // Get the part after the last comma (usually the building name)
     const buildingPart = parts[parts.length - 1].trim();
 

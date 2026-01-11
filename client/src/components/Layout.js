@@ -82,7 +82,7 @@ const Layout = () => {
         { id: 'building', label: 'Building', path: 'building', component: BuildingInfo },
         { id: 'product', label: 'Product', path: 'product', component: ProductInfo },
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
-        { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
+        // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
       ],
     },
     cases: {

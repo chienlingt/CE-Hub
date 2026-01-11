@@ -7,15 +7,19 @@ import {
     getAllCustomers,
     getAllBuildings,
     getAllEmployees,
+    getAllEmployeeTeamAssignments,
     getAllTeams
 } from '../../services/informationService';
+import { useAuth } from '../../contexts/AuthContext';
 
 const InstallationSchedule = () => {
+  const { currentUser } = useAuth();
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date();
     return today.toISOString().split('T')[0];
   });
   const [selectedTeam, setSelectedTeam] = useState('all');
+  const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
 
   // Data state
   const [orders, setOrders] = useState([]);
@@ -25,6 +29,7 @@ const InstallationSchedule = () => {
   const [buildings, setBuildings] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [installationSchedules, setInstallationSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -41,6 +46,7 @@ const InstallationSchedule = () => {
           customersData,
           buildingsData,
           employeesData,
+          assignmentsData,
           teamsData,
           installationSchedulesResponse
         ] = await Promise.all([
@@ -50,6 +56,7 @@ const InstallationSchedule = () => {
           getAllCustomers(),
           getAllBuildings(),
           getAllEmployees(),
+          getAllEmployeeTeamAssignments(),
           getAllTeams(),
           fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/installation-schedules`)
             .then(res => res.ok ? res.json() : { success: false, schedules: [] })
@@ -66,6 +73,7 @@ const InstallationSchedule = () => {
         setCustomers(Array.isArray(customersData) ? customersData : (customersData?.data ?? []));
         setBuildings(Array.isArray(buildingsData) ? buildingsData : (buildingsData?.data ?? []));
         setEmployees(Array.isArray(employeesData) ? employeesData : (employeesData?.data ?? []));
+        setAssignments(Array.isArray(assignmentsData) ? assignmentsData : (assignmentsData?.data ?? []));
         setTeams(Array.isArray(teamsData) ? teamsData : (teamsData?.data ?? []));
         setInstallationSchedules(installSchedules);
       } catch (error) {
@@ -77,6 +85,7 @@ const InstallationSchedule = () => {
         setCustomers([]);
         setBuildings([]);
         setEmployees([]);
+        setAssignments([]);
         setTeams([]);
         setInstallationSchedules([]);
       } finally {
@@ -148,6 +157,43 @@ const InstallationSchedule = () => {
     installScheduleEstArrival: (is) => is.estimated_arrival_time,
     installScheduleStatus: (is) => is.status || 'Scheduled'
   };
+
+  const getEmployeeId = () => {
+    return currentUser?.employeeId || sessionStorage.getItem('employeeId') || '';
+  };
+
+  const getAssignmentTeamId = (assignment) => {
+    return assignment?.team_id || assignment?.TeamID || assignment?.teamId || assignment?.team?.id || assignment?.team?.TeamID || null;
+  };
+
+  const getAssignmentEmployeeId = (assignment) => {
+    return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
+  };
+
+  const installationTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('installation'));
+
+  useEffect(() => {
+    if (!teamAutoSelectEnabled) return;
+    if (selectedTeam !== 'all') return;
+    if (installationTeams.length === 0) return;
+
+    const employeeId = getEmployeeId();
+    const assignment = assignments.find(a => String(getAssignmentEmployeeId(a)) === String(employeeId));
+    if (!assignment) {
+      const randomTeam = installationTeams[Math.floor(Math.random() * installationTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+      return;
+    }
+
+    const assignedTeamId = getAssignmentTeamId(assignment);
+    const matchedTeam = installationTeams.find(team => String(field.teamId(team)) === String(assignedTeamId));
+    if (matchedTeam) {
+      setSelectedTeam(field.teamId(matchedTeam));
+    } else {
+      const randomTeam = installationTeams[Math.floor(Math.random() * installationTeams.length)];
+      if (randomTeam) setSelectedTeam(field.teamId(randomTeam));
+    }
+  }, [assignments, installationTeams, currentUser, selectedTeam, teamAutoSelectEnabled]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -221,7 +267,8 @@ const InstallationSchedule = () => {
       const scheduledStart = field.orderScheduledStart(order);
       if (!scheduledStart) return false;
       const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
-      return orderDate === selectedDate;
+      if (orderDate !== selectedDate) return false;
+      return selectedTeam === 'all';
     }
   });
   const formatTime = (dateTime) => {
@@ -284,11 +331,14 @@ const InstallationSchedule = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">Team</label>
               <select
                 value={selectedTeam}
-                onChange={(e) => setSelectedTeam(e.target.value)}
+                onChange={(e) => {
+                  setSelectedTeam(e.target.value);
+                  setTeamAutoSelectEnabled(false);
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="all">All Teams</option>
-                {teams.map(team => (
+                {installationTeams.map(team => (
                   <option key={field.teamId(team)} value={field.teamId(team)}>
                     {field.teamType(team)}
                   </option>

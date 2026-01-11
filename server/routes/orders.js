@@ -3,10 +3,106 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const { extractBuildingName, normalizeBuildingName } = require('../utils/addressParser');
+const { scheduleOrders } = require('../services/scheduler');
+const dayjs = require('dayjs');
+const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
+
+const TRAVEL_FALLBACK_MINUTES = 10;
+const BETWEEN_ORDER_BUFFER_MINUTES = 10;
+const SERVICE_BUFFER_MINUTES = 10;
+
+function getTruckVolumeCm3(truck) {
+  const length = Number(truck?.length_cm || 0);
+  const width = Number(truck?.width_cm || 0);
+  const height = Number(truck?.height_cm || 0);
+  return length * width * height;
+}
+
+function getMaxCapacityByTone(trucks, tonePredicate) {
+  let maxCapacity = 0;
+  for (const truck of trucks) {
+    const tone = Number(truck?.tone || 0);
+    if (!tonePredicate(tone)) continue;
+    const volume = getTruckVolumeCm3(truck);
+    if (volume > maxCapacity) maxCapacity = volume;
+  }
+  return maxCapacity;
+}
+
+function pickTruckForVolume(trucks, minTone, totalVolumeCm3) {
+  const candidates = trucks
+    .filter(truck => Number(truck?.tone || 0) >= minTone)
+    .map(truck => ({ truck, volume: getTruckVolumeCm3(truck) }))
+    .filter(entry => entry.volume >= totalVolumeCm3)
+    .sort((a, b) => {
+      const toneA = Number(a.truck?.tone || 0);
+      const toneB = Number(b.truck?.tone || 0);
+      if (toneA !== toneB) return toneA - toneB;
+      return a.volume - b.volume;
+    });
+
+  return candidates.length > 0 ? candidates[0].truck : null;
+}
+
+function calculateOrderServiceMinutes(order) {
+  let totalDeliveryMinutes = 0;
+  let totalInstallationMinutes = 0;
+
+  for (const op of order.order_products || []) {
+    const product = op.products || {};
+    const quantity = Number(op.quantity || 0);
+
+    totalDeliveryMinutes += 15 * Math.max(quantity, 1);
+
+    if (op.dismantle_required) {
+      totalInstallationMinutes += Number(product.dismantle_time || 0);
+    }
+
+    const customMin = op.custom_installation_time_min ?? null;
+    const customMax = op.custom_installation_time_max ?? null;
+    const productMin = product.estimated_installation_time_min ?? null;
+    const productMax = product.estimated_installation_time_max ?? null;
+    const installationMinutes = customMax ?? customMin ?? productMax ?? productMin ?? 0;
+    totalInstallationMinutes += Number(installationMinutes || 0);
+  }
+
+  return totalDeliveryMinutes + totalInstallationMinutes + SERVICE_BUFFER_MINUTES;
+}
+
+function calculateOrderVolumeCm3(order) {
+  let totalVolume = 0;
+  for (const op of order.order_products || []) {
+    const product = op.products || {};
+    const length = Number(product.package_length_cm || 0);
+    const width = Number(product.package_width_cm || 0);
+    const height = Number(product.package_height_cm || 0);
+    const quantity = Number(op.quantity || 0);
+    totalVolume += length * width * height * Math.max(quantity, 1);
+  }
+  return totalVolume;
+}
+
+async function estimateTravelMinutes(fromAddress, toAddress) {
+  if (!fromAddress || !toAddress) {
+    return TRAVEL_FALLBACK_MINUTES;
+  }
+
+  try {
+    const fromCoords = await getCoordinatesFromAddress(fromAddress);
+    const toCoords = await getCoordinatesFromAddress(toAddress);
+    const route = await calculateRoute([fromCoords, toCoords], new Date());
+    const durationSeconds = route.durationWithTraffic ?? route.duration ?? 0;
+    return Math.max(Math.ceil(durationSeconds / 60), TRAVEL_FALLBACK_MINUTES);
+  } catch (error) {
+    console.warn('[Order Reassign] Travel estimate fallback:', error.message);
+    return TRAVEL_FALLBACK_MINUTES;
+  }
+}
 
 router.get('/', async (req, res) => {
   try {
     const { status, search, date_from, date_to, sort = 'created_desc' } = req.query;
+    const includeProducts = req.query.include_products !== 'false';
 
     // Build where clause
     const where = {};
@@ -62,14 +158,38 @@ router.get('/', async (req, res) => {
         orderBy = { created_at: 'desc' };
     }
 
+    const include = {
+      customers: true,
+      employees: true,
+      buildings: true,
+    };
+
+    if (includeProducts) {
+      include.order_products = {
+        include: {
+          products: {
+            select: {
+              id: true,
+              product_name: true,
+              package_length_cm: true,
+              package_width_cm: true,
+              package_height_cm: true,
+              fragile_flag: true,
+              installer_team_required_flag: true,
+              dismantle_time: true,
+              estimated_installation_time_min: true,
+              estimated_installation_time_max: true,
+              no_lie_down_flag: true,
+              dismantle_required_flag: true
+            }
+          }
+        }
+      };
+    }
+
     const orders = await prisma.orders.findMany({
       where,
-      include: {
-        customers: true,
-        employees: true,
-        buildings: true,
-        order_products: { include: { products: true } }
-      },
+      include,
       orderBy
     });
 
@@ -172,7 +292,26 @@ router.post('/', async (req, res) => {
       include: {
         customers: true,
         buildings: true,
-        order_products: { include: { products: true } },
+        order_products: {
+          include: {
+            products: {
+              select: {
+                id: true,
+                product_name: true,
+                package_length_cm: true,
+                package_width_cm: true,
+                package_height_cm: true,
+                fragile_flag: true,
+                installer_team_required_flag: true,
+                dismantle_time: true,
+                estimated_installation_time_min: true,
+                estimated_installation_time_max: true,
+                no_lie_down_flag: true,
+                dismantle_required_flag: true
+              }
+            }
+          }
+        },
       },
     });
 
@@ -182,7 +321,9 @@ router.post('/', async (req, res) => {
       buildingInfo: {
         buildingId: finalBuilding.id,
         buildingName: finalBuilding.building_name,
-        isExisting: !!existingBuilding
+        isExisting: !!existingBuilding,
+        accessTimeWindowStart: finalBuilding.access_time_window_start,
+        accessTimeWindowEnd: finalBuilding.access_time_window_end
       }
     });
   } catch (err) {
@@ -266,7 +407,26 @@ router.put('/:id', async (req, res) => {
           customers: true,
           employees: true,
           buildings: true,
-          order_products: { include: { products: true } }
+          order_products: {
+            include: {
+              products: {
+                select: {
+                  id: true,
+                  product_name: true,
+                  package_length_cm: true,
+                  package_width_cm: true,
+                  package_height_cm: true,
+                  fragile_flag: true,
+                  installer_team_required_flag: true,
+                  dismantle_time: true,
+                  estimated_installation_time_min: true,
+                  estimated_installation_time_max: true,
+                  no_lie_down_flag: true,
+                  dismantle_required_flag: true
+                }
+              }
+            }
+          }
         }
       });
 
@@ -280,7 +440,26 @@ router.put('/:id', async (req, res) => {
           customers: true,
           employees: true,
           buildings: true,
-          order_products: { include: { products: true } }
+          order_products: {
+            include: {
+              products: {
+                select: {
+                  id: true,
+                  product_name: true,
+                  package_length_cm: true,
+                  package_width_cm: true,
+                  package_height_cm: true,
+                  fragile_flag: true,
+                  installer_team_required_flag: true,
+                  dismantle_time: true,
+                  estimated_installation_time_min: true,
+                  estimated_installation_time_max: true,
+                  no_lie_down_flag: true,
+                  dismantle_required_flag: true
+                }
+              }
+            }
+          }
         }
       });
 
@@ -298,15 +477,20 @@ router.put('/:id', async (req, res) => {
 // PATCH /:id - Reassign order to different timeslot (admin only)
 router.patch('/:id', async (req, res) => {
   try {
-    const { time_slot_id } = req.body;
+    const { time_slot_id, force_truck_tone } = req.body;
 
-    if (!time_slot_id) {
+    if (time_slot_id === undefined) {
       return res.status(400).json({ error: 'time_slot_id is required' });
     }
 
     // Fetch current order
     const existingOrder = await prisma.orders.findUnique({
-      where: { id: req.params.id }
+      where: { id: req.params.id },
+      include: {
+        customers: true,
+        buildings: true,
+        order_products: { include: { products: true } }
+      }
     });
 
     if (!existingOrder) {
@@ -318,6 +502,50 @@ router.patch('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Cannot reassign delivered orders' });
     }
 
+    if (!time_slot_id) {
+      const updatedOrder = await prisma.orders.update({
+        where: { id: req.params.id },
+        data: {
+          time_slot_id: null,
+          scheduled_start_date_time: null,
+          scheduled_end_date_time: null,
+          order_status: 'Pending',
+          updated_at: new Date()
+        },
+        include: {
+          time_slots: true,
+          customers: true,
+          buildings: true,
+          order_products: {
+            include: {
+              products: {
+                select: {
+                  id: true,
+                  product_name: true,
+                  package_length_cm: true,
+                  package_width_cm: true,
+                  package_height_cm: true,
+                  fragile_flag: true,
+                  installer_team_required_flag: true,
+                  dismantle_time: true,
+                  estimated_installation_time_min: true,
+                  estimated_installation_time_max: true,
+                  no_lie_down_flag: true,
+                  dismantle_required_flag: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      return res.json({
+        success: true,
+        order: updatedOrder,
+        message: 'Order unassigned'
+      });
+    }
+
     // Verify new timeslot exists
     const newTimeslot = await prisma.time_slots.findUnique({
       where: { id: time_slot_id }
@@ -327,18 +555,167 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Timeslot not found' });
     }
 
+    const slotDate = newTimeslot.date;
+    const slotStart = dayjs(`${slotDate} ${newTimeslot.time_window_start}`);
+    const slotEnd = dayjs(`${slotDate} ${newTimeslot.time_window_end}`);
+
+    const building = existingOrder.buildings;
+    if (building?.access_time_window_start && building?.access_time_window_end) {
+      const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
+      const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
+      if (slotStart.isBefore(accessStart) || slotEnd.isAfter(accessEnd)) {
+        return res.status(409).json({
+          error: 'Timeslot exceeds building access window',
+          code: 'ACCESS_WINDOW'
+        });
+      }
+    }
+
+    const slotOrders = await prisma.orders.findMany({
+      where: {
+        time_slot_id,
+        id: { not: existingOrder.id }
+      },
+      include: {
+        customers: true,
+        buildings: true,
+        order_products: { include: { products: true } }
+      },
+      orderBy: {
+        scheduled_end_date_time: 'desc'
+      }
+    });
+
+    const lastOrder = slotOrders.find(o => o.scheduled_end_date_time);
+    const orderServiceMinutes = calculateOrderServiceMinutes(existingOrder);
+    const orderVolumeCm3 = calculateOrderVolumeCm3(existingOrder);
+    const slotVolumeCm3 = slotOrders.reduce((sum, order) => sum + calculateOrderVolumeCm3(order), 0);
+    const totalVolumeCm3 = slotVolumeCm3 + orderVolumeCm3;
+
+    let fromAddress = null;
+    if (lastOrder) {
+      fromAddress = lastOrder.customers?.address || lastOrder.buildings?.address || lastOrder.buildings?.building_name || null;
+    }
+    if (!fromAddress) {
+      const config = await prisma.scheduler_config.findFirst();
+      fromAddress = config?.warehouse_address || null;
+    }
+
+    const toAddress = existingOrder.customers?.address || existingOrder.buildings?.address || existingOrder.buildings?.building_name || null;
+    const travelMinutes = await estimateTravelMinutes(fromAddress, toAddress);
+
+    let availableStart = slotStart.clone();
+    if (lastOrder?.scheduled_end_date_time) {
+      const lastEnd = dayjs(lastOrder.scheduled_end_date_time);
+      if (lastEnd.isAfter(availableStart)) {
+        availableStart = lastEnd.add(BETWEEN_ORDER_BUFFER_MINUTES, 'minute');
+      }
+    }
+
+    let orderStart = availableStart.add(travelMinutes, 'minute');
+    if (building?.access_time_window_start) {
+      const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
+      if (orderStart.isBefore(accessStart)) {
+        orderStart = accessStart;
+      }
+    }
+
+    const orderEnd = orderStart.add(orderServiceMinutes, 'minute');
+    if (building?.access_time_window_end) {
+      const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
+      if (orderEnd.isAfter(accessEnd)) {
+        return res.status(409).json({
+          error: 'Order exceeds building access window',
+          code: 'ACCESS_WINDOW'
+        });
+      }
+    }
+
+    if (orderEnd.isAfter(slotEnd)) {
+      return res.status(409).json({
+        error: 'Not enough time in selected timeslot',
+        code: 'TIME_WINDOW'
+      });
+    }
+
+    const allTrucks = await prisma.trucks.findMany();
+    const maxOneTonCapacity = getMaxCapacityByTone(allTrucks, tone => tone > 0 && tone <= 1);
+    const maxThreeTonCapacity = getMaxCapacityByTone(allTrucks, tone => tone >= 3);
+
+    if (maxThreeTonCapacity > 0 && totalVolumeCm3 > maxThreeTonCapacity) {
+      return res.status(409).json({
+        error: 'Truck not fit for this order size',
+        code: 'TRUCK_NOT_FIT'
+      });
+    }
+
+    const requiresThreeTon = maxOneTonCapacity > 0 && totalVolumeCm3 > maxOneTonCapacity;
+    const currentTruck = newTimeslot.truck_id ? allTrucks.find(t => t.id === newTimeslot.truck_id) : null;
+    const currentTruckTone = Number(currentTruck?.tone || 0);
+    const currentTruckVolume = currentTruck ? getTruckVolumeCm3(currentTruck) : 0;
+
+    if (requiresThreeTon) {
+      if (currentTruckTone >= 3 && currentTruckVolume >= totalVolumeCm3) {
+        // Current truck fits
+      } else {
+        const upgradeTruck = pickTruckForVolume(allTrucks, 3, totalVolumeCm3);
+        if (!upgradeTruck) {
+          return res.status(409).json({
+            error: 'Truck not fit for this order size',
+            code: 'TRUCK_NOT_FIT'
+          });
+        }
+
+        if (!force_truck_tone || Number(force_truck_tone) < 3) {
+          return res.status(409).json({
+            error: 'Truck space not enough, reassign truck?',
+            code: 'TRUCK_UPGRADE_REQUIRED',
+            recommended_tone: 3,
+            truck_id: upgradeTruck.id
+          });
+        }
+
+        await prisma.time_slots.update({
+          where: { id: time_slot_id },
+          data: { truck_id: upgradeTruck.id }
+        });
+      }
+    }
+
     // Update order timeslot
     const updatedOrder = await prisma.orders.update({
       where: { id: req.params.id },
       data: {
         time_slot_id: time_slot_id,
+        scheduled_start_date_time: orderStart.toDate(),
+        scheduled_end_date_time: orderEnd.toDate(),
+        order_status: 'Scheduled',
         updated_at: new Date()
       },
       include: {
         time_slots: true,
         customers: true,
         buildings: true,
-        order_products: { include: { products: true } }
+        order_products: {
+          include: {
+            products: {
+              select: {
+                id: true,
+                product_name: true,
+                package_length_cm: true,
+                package_width_cm: true,
+                package_height_cm: true,
+                fragile_flag: true,
+                installer_team_required_flag: true,
+                dismantle_time: true,
+                estimated_installation_time_min: true,
+                estimated_installation_time_max: true,
+                no_lie_down_flag: true,
+                dismantle_required_flag: true
+              }
+            }
+          }
+        }
       }
     });
 

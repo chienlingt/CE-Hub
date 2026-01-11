@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
-  getAllEmployees, getAllOrders, getAllCases
+  getAllEmployees, getAllOrdersSummary, getAllCases
 } from '../../../services/informationService';
 import {
   Users, Star, CheckCircle, AlertCircle, TrendingUp, TrendingDown,
@@ -115,7 +115,7 @@ const ChartCard = ({ title, children, className = "" }) => (
 export default function Overview() {
   const [employees, setEmployees] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [cases, setCases] = useState([]);
+  const [reports, setReports] = useState([]);
 
   // selected month state (focus month). Defaults to current month.
   const [selectedMonthDate, setSelectedMonthDate] = useState(() => {
@@ -131,38 +131,38 @@ export default function Overview() {
       setEmployees(data);
     }).catch(err => console.warn('[Dashboard] Error fetching employees:', err));
 
-    getAllOrders().then(data => {
+    getAllOrdersSummary().then(data => {
       // console.log('[Dashboard] Orders fetched:', data);
       // console.log('[Dashboard] First order sample:', data[0]);
       setOrders(data);
     }).catch(err => console.warn('[Dashboard] Error fetching orders:', err));
 
     getAllCases().then(data => {
-      // console.log('[Dashboard] Cases fetched:', data);
-      setCases(data);
-    }).catch(err => console.warn('[Dashboard] Error fetching cases:', err));
+      // console.log('[Dashboard] Reports fetched:', data);
+      setReports(data);
+    }).catch(err => console.warn('[Dashboard] Error fetching reports:', err));
   }, []);
 
   // Helpers for flexible field access (supports PascalCase, camelCase, and snake_case)
-  const getOrderId = (order) => order.OrderID || order.orderId || order.id;
+  const getOrderId = (order) => order.id || order.order_id || order.OrderID || order.orderId;
   const getOrderRating = (order) => {
-    const r = order.CustomerRating ?? order.customer_rating ?? order.customerRating ?? order.rating ?? order.Rating ?? null;
+    const r = order.rating ?? null;
     return (r === '' || r === null || typeof r === 'undefined') ? null : Number(r);
   };
-  const getOrderFeedback = (order) => order.CustomerFeedback ?? order.customer_feedback ?? order.customerFeedback ?? order.feedback ?? '';
-  const getOrderStatus = (order) => order.OrderStatus ?? order.order_status ?? order.orderStatus ?? order.status ?? '';
-  const getCasesId = (c) => c.CasesID || c.casesId || c.id;
-  const getCasesContent = (c) => c.Content ?? c.content ?? '';
-  const getCasesStatus = (c) => c.Status ?? c.status ?? '';
+  const getOrderFeedback = (order) => order.complaint ?? '';
+  const getOrderStatus = (order) => order.order_status ?? '';
+  const getReportId = (r) => r.id || r.report_id || r.ReportID || r.reportId;
+  const getReportContent = (r) => r.content ?? '';
+  const getReportStatus = (r) => r.status ?? '';
 
-  // Robust getOrderDate: returns Date object or null if no valid date found.
-  const getOrderDate = (order) => {
+  const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
+  const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
+  const isPendingStatus = (status) => ['pending'].includes(normalizeStatus(status));
+
+  // Robust getOrderCreatedDate: returns Date object or null if no valid date found.
+  const getOrderCreatedDate = (order) => {
     if (!order) return null;
-    const tryFields = ['actual_arrival_date_time',
-      // 'DeliveredDate', 'delivered_date', 'deliveredDate',
-      // 'OrderDate', 'order_date', 'orderDate',
-      // 'created_at', 'createdAt', 'CreatedAt', 'Created'
-    ];
+    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'created', 'createdDate'];
     for (const f of tryFields) {
       const v = order[f];
       if (!v) continue;
@@ -181,12 +181,36 @@ export default function Overview() {
     return null;
   };
 
-  // Robust getCasesDate: similar to getOrderDate for cases
-  const getCasesDate = (c) => {
-    if (!c) return null;
-    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'Date', 'ReportDate', 'report_date'];
+  const getOrderCompletionDate = (order) => {
+    if (!order) return null;
+    const tryFields = [
+      'actual_end_date_time',
+      'actual_arrival_date_time',
+      'scheduled_end_date_time',
+      'updated_at',
+      'updatedAt'
+    ];
     for (const f of tryFields) {
-      const v = c[f];
+      const v = order[f];
+      if (!v) continue;
+      if (typeof v?.toDate === 'function') {
+        const d = v.toDate();
+        if (d instanceof Date && !isNaN(d.getTime())) return d;
+      }
+      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+        const d = v instanceof Date ? v : new Date(v);
+        if (d instanceof Date && !isNaN(d.getTime())) return d;
+      }
+    }
+    return null;
+  };
+
+  // Robust getReportDate: similar to getOrderCreatedDate for reports
+  const getReportDate = (r) => {
+    if (!r) return null;
+    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'date', 'Date', 'report_date'];
+    for (const f of tryFields) {
+      const v = r[f];
       if (!v) continue;
       if (typeof v?.toDate === 'function') {
         const d = v.toDate();
@@ -201,7 +225,7 @@ export default function Overview() {
   };
 
   const getOrderDeliveredDate = (order) => {
-    const date = getOrderDate(order);
+    const date = getOrderCompletionDate(order) || getOrderCreatedDate(order);
     return date ? formatDateDisplay(date) : '';
   };
 
@@ -248,9 +272,9 @@ export default function Overview() {
   const lastMonth = currentMonth === 0 ? 11 : currentMonth - 1;
   const lastMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
 
-  // Helper to filter orders by month/year safely
+  // Helper to filter orders by month/year safely (based on created date)
   const ordersInMonth = (month, year) => orders.filter(order => {
-    const d = getOrderDate(order);
+    const d = getOrderCreatedDate(order);
     if (!d) return false;
     return d.getMonth() === month && d.getFullYear() === year;
   });
@@ -266,8 +290,8 @@ export default function Overview() {
     : 0;
 
   // Completed / pending counts for selected month
-  const currentMonthCompleted = currentMonthOrders.filter(order => getOrderStatus(order) === 'Completed').length;
-  const currentMonthPending = currentMonthOrders.filter(order => getOrderStatus(order) === 'Pending').length;
+  const currentMonthCompleted = currentMonthOrders.filter(order => isCompletedStatus(getOrderStatus(order))).length;
+  const currentMonthPending = currentMonthOrders.filter(order => isPendingStatus(getOrderStatus(order))).length;
 
   // Helper to get employee ID from order
   const getEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
@@ -276,26 +300,17 @@ export default function Overview() {
   const activeEmployeeIdsThisMonth = Array.from(new Set(currentMonthOrders.map(o => getEmployeeId(o)).filter(Boolean)));
   const activeEmployees = activeEmployeeIdsThisMonth.length;
 
-  console.log('[Dashboard] Current month stats:', {
-    month: formatMonthYear(selectedMonthDate),
-    totalOrders: currentMonthOrders.length,
-    completed: currentMonthCompleted,
-    pending: currentMonthPending,
-    avgRating: avgRating.toFixed(2),
-    activeEmployees
-  });
-
-  // Cases filtered by selected month
-  const casesInMonth = cases.filter(c => {
-    const d = getCasesDate(c);
+  // Reports filtered by selected month
+  const reportsInMonth = reports.filter(r => {
+    const d = getReportDate(r);
     if (!d) return false;
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   });
-  const pendingCasess = casesInMonth.filter(c => getCasesStatus(c) === 'pending').length;
+  const pendingReports = reportsInMonth.filter(r => normalizeStatus(getReportStatus(r)) === 'pending').length;
 
   // Trends comparing this month vs last month
   const currentMonthCompletedForTrend = currentMonthCompleted;
-  const lastMonthCompletedForTrend = lastMonthOrders.filter(order => getOrderStatus(order) === 'Completed').length;
+  const lastMonthCompletedForTrend = lastMonthOrders.filter(order => isCompletedStatus(getOrderStatus(order))).length;
 
   const currentMonthAvgRating = avgRating;
   const lastMonthRatings = lastMonthOrders.map(o => getOrderRating(o)).filter(r => typeof r === 'number' && !isNaN(r));
@@ -312,7 +327,7 @@ export default function Overview() {
     : (currentMonthAvgRating > 0 ? 100 : 0);
 
   const employeesTrend = 0; // could be computed from hires in month if you have hire dates
-  const CasessTrend = 0; // optional
+  const reportsTrend = 0; // optional
 
   // Prepare chart data (12 months ending at selected month)
   const monthLabels = [];
@@ -326,8 +341,8 @@ export default function Overview() {
     const year = date.getFullYear();
     const monthOrders = ordersInMonth(month, year);
 
-    const completed = monthOrders.filter(order => getOrderStatus(order) === 'Completed').length;
-    const pending = monthOrders.filter(order => getOrderStatus(order) === 'Pending').length;
+    const completed = monthOrders.filter(order => isCompletedStatus(getOrderStatus(order))).length;
+    const pending = monthOrders.filter(order => isPendingStatus(getOrderStatus(order))).length;
 
     monthLabels.push(date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }));
     totalOrdersData.push(monthOrders.length);
@@ -437,21 +452,21 @@ export default function Overview() {
     },
   };
 
-  // Recent completed orders and cases: restricted to the selected month
+  // Recent completed orders and reports: restricted to the selected month
   const recentCompletedOrders = currentMonthOrders
-    .filter(order => getOrderStatus(order) === 'Completed')
+    .filter(order => isCompletedStatus(getOrderStatus(order)))
     .sort((a, b) => {
-      const da = getOrderDate(a) ? getOrderDate(a).getTime() : 0;
-      const db = getOrderDate(b) ? getOrderDate(b).getTime() : 0;
+      const da = getOrderCompletionDate(a) ? getOrderCompletionDate(a).getTime() : 0;
+      const db = getOrderCompletionDate(b) ? getOrderCompletionDate(b).getTime() : 0;
       return db - da;
     })
     .slice(0, 5);
 
-  const recentCasess = casesInMonth
+  const recentReports = reportsInMonth
     .slice()
     .sort((a, b) => {
-      const da = getCasesDate(a) ? getCasesDate(a).getTime() : 0;
-      const db = getCasesDate(b) ? getCasesDate(b).getTime() : 0;
+      const da = getReportDate(a) ? getReportDate(a).getTime() : 0;
+      const db = getReportDate(b) ? getReportDate(b).getTime() : 0;
       return db - da;
     })
     .slice(0, 5);
@@ -567,13 +582,13 @@ export default function Overview() {
             trendValue={employeesTrend}
           />
           <StatCard
-            title="Pending Casess"
-            value={pendingCasess}
+            title="Pending Reports"
+            value={pendingReports}
             icon={AlertCircle}
             color="red"
             subtitle="Requires attention"
-            trend={`${CasessTrend >= 0 ? '+' : ''}${CasessTrend}%`}
-            trendValue={CasessTrend}
+            trend={`${reportsTrend >= 0 ? '+' : ''}${reportsTrend}%`}
+            trendValue={reportsTrend}
           />
         </div>
 
@@ -682,27 +697,27 @@ export default function Overview() {
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">System Casess (selected month)</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Reports (selected month)</h3>
               <div className="flex items-center text-sm text-gray-500">
                 <AlertCircle className="h-4 w-4 mr-1" />
-                {pendingCasess} pending
+                {pendingReports} pending
               </div>
             </div>
 
             <div className="space-y-2">
-              {recentCasess.length > 0 ? recentCasess.map((c) => (
+              {recentReports.length > 0 ? recentReports.map((r) => (
                 <ActivityItem
-                  key={getCasesId(c)}
+                  key={getReportId(r)}
                   icon={AlertCircle}
-                  title={`Cases ${getCasesId(c)}`}
-                  description={getCasesContent(c) || 'System Cases'}
-                  status={getCasesStatus(c)}
-                  priority={getCasesStatus(c) === 'pending' ? 'high' : 'normal'}
+                  title={`Report ${getReportId(r)}`}
+                  description={getReportContent(r) || 'System report'}
+                  status={getReportStatus(r)}
+                  priority={normalizeStatus(getReportStatus(r)) === 'pending' ? 'high' : 'normal'}
                 />
               )) : (
                 <div className="text-center py-8 text-gray-500">
                   <AlertCircle className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                  <p>No recent Casess this month</p>
+                  <p>No reports this month</p>
                 </div>
               )}
             </div>
