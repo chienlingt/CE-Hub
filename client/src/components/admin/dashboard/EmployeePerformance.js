@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import ScopeMonthSelector from '../../common/ScopeMonthSelector';
 import {
   getAllEmployees, getAllOrdersSummary, getAllEmployeeTeamAssignments, getAllTeams
 } from '../../../services/informationService';
 import {
-  Users, Star, Phone, Badge, TrendingUp, DollarSign, ChevronLeft, ChevronRight, Search
+  Users, Star, Phone, Badge, TrendingUp, DollarSign, Search
 } from 'lucide-react';
 
 const FilterBar = ({
@@ -15,56 +16,45 @@ const FilterBar = ({
   formatMonthYear,
   searchTerm,
   setSearchTerm,
+  incentivePerOrder,
+  setIncentivePerOrder,
   helperText
 }) => (
   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
         <input
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           placeholder="Search employee or team"
-          className="w-full sm:w-64 rounded-md border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-emerald-500 focus:ring-emerald-500"
+          className="w-full sm:w-72 rounded-full border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
         />
+      </div>
+      <div className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm">
+        <DollarSign className="h-4 w-4 text-emerald-600" />
+        <span className="text-gray-600">RM</span>
+        <input
+          type="number"
+          min="0"
+          value={incentivePerOrder}
+          onChange={e => setIncentivePerOrder(Number(e.target.value))}
+          className="w-16 bg-transparent text-sm font-medium text-gray-900 focus:outline-none"
+        />
+        <span className="text-gray-500">/ order</span>
       </div>
       {/* {helperText && <div className="text-sm text-gray-500">{helperText}</div>} */}
     </div>
 
-    <div className="flex items-center space-x-3">
-      <div className="inline-flex items-center rounded-md border border-gray-200 bg-white p-1">
-        <button
-          onClick={() => setScope('month')}
-          className={`px-3 py-1 text-xs font-medium rounded ${scope === 'month' ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:text-gray-800'}`}
-        >
-          Selected month
-        </button>
-        <button
-          onClick={() => setScope('all')}
-          className={`px-3 py-1 text-xs font-medium rounded ${scope === 'all' ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:text-gray-800'}`}
-        >
-          All time
-        </button>
-      </div>
-      <button
-        onClick={prevMonth}
-        className="inline-flex items-center px-3 py-2 bg-white border border-gray-200 rounded-md shadow-sm hover:bg-gray-50"
-        title="Previous month"
-      >
-        <ChevronLeft className="h-4 w-4" />
-      </button>
-
-      <div className="text-sm font-medium">{formatMonthYear(selectedMonthDate)}</div>
-
-      <button
-        onClick={nextMonth}
-        className="inline-flex items-center px-3 py-2 bg-white border border-gray-200 rounded-md shadow-sm hover:bg-gray-50"
-        title="Next month"
-      >
-        <ChevronRight className="h-4 w-4" />
-      </button>
-    </div>
+    <ScopeMonthSelector
+      scope={scope}
+      onScopeChange={setScope}
+      selectedMonthDate={selectedMonthDate}
+      onPrevMonth={prevMonth}
+      onNextMonth={nextMonth}
+      formatMonthYear={formatMonthYear}
+    />
   </div>
 );
 
@@ -272,26 +262,10 @@ export default function EmployeePerformance() {
         formatMonthYear={formatMonthYear}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
+        incentivePerOrder={incentivePerOrder}
+        setIncentivePerOrder={setIncentivePerOrder}
         helperText={`${scope === 'all' ? orders.length : filteredOrdersForMonth.length} orders in view`}
       />
-
-      {/* 🔧 Incentive Control Section */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 flex items-center mb-3 md:mb-0">
-          <DollarSign className="h-5 w-5 mr-2 text-green-600" />
-          Incentive Settings
-        </h2>
-        <div className="flex items-center space-x-3">
-          <label className="text-sm text-gray-600">Incentive per Order (RM):</label>
-          <input
-            type="number"
-            min="0"
-            value={incentivePerOrder}
-            onChange={e => setIncentivePerOrder(Number(e.target.value))}
-            className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-      </div>
 
       {/* Top Performers Section */}
 

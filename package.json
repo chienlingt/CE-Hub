@@ -39,7 +39,9 @@
     "recharts": "^2.15.4"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "autoprefixer": "^10.4.21",
+    "baseline-browser-mapping": "^2.9.14",
     "postcss": "^8.5.5",
     "tailwindcss": "^4.1.10"
   }

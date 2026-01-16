@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
+import ScopeMonthSelector from '../../common/ScopeMonthSelector';
 import {
   getAllEmployees, getAllOrdersSummary, getAllCases
 } from '../../../services/informationService';
 import {
   Users, Star, CheckCircle, AlertCircle, TrendingUp, TrendingDown,
-  Activity, Clock, Package, Calendar, BarChart3, PieChart, ChevronLeft, ChevronRight, Download
+  Activity, Clock, Package, Calendar, BarChart3, PieChart, Download
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -116,6 +117,7 @@ export default function Overview() {
   const [employees, setEmployees] = useState([]);
   const [orders, setOrders] = useState([]);
   const [reports, setReports] = useState([]);
+  const [scope, setScope] = useState('month');
 
   // selected month state (focus month). Defaults to current month.
   const [selectedMonthDate, setSelectedMonthDate] = useState(() => {
@@ -143,15 +145,14 @@ export default function Overview() {
     }).catch(err => console.warn('[Dashboard] Error fetching reports:', err));
   }, []);
 
-  // Helpers for flexible field access (supports PascalCase, camelCase, and snake_case)
-  const getOrderId = (order) => order.id || order.order_id || order.OrderID || order.orderId;
+  const getOrderId = (order) => order.id;
   const getOrderRating = (order) => {
-    const r = order.rating ?? null;
+    const r = order.customer_rating ?? null;
     return (r === '' || r === null || typeof r === 'undefined') ? null : Number(r);
   };
-  const getOrderFeedback = (order) => order.complaint ?? '';
-  const getOrderStatus = (order) => order.order_status ?? '';
-  const getReportId = (r) => r.id || r.report_id || r.ReportID || r.reportId;
+  const getOrderFeedback = (order) => order.customer_feedback ?? '';
+  const getOrderStatus = (order) => order.order_status ?? ''; 
+  const getReportId = (r) => r.id;
   const getReportContent = (r) => r.content ?? '';
   const getReportStatus = (r) => r.status ?? '';
 
@@ -159,67 +160,49 @@ export default function Overview() {
   const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
   const isPendingStatus = (status) => ['pending'].includes(normalizeStatus(status));
 
-  // Robust getOrderCreatedDate: returns Date object or null if no valid date found.
+  // Order created date from schema field
   const getOrderCreatedDate = (order) => {
     if (!order) return null;
-    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'created', 'createdDate'];
-    for (const f of tryFields) {
-      const v = order[f];
-      if (!v) continue;
-      // Firestore Timestamp
-      if (typeof v?.toDate === 'function') {
-        const d = v.toDate();
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-      // ISO string or epoch number or Date object
-      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-        const d = v instanceof Date ? v : new Date(v);
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
+    const v = order.created_at;
+    if (!v) return null;
+    if (typeof v?.toDate === 'function') {
+      const d = v.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
     }
-    // If no known date fields, return null to avoid misattributing to current month
+    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+      const d = v instanceof Date ? v : new Date(v);
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
+    }
     return null;
   };
 
   const getOrderCompletionDate = (order) => {
     if (!order) return null;
-    const tryFields = [
-      'actual_end_date_time',
-      'actual_arrival_date_time',
-      'scheduled_end_date_time',
-      'updated_at',
-      'updatedAt'
-    ];
-    for (const f of tryFields) {
-      const v = order[f];
-      if (!v) continue;
-      if (typeof v?.toDate === 'function') {
-        const d = v.toDate();
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-        const d = v instanceof Date ? v : new Date(v);
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
+    const v = order.actual_arrival_date_time;
+    if (!v) return null;
+    if (typeof v?.toDate === 'function') {
+      const d = v.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
+    }
+    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+      const d = v instanceof Date ? v : new Date(v);
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
     }
     return null;
   };
 
-  // Robust getReportDate: similar to getOrderCreatedDate for reports
+  // Report created date from schema field
   const getReportDate = (r) => {
     if (!r) return null;
-    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'date', 'Date', 'report_date'];
-    for (const f of tryFields) {
-      const v = r[f];
-      if (!v) continue;
-      if (typeof v?.toDate === 'function') {
-        const d = v.toDate();
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-        const d = v instanceof Date ? v : new Date(v);
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
+    const v = r.created_at;
+    if (!v) return null;
+    if (typeof v?.toDate === 'function') {
+      const d = v.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
+    }
+    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+      const d = v instanceof Date ? v : new Date(v);
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
     }
     return null;
   };
@@ -271,6 +254,7 @@ export default function Overview() {
   const currentYear = now.getFullYear();
   const lastMonth = currentMonth === 0 ? 11 : currentMonth - 1;
   const lastMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+  const scopeLabel = scope === 'all' ? 'All time' : 'Selected month';
 
   // Helper to filter orders by month/year safely (based on created date)
   const ordersInMonth = (month, year) => orders.filter(order => {
@@ -283,22 +267,26 @@ export default function Overview() {
   const currentMonthOrders = ordersInMonth(currentMonth, currentYear);
   const lastMonthOrders = ordersInMonth(lastMonth, lastMonthYear);
 
-  // Ratings and averages for the selected month
-  const currentMonthRatings = currentMonthOrders.map(o => getOrderRating(o)).filter(r => typeof r === 'number' && !isNaN(r));
-  const avgRating = currentMonthRatings.length > 0
-    ? (currentMonthRatings.reduce((s, r) => s + r, 0) / currentMonthRatings.length)
+  const scopedOrders = scope === 'all' ? orders : currentMonthOrders;
+
+  // Ratings and averages for the selected scope
+  const scopedRatings = scopedOrders.map(o => getOrderRating(o)).filter(r => typeof r === 'number' && !isNaN(r));
+  const avgRating = scopedRatings.length > 0
+    ? (scopedRatings.reduce((s, r) => s + r, 0) / scopedRatings.length)
     : 0;
 
-  // Completed / pending counts for selected month
+  // Completed / pending counts
   const currentMonthCompleted = currentMonthOrders.filter(order => isCompletedStatus(getOrderStatus(order))).length;
   const currentMonthPending = currentMonthOrders.filter(order => isPendingStatus(getOrderStatus(order))).length;
+  const scopedCompleted = scope === 'all'
+    ? orders.filter(order => isCompletedStatus(getOrderStatus(order))).length
+    : currentMonthCompleted;
+  const scopedPending = scope === 'all'
+    ? orders.filter(order => isPendingStatus(getOrderStatus(order))).length
+    : currentMonthPending;
 
   // Helper to get employee ID from order
-  const getEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
-
-  // Active employees for selected month = distinct employees who had orders this month
-  const activeEmployeeIdsThisMonth = Array.from(new Set(currentMonthOrders.map(o => getEmployeeId(o)).filter(Boolean)));
-  const activeEmployees = activeEmployeeIdsThisMonth.length;
+  const getEmployeeId = (order) => order.employee_id;
 
   // Reports filtered by selected month
   const reportsInMonth = reports.filter(r => {
@@ -306,7 +294,8 @@ export default function Overview() {
     if (!d) return false;
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   });
-  const pendingReports = reportsInMonth.filter(r => normalizeStatus(getReportStatus(r)) === 'pending').length;
+  const scopedReports = scope === 'all' ? reports : reportsInMonth;
+  const pendingReports = scopedReports.filter(r => normalizeStatus(getReportStatus(r)) === 'pending').length;
 
   // Trends comparing this month vs last month
   const currentMonthCompletedForTrend = currentMonthCompleted;
@@ -318,16 +307,20 @@ export default function Overview() {
     ? (lastMonthRatings.reduce((s, r) => s + r, 0) / lastMonthRatings.length)
     : 0;
 
-  const ordersTrend = lastMonthCompletedForTrend > 0
-    ? ((currentMonthCompletedForTrend - lastMonthCompletedForTrend) / lastMonthCompletedForTrend * 100)
-    : (currentMonthCompletedForTrend > 0 ? 100 : 0);
+  const ordersTrend = scope === 'all'
+    ? null
+    : (lastMonthCompletedForTrend > 0
+      ? ((currentMonthCompletedForTrend - lastMonthCompletedForTrend) / lastMonthCompletedForTrend * 100)
+      : (currentMonthCompletedForTrend > 0 ? 100 : 0));
 
-  const ratingTrend = lastMonthAvgRating > 0
-    ? ((currentMonthAvgRating - lastMonthAvgRating) / lastMonthAvgRating * 100)
-    : (currentMonthAvgRating > 0 ? 100 : 0);
+  const ratingTrend = scope === 'all'
+    ? null
+    : (lastMonthAvgRating > 0
+      ? ((currentMonthAvgRating - lastMonthAvgRating) / lastMonthAvgRating * 100)
+      : (currentMonthAvgRating > 0 ? 100 : 0));
 
-  const employeesTrend = 0; // could be computed from hires in month if you have hire dates
-  const reportsTrend = 0; // optional
+  const employeesTrend = scope === 'all' ? null : 0; // could be computed from hires in month if you have hire dates
+  const reportsTrend = scope === 'all' ? null : 0; // optional
 
   // Prepare chart data (12 months ending at selected month)
   const monthLabels = [];
@@ -355,9 +348,9 @@ export default function Overview() {
     labels: ['Completed', 'Pending', 'Other'],
     datasets: [{
       data: [
-        currentMonthCompleted,
-        currentMonthPending,
-        Math.max(0, currentMonthOrders.length - currentMonthCompleted - currentMonthPending)
+        scopedCompleted,
+        scopedPending,
+        Math.max(0, scopedOrders.length - scopedCompleted - scopedPending)
       ],
       backgroundColor: [
         '#10B981',
@@ -371,7 +364,7 @@ export default function Overview() {
   // Rating distribution for selected month
   const ratingLabels = ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'];
   const ratingCounts = [1, 2, 3, 4, 5].map(rating =>
-    currentMonthOrders.filter(order => {
+    scopedOrders.filter(order => {
       const val = getOrderRating(order);
       return val !== null && Math.floor(Number(val)) === rating;
     }).length
@@ -453,7 +446,7 @@ export default function Overview() {
   };
 
   // Recent completed orders and reports: restricted to the selected month
-  const recentCompletedOrders = currentMonthOrders
+  const recentCompletedOrders = scopedOrders
     .filter(order => isCompletedStatus(getOrderStatus(order)))
     .sort((a, b) => {
       const da = getOrderCompletionDate(a) ? getOrderCompletionDate(a).getTime() : 0;
@@ -462,7 +455,7 @@ export default function Overview() {
     })
     .slice(0, 5);
 
-  const recentReports = reportsInMonth
+  const recentReports = scopedReports
     .slice()
     .sort((a, b) => {
       const da = getReportDate(a) ? getReportDate(a).getTime() : 0;
@@ -516,27 +509,14 @@ export default function Overview() {
     <div>
       {/* Header with month navigation and export button */}
       <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={prevMonth}
-            className="inline-flex items-center px-3 py-2 bg-white border border-gray-200 rounded-md shadow-sm hover:bg-gray-50"
-            title="Previous month"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-
-          <div className="text-lg font-semibold">
-            {formatMonthYear(selectedMonthDate)}
-          </div>
-
-          <button
-            onClick={nextMonth}
-            className="inline-flex items-center px-3 py-2 bg-white border border-gray-200 rounded-md shadow-sm hover:bg-gray-50"
-            title="Next month"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
+        <ScopeMonthSelector
+          scope={scope}
+          onScopeChange={setScope}
+          selectedMonthDate={selectedMonthDate}
+          onPrevMonth={prevMonth}
+          onNextMonth={nextMonth}
+          formatMonthYear={formatMonthYear}
+        />
 
         <div className="flex items-center space-x-3">
           <button
@@ -553,33 +533,24 @@ export default function Overview() {
       {/* Dashboard content wrapped in ref to capture for PDF */}
       <div className="space-y-6" ref={containerRef}>
         {/* Key Metrics (all based on selected month) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <StatCard
             title="Completed Orders"
-            value={currentMonthCompleted}
+            value={scopedCompleted}
             icon={CheckCircle}
             color="green"
-            subtitle={`${currentMonthPending} pending`}
-            trend={`${ordersTrend >= 0 ? '+' : ''}${ordersTrend.toFixed(1)}%`}
-            trendValue={ordersTrend}
+            subtitle={`${scopedPending} pending (${scopeLabel.toLowerCase()})`}
+            trend={ordersTrend !== null ? `${ordersTrend >= 0 ? '+' : ''}${ordersTrend.toFixed(1)}%` : null}
+            trendValue={ordersTrend ?? 0}
           />
           <StatCard
             title="Average Rating"
             value={avgRating > 0 ? avgRating.toFixed(1) : 'N/A'}
             icon={Star}
             color="yellow"
-            subtitle="Customer satisfaction"
-            trend={`${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(1)}%`}
-            trendValue={ratingTrend}
-          />
-          <StatCard
-            title="Active Employees (this month)"
-            value={activeEmployees}
-            icon={Users}
-            color="blue"
-            subtitle={`${employees.length - activeEmployees} inactive`}
-            trend={`${employeesTrend >= 0 ? '+' : ''}${employeesTrend}%`}
-            trendValue={employeesTrend}
+            subtitle={`${scopeLabel} customer ratings`}
+            trend={ratingTrend !== null ? `${ratingTrend >= 0 ? '+' : ''}${ratingTrend.toFixed(1)}%` : null}
+            trendValue={ratingTrend ?? 0}
           />
           <StatCard
             title="Pending Reports"
@@ -587,47 +558,23 @@ export default function Overview() {
             icon={AlertCircle}
             color="red"
             subtitle="Requires attention"
-            trend={`${reportsTrend >= 0 ? '+' : ''}${reportsTrend}%`}
-            trendValue={reportsTrend}
+            trend={reportsTrend !== null ? `${reportsTrend >= 0 ? '+' : ''}${reportsTrend}%` : null}
+            trendValue={reportsTrend ?? 0}
           />
-        </div>
-
-        {/* Secondary Metrics (month-scoped where applicable) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Total Orders (selected month)</p>
-                <p className="text-2xl font-bold text-purple-600 mt-1">{currentMonthOrders.length}</p>
-                <p className="text-xs text-gray-500 mt-1">Selected month</p>
-              </div>
-              <Package className="h-8 w-8 text-purple-600" />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Delivery Success Rate (month)</p>
-                <p className="text-2xl font-bold text-emerald-600 mt-1">
-                  {currentMonthOrders.length > 0 ? Math.round((currentMonthCompleted / currentMonthOrders.length) * 100) : 0}%
-                </p>
-                <p className="text-xs text-gray-500 mt-1">Successful deliveries this month</p>
-              </div>
-              <TrendingUp className="h-8 w-8 text-emerald-600" />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Orders Count (this month)</p>
-                <p className="text-2xl font-bold text-indigo-600 mt-1">{currentMonthOrders.length}</p>
-                <p className="text-xs text-gray-500 mt-1">Month total</p>
-              </div>
-              <BarChart3 className="h-8 w-8 text-indigo-600" />
-            </div>
-          </div>
+          <StatCard
+            title="Total Orders"
+            value={scopedOrders.length}
+            icon={Package}
+            color="purple"
+            subtitle={scopeLabel}
+          />
+          <StatCard
+            title="Delivery Success Rate"
+            value={`${scopedOrders.length > 0 ? Math.round((scopedCompleted / scopedOrders.length) * 100) : 0}%`}
+            icon={TrendingUp}
+            color="emerald"
+            subtitle={`Successful deliveries (${scopeLabel.toLowerCase()})`}
+          />
         </div>
 
         {/* Charts Section */}
@@ -637,20 +584,20 @@ export default function Overview() {
             <Bar data={monthlyOrdersTrendData} options={barChartOptions} />
           </ChartCard>
 
-          {/* Order Status Distribution (selected month) */}
-          <ChartCard title="Order Status Distribution">
+          {/* Order Status Distribution (selected scope) */}
+          <ChartCard title={`Order Status Distribution (${scopeLabel.toLowerCase()})`}>
             <Doughnut data={statusData} options={pieChartOptions} />
           </ChartCard>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Customer Rating Distribution (selected month) */}
-          <ChartCard title="Customer Rating Distribution">
+          {/* Customer Rating Distribution (selected scope) */}
+          <ChartCard title={`Customer Rating Distribution (${scopeLabel.toLowerCase()})`}>
             <Bar data={ratingData} options={barChartOptions} />
           </ChartCard>
 
           {/* placeholder - can show another month-scoped chart */}
-          <ChartCard title="Activity Overview (this month)">
+          <ChartCard title="Activity Overview (last 6 months)">
             <Line data={{
               labels: monthLabels.slice().reverse().slice(0, 6).reverse(), // small spark for last 6 months
               datasets: [{
@@ -668,10 +615,10 @@ export default function Overview() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">Recent Completed Orders (selected month)</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Recent Completed Orders ({scopeLabel.toLowerCase()})</h3>
               <div className="flex items-center text-sm text-gray-500">
                 <Clock className="h-4 w-4 mr-1" />
-                Last 5 delivered this month
+                Last 5 delivered
               </div>
             </div>
 
@@ -689,7 +636,7 @@ export default function Overview() {
               )) : (
                 <div className="text-center py-8 text-gray-500">
                   <Package className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                  <p>No completed orders this month</p>
+                  <p>No completed orders</p>
                 </div>
               )}
             </div>
@@ -697,7 +644,7 @@ export default function Overview() {
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">Reports (selected month)</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Reports ({scopeLabel.toLowerCase()})</h3>
               <div className="flex items-center text-sm text-gray-500">
                 <AlertCircle className="h-4 w-4 mr-1" />
                 {pendingReports} pending
@@ -717,7 +664,7 @@ export default function Overview() {
               )) : (
                 <div className="text-center py-8 text-gray-500">
                   <AlertCircle className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                  <p>No reports this month</p>
+                  <p>No reports</p>
                 </div>
               )}
             </div>

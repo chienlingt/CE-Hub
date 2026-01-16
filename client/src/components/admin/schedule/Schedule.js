@@ -984,7 +984,7 @@ export default function Schedule() {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto bg-white">
+    <div className="p-6 max-w-full mx-auto bg-white">
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold text-gray-800 flex items-center gap-2"><Calendar className="text-blue-600" size={20} />TimeSlot Admin Calendar</h1>

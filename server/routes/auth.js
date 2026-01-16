@@ -234,4 +234,56 @@ router.post('/verify-session', async (req, res) => {
   }
 });
 
+// POST /api/auth/change-password
+// Body: { employeeId, currentPassword, newPassword }
+router.post('/change-password', async (req, res) => {
+  const { employeeId, currentPassword, newPassword } = req.body || {};
+
+  if (!employeeId || !currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Employee ID, current password, and new password are required' });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  }
+
+  try {
+    const employee = await prisma.employees.findUnique({
+      where: { id: employeeId }
+    });
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    if (!employee.active_flag) {
+      return res.status(403).json({ error: 'This employee account has been deactivated' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, employee.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    await prisma.employees.update({
+      where: { id: employeeId },
+      data: {
+        password: hashedPassword,
+        updated_at: new Date()
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Password updated successfully'
+    });
+  } catch (err) {
+    console.error('POST /api/auth/change-password error', err);
+    res.status(500).json({ error: 'Server error during password change' });
+  }
+});
+
 module.exports = router;

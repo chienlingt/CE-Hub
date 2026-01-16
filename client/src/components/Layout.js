@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle
 } from 'lucide-react';
+import ProfileModal from './common/ProfileModal';
 import {
   // admin pages
   default as Overview,
@@ -48,6 +49,8 @@ const Layout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeSection, setActiveSection] = useState('');
   const [topNavActive, setTopNavActive] = useState('');
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [displayName, setDisplayName] = useState('');
 
   // ==========================
   // Navigation structure
@@ -82,7 +85,7 @@ const Layout = () => {
         { id: 'building', label: 'Building', path: 'building', component: BuildingInfo },
         { id: 'product', label: 'Product', path: 'product', component: ProductInfo },
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
-        // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
+        { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
       ],
     },
     cases: {
@@ -144,6 +147,10 @@ const Layout = () => {
   // Debug: print current user's permissions once they are loaded
   useEffect(() => {
   }, [permissions, effectivePermissions, employeeData, loadingPermissions]);
+
+  useEffect(() => {
+    setDisplayName(currentUser?.name || currentUser?.email || 'User');
+  }, [currentUser]);
 
   // Filter navigation based on permissions. Admin gets full access.
   const filteredNavigation = useMemo(() => {
@@ -244,6 +251,19 @@ const Layout = () => {
     }
   };
 
+  const openProfileModal = () => setShowProfileModal(true);
+
+  const handleProfileSaved = (payload) => {
+    setDisplayName(payload.name || payload.email || 'User');
+    const stored = sessionStorage.getItem('employeeData');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      sessionStorage.setItem('employeeData', JSON.stringify({ ...parsed, ...payload }));
+      sessionStorage.setItem('employeeName', payload.name || parsed.name || '');
+      sessionStorage.setItem('employeeEmail', payload.email || parsed.email || '');
+    }
+  };
+
   // Loading and no access states
   if (loading || loadingPermissions) {
     return (
@@ -331,10 +351,15 @@ const Layout = () => {
                 <AlertCircle size={20} />
                 <span className="hidden md:block font-medium">Report Issue</span>
               </button>
-              <div className="flex items-center space-x-2 p-2 text-gray-700 rounded-lg">
+              <button
+                type="button"
+                onClick={openProfileModal}
+                className="flex items-center space-x-2 p-2 text-gray-700 rounded-lg hover:text-blue-600 hover:bg-blue-50"
+                title="View profile"
+              >
                 <User size={20} />
-                <span className="hidden md:block font-medium">{currentUser?.name || currentUser?.email || 'User'}</span>
-              </div>
+                <span className="hidden md:block font-medium">{displayName}</span>
+              </button>
               <button
                 onClick={handleLogout}
                 className="flex items-center space-x-2 p-2 text-gray-700 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -408,6 +433,14 @@ const Layout = () => {
             <Route path="/" element={<Navigate to={filteredNavigation[0][1].route + '/' + (filteredNavigation[0][1].topNavItems?.[0]?.path || '')} replace />} />
           </Routes>
         </div>
+
+        <ProfileModal
+          isOpen={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          employeeData={employeeData}
+          currentUser={currentUser}
+          onProfileSaved={handleProfileSaved}
+        />
       </div>
     </div>
   );
