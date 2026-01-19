@@ -137,6 +137,9 @@ async function scheduleOrders(options = {}) {
 
     if (pendingOrders.length === 0) {
       console.log('No pending orders to schedule.\n');
+      const teams = await fetchTeams();
+      const trucks = await fetchTrucks();
+      await reconcileTimeslotAssignments(teams, trucks);
       return results;
     }
 
@@ -166,6 +169,7 @@ async function scheduleOrders(options = {}) {
         o.unscheduled_reason = 'No available timeslots';
         return o;
       });
+      await reconcileTimeslotAssignments(teams, trucks);
       return results;
     }
 
@@ -183,6 +187,7 @@ async function scheduleOrders(options = {}) {
     results.scheduled = schedulingResults.scheduled;
     results.unscheduled = schedulingResults.unscheduled;
     results.installationSchedulesCreated = schedulingResults.installationSchedulesCreated;
+    await reconcileTimeslotAssignments(teams, trucks);
 
     // Step 9: Update last run timestamp
     console.log('[Scheduler] Step 9: updating last_run_at...');
@@ -564,20 +569,14 @@ async function calculateOrderTimes(orders) {
  * Fetch all teams by type
  */
 async function fetchTeams() {
-  const deliveryTeams = await prisma.teams.findMany({
-    where: { team_type: 'delivery' },
+  const allTeams = await prisma.teams.findMany({
+    where: { available_flag: true },
     include: { assignments: { include: { employee: { include: { role: true } } } } }
   });
 
-  const warehouseTeams = await prisma.teams.findMany({
-    where: { team_type: 'warehouse' },
-    include: { assignments: { include: { employee: { include: { role: true } } } } }
-  });
-
-  const installationTeams = await prisma.teams.findMany({
-    where: { team_type: 'installation' },
-    include: { assignments: { include: { employee: { include: { role: true } } } } }
-  });
+  const deliveryTeams = allTeams.filter(team => teamHasSomeRoles(team, 'delivery'));
+  const warehouseTeams = allTeams.filter(team => teamHasSomeRoles(team, 'storekeeper'));
+  const installationTeams = allTeams.filter(team => teamHasSomeRoles(team, 'installation'));
 
   console.log(`Delivery teams: ${deliveryTeams.length}`);
   console.log(`Warehouse teams: ${warehouseTeams.length}`);
@@ -690,7 +689,7 @@ async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, truck
   console.log('[ensureTimeslotAssignments] All warehouse teams fetched:', JSON.stringify(teams.warehouseTeams, null, 2));
 
   const deliveryCandidates = (teams.deliveryTeams || []).filter(t => teamHasSomeRoles(t, 'delivery'));
-  const warehouseCandidates = (teams.warehouseTeams || []).filter(t => teamHasAllRoles(t, 'storekeeper'));
+  const warehouseCandidates = (teams.warehouseTeams || []).filter(t => teamHasSomeRoles(t, 'storekeeper'));
 
   console.log('[ensureTimeslotAssignments] Delivery team candidates after filtering:', JSON.stringify(deliveryCandidates, null, 2));
   console.log('[ensureTimeslotAssignments] Warehouse team candidates after filtering:', JSON.stringify(warehouseCandidates, null, 2));
@@ -1064,6 +1063,20 @@ async function optimizeRoute(orders, warehouseAddress, departureTime) {
       totalDistance: 0,
       totalTravelTime: 0
     };
+  }
+}
+
+async function reconcileTimeslotAssignments(teams, trucks) {
+  const today = dayjs().startOf('day').format('YYYY-MM-DD');
+  const timeslots = await prisma.time_slots.findMany({
+    where: { date: { gte: today } },
+    select: { id: true }
+  });
+
+  console.log(`[Scheduler] Reconciling team assignments for ${timeslots.length} timeslots from ${today} onward...`);
+  for (const slot of timeslots) {
+    const slotVolumeCm3 = await getTimeslotVolumeCm3(slot.id);
+    await ensureTimeslotAssignments(slot.id, slotVolumeCm3, teams, trucks);
   }
 }
 

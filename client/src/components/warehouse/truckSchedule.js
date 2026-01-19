@@ -119,6 +119,7 @@ const WarehouseLoadingSchedule = () => {
     timeSlotTruckId: (ts) => ts.truck_id || ts.TruckID,
     teamId: (team) => team.id || team.TeamID,
     teamType: (team) => team.team_type || team.TeamType || '',
+    teamActive: (team) => team.available_flag ?? team.AvailableFlag ?? true,
     customerId: (cust) => cust.id || cust.CustomerID,
     customerName: (cust) => cust.full_name || cust.name || '',
     customerAddress: (cust) => cust.address || '',
@@ -149,7 +150,7 @@ const WarehouseLoadingSchedule = () => {
     return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
   };
 
-  const warehouseTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('warehouse'));
+  const warehouseTeams = teams.filter(team => field.teamActive(team) && field.teamType(team).toLowerCase().includes('warehouse'));
 
   useEffect(() => {
     if (!teamAutoSelectEnabled) return;

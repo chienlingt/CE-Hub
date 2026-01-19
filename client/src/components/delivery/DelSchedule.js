@@ -151,6 +151,7 @@ export default function DeliverySchedule() {
     orderLoadingSequence: (order) => order.truck_loading_sequence || order.TruckLoadingSequence || null,
     teamId: (team) => team.id || team.TeamID,
     teamType: (team) => team.team_type || team.TeamType || '',
+    teamActive: (team) => team.available_flag ?? team.AvailableFlag ?? true,
     truckId: (truck) => truck.id || truck.TruckID,
     truckPlate: (truck) => truck.plate_no || truck.PlateNo || truck.CarPlate || ''
   };
@@ -167,7 +168,7 @@ export default function DeliverySchedule() {
     return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
   };
 
-  const deliveryTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('delivery'));
+  const deliveryTeams = teams.filter(team => field.teamActive(team) && field.teamType(team).toLowerCase().includes('delivery'));
 
   useEffect(() => {
     if (!teamAutoSelectEnabled) return;

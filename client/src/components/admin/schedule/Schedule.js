@@ -39,6 +39,7 @@ export default function Schedule() {
   const [orderProducts, setOrderProducts] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [employeeAssignments, setEmployeeAssignments] = useState([]);
+  const [installationSchedules, setInstallationSchedules] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [buildings, setBuildings] = useState([]);
   const [productsList, setProductsList] = useState([]);
@@ -60,8 +61,9 @@ export default function Schedule() {
     let mounted = true;
     async function loadAll() {
       try {
+        const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
         const [
-          slots, tks, tms, ords, ordProds, emps, empAssigns, custs, blds, prods
+          slots, tks, tms, ords, ordProds, emps, empAssigns, custs, blds, prods, installationSchedulesResponse
         ] = await Promise.all([
           getAllTimeSlots(),
           getAllTrucks(),
@@ -72,7 +74,10 @@ export default function Schedule() {
           getAllEmployeeTeamAssignments(),
           getAllCustomers(),
           getAllBuildings(),
-          getAllProducts()
+          getAllProducts(),
+          fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/installation-schedules`)
+            .then(res => res.ok ? res.json() : { success: false, schedules: [] })
+            .catch(() => ({ success: false, schedules: [] }))
         ]);
 
         if (!mounted) return;
@@ -91,6 +96,7 @@ export default function Schedule() {
         setCustomers(Array.isArray(custs) ? custs : (custs?.data ?? []));
         setBuildings(Array.isArray(blds) ? blds : (blds?.data ?? []));
         setProductsList(Array.isArray(prods) ? prods : (prods?.data ?? []));
+        setInstallationSchedules(installationSchedulesResponse?.success ? installationSchedulesResponse.schedules : []);
 
       } catch (err) {
         console.error('[Schedule] loadAll error:', err);
@@ -668,6 +674,15 @@ export default function Schedule() {
     })
   ), [employees]);
 
+  const installationScheduleByOrderId = useMemo(() => {
+    const map = new Map();
+    (installationSchedules || []).forEach(schedule => {
+      const orderId = schedule?.order_id ?? schedule?.orderId ?? schedule?.OrderID ?? schedule?.orders?.id ?? schedule?.orders?.OrderID;
+      if (orderId) map.set(String(orderId), schedule);
+    });
+    return map;
+  }, [installationSchedules]);
+
   // defensive employee name lookup
   const employeeNameFromId = (employeeId, row) => {
     const candidate = employeeId ?? row?.EmployeeID ?? row?.employee_id ?? row?.employeeId ?? null;
@@ -707,6 +722,10 @@ export default function Schedule() {
                 const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
                   const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
                   const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
+                  const schedule = installationScheduleByOrderId.get(String(field.orderId(order)));
+                  const installerTeamId = schedule?.installation_team_id ?? schedule?.installationTeamId ?? schedule?.team?.id ?? schedule?.teamId ?? schedule?.TeamID;
+                  const installerTeam = installerTeamId ? (getTeam(installerTeamId) || schedule?.team || {}) : null;
+                  const installerTeamMembers = installerTeamId ? getEmployeesForTeam(field.teamId(installerTeam) || installerTeamId) : [];
                   const orderProductRows = orderProducts.filter(op => String(field.orderProductOrderId(op)) === String(field.orderId(order)));
                   const products = orderProductRows.map(op => {
                     const product = productsList.find(p => String(field.productId(p)) === String(field.orderProductProductId(op))) || {};
@@ -718,7 +737,15 @@ export default function Schedule() {
                       EstimatedInstallationTimeMax: field.productInstallMax(product)
                     };
                   });
-                  const enriched = { ...order, CustomerName: field.customerName(customer), BuildingName: field.buildingName(building), products };
+                  const enriched = {
+                    ...order,
+                    CustomerName: field.customerName(customer),
+                    BuildingName: field.buildingName(building),
+                    products,
+                    InstallerTeamId: installerTeamId,
+                    InstallerTeam: installerTeam,
+                    InstallerTeamMembers: installerTeamMembers
+                  };
                   // debug per-enriched-order
                   // console.log('[Schedule] Enriched order', { orderId: field.orderId(order), customer, building, productsSample: products.slice(0,3) });
                   return enriched;
@@ -765,6 +792,11 @@ export default function Schedule() {
                               <div><strong>{order.CustomerName}</strong></div>
                               <div>{order.BuildingName}</div>
                               <div className="text-green-600">{field.orderStatus(order)}</div>
+                              {order.InstallerTeamId && (
+                                <div className="text-xs text-gray-600">
+                                  <strong>Installer Team:</strong> {field.teamType(order.InstallerTeam) || 'N/A'} ({(order.InstallerTeamMembers || []).map(e => field.employeeName(e)).join(', ') || 'None'})
+                                </div>
+                              )}
                               {order.products.map((product, idx) => {
                                 const productKey = field.orderProductId(product) || `${orderKey}-prod-${idx}`;
                                 return (
@@ -815,6 +847,10 @@ export default function Schedule() {
             const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
               const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
               const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
+              const schedule = installationScheduleByOrderId.get(String(field.orderId(order)));
+              const installerTeamId = schedule?.installation_team_id ?? schedule?.installationTeamId ?? schedule?.team?.id ?? schedule?.teamId ?? schedule?.TeamID;
+              const installerTeam = installerTeamId ? (getTeam(installerTeamId) || schedule?.team || {}) : null;
+              const installerTeamMembers = installerTeamId ? getEmployeesForTeam(field.teamId(installerTeam) || installerTeamId) : [];
               const orderProductRows = orderProducts.filter(op => String(field.orderProductOrderId(op)) === String(field.orderId(order)));
               const products = orderProductRows.map(op => {
                 const product = productsList.find(p => String(field.productId(p)) === String(field.orderProductProductId(op))) || {};
@@ -831,7 +867,10 @@ export default function Schedule() {
                 CustomerName: field.customerName(customer),
                 BuildingName: field.buildingName(building),
                 BuildingAddress: building?.address ?? customer?.address ?? '',
-                products
+                products,
+                InstallerTeamId: installerTeamId,
+                InstallerTeam: installerTeam,
+                InstallerTeamMembers: installerTeamMembers
               };
             });
 
@@ -908,6 +947,11 @@ export default function Schedule() {
                               {formatTimeRange(order.scheduled_start_date_time, order.scheduled_end_date_time)}
                             </div>
                             <div className="text-xs text-green-600">{field.orderStatus(order)}</div>
+                            {order.InstallerTeamId && (
+                              <div className="text-xs text-gray-600">
+                                <strong>Installer Team:</strong> {field.teamType(order.InstallerTeam) || 'N/A'} ({(order.InstallerTeamMembers || []).map(e => field.employeeName(e)).join(', ') || 'None'})
+                              </div>
+                            )}
                             <div className="mt-1 space-y-1">
                               {order.products.map((product, idx) => {
                                 const productKey = field.orderProductId(product) || `${orderKey}-prod-${idx}`;

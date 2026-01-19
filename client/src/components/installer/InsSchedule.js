@@ -154,6 +154,7 @@ const InstallationSchedule = () => {
     employeeRole: (emp) => emp.role?.name || emp.roleName || emp.role || '',
     teamId: (team) => team.id || team.TeamID,
     teamType: (team) => team.team_type || team.TeamType || '',
+    teamActive: (team) => team.available_flag ?? team.AvailableFlag ?? true,
     installScheduleId: (is) => is.id,
     installScheduleOrderId: (is) => is.order_id,
     installScheduleTeamId: (is) => is.installation_team_id,
@@ -173,7 +174,7 @@ const InstallationSchedule = () => {
     return assignment?.employee_id || assignment?.EmployeeID || assignment?.employeeId || assignment?.employee?.id || assignment?.employee?.EmployeeID || null;
   };
 
-  const installationTeams = teams.filter(team => field.teamType(team).toLowerCase().includes('installation'));
+  const installationTeams = teams.filter(team => field.teamActive(team) && field.teamType(team).toLowerCase().includes('installation'));
 
   useEffect(() => {
     if (!teamAutoSelectEnabled) return;
