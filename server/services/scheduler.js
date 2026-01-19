@@ -50,12 +50,21 @@ function getTruckCapacitySummary(trucks) {
   return { maxOneTonCapacity, maxThreeTonCapacity };
 }
 
-function pickTruckForVolume(trucks, minTone, totalVolumeCm3) {
-  const candidates = trucks
+function pickTruckForVolume(trucks, minTone, totalVolumeCm3, excludedTruckIds = []) {
+  let candidates = trucks
+    .filter(truck => !excludedTruckIds.includes(truck.id))
     .filter(truck => Number(truck?.tone || 0) >= minTone)
     .map(truck => ({ truck, tone: Number(truck?.tone || 0), volume: getTruckVolumeCm3(truck) }))
     .filter(entry => entry.volume >= totalVolumeCm3);
 
+  if (candidates.length === 0) {
+    // If no trucks are available from the non-excluded list, try again with all trucks.
+    candidates = trucks
+      .filter(truck => Number(truck?.tone || 0) >= minTone)
+      .map(truck => ({ truck, tone: Number(truck?.tone || 0), volume: getTruckVolumeCm3(truck) }))
+      .filter(entry => entry.volume >= totalVolumeCm3);
+  }
+  
   if (candidates.length === 0) return null;
 
   const minCandidateTone = Math.min(...candidates.map(c => c.tone));
@@ -84,6 +93,15 @@ function calculateOrderVolumeCm3(order) {
     totalVolume += length * width * height * Math.max(quantity, 1);
   }
   return totalVolume;
+}
+
+function copyCalculatedFields(target, source) {
+  if (!target || !source) return;
+  target.calculatedDeliveryTime = source.calculatedDeliveryTime ?? null;
+  target.calculatedInstallationTime = source.calculatedInstallationTime ?? null;
+  target.calculatedServiceTime = source.calculatedServiceTime ?? null;
+  target.calculatedVolumeCm3 = source.calculatedVolumeCm3 ?? null;
+  target.requiresInstallation = source.requiresInstallation ?? null;
 }
 
 /**
@@ -220,12 +238,61 @@ async function loadConfiguration() {
   return config;
 }
 
+async function getTeamWorkload(teamIds, startDate, endDate) {
+    const workloads = await prisma.time_slots.groupBy({
+        by: ['delivery_team_id'],
+        where: {
+            delivery_team_id: {
+                in: teamIds,
+            },
+            date: {
+                gte: startDate.format('YYYY-MM-DD'),
+                lte: endDate.format('YYYY-MM-DD'),
+            },
+        },
+        _count: {
+            id: true,
+        },
+    });
+
+    const workloadMap = new Map();
+    teamIds.forEach(id => workloadMap.set(id, 0));
+    workloads.forEach(w => workloadMap.set(w.delivery_team_id, w._count.id));
+    return workloadMap;
+}
+
+async function getUsedTruckIdsForDate(date) {
+    const timeslots = await prisma.time_slots.findMany({
+        where: {
+            date: date,
+            truck_id: {
+                not: null,
+            },
+        },
+        select: {
+            truck_id: true,
+        },
+    });
+    return timeslots.map(ts => ts.truck_id);
+}
+
 /**
- * Generate timeslots for next 7 days (skip weekends & Thursday for normal delivery)
+ * Generate timeslots for next 7 days in KL timezone (skip weekends & Thursday for normal delivery)
  */
 async function generateTimeSlots() {
-  console.log('Generating default timeslots for next 7 days...');
-  const today = dayjs().startOf('day');
+  console.log('Generating default timeslots for the next 7 weekdays (KL Time)...');
+  
+  // Get current date in Kuala Lumpur timezone
+  const formatter = new Intl.DateTimeFormat('en-CA', { 
+    timeZone: 'Asia/Kuala_Lumpur', 
+    year: 'numeric', 
+    month: '2-digit', 
+    day: '2-digit' 
+  });
+  const klDateStr = formatter.format(new Date()); // Returns "YYYY-MM-DD"
+  
+  // Initialize start date from KL time
+  const today = dayjs(klDateStr).startOf('day');
 
   const timeslotTemplates = {
     normal: [
@@ -240,16 +307,19 @@ async function generateTimeSlots() {
   };
 
   let createdCount = 0;
+  let daysChecked = 0;
+  let date = today;
 
-  for (let i = 1; i <= 7; i++) {
-    const day = today.add(i, 'day');
-    const dayOfWeek = day.day(); // 0=Sunday, 4=Thursday, 6=Saturday
+  while (daysChecked < 7) {
+    date = date.add(1, 'day');
+    const dayOfWeek = date.day(); // 0=Sunday, 1=Monday, ..., 6=Saturday
 
-    // Skip weekends
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      console.log(`Skipping ${day.format('YYYY-MM-DD')} (weekend)`);
+    // Skip weekends (Friday & Saturday as per user request)
+    if (dayOfWeek === 5 || dayOfWeek === 6) {
+      // console.log(`Skipping weekend: ${date.format('YYYY-MM-DD')} (${dayOfWeek === 5 ? 'Friday' : 'Saturday'})`);
       continue;
     }
+    daysChecked++;
 
     // Thursday = far area deliveries only (e.g., Genting)
     const slotType = dayOfWeek === 4 ? 'far-area' : 'normal';
@@ -257,7 +327,7 @@ async function generateTimeSlots() {
     for (const t of timeslotTemplates.normal) {
       const existingSlots = await prisma.time_slots.findMany({
         where: {
-          date: day.format('YYYY-MM-DD'),
+          date: date.format('YYYY-MM-DD'),
           time_window_start: t.start
         }
       });
@@ -265,7 +335,7 @@ async function generateTimeSlots() {
       if (existingSlots.length === 0) {
         await prisma.time_slots.create({
           data: {
-            date: day.format('YYYY-MM-DD'),
+            date: date.format('YYYY-MM-DD'),
             time_window_start: t.start,
             time_window_end: t.end,
             available_flag: true,
@@ -273,7 +343,7 @@ async function generateTimeSlots() {
           }
         });
         createdCount++;
-        console.log(`Created ${slotType} slot: ${day.format('YYYY-MM-DD')} ${t.start}-${t.end}`);
+        console.log(`Created ${slotType} slot: ${date.format('YYYY-MM-DD')} ${t.start}-${t.end}`);
       }
     }
   }
@@ -431,6 +501,7 @@ async function calculateOrderTimes(orders) {
       const product = op.products;
       const quantity = Number(op.quantity || 0);
 
+      const serviceType = String(op.service_type || '').toLowerCase();
       const customMin = op.custom_installation_time_min ?? null;
       const customMax = op.custom_installation_time_max ?? null;
       const productMin = product.estimated_installation_time_min ?? null;
@@ -439,18 +510,22 @@ async function calculateOrderTimes(orders) {
       const maxMinutes = customMax ?? productMax ?? null;
       const hasInstallationEstimate = minMinutes !== null || maxMinutes !== null;
       const requiresInstallerTeam = !!product.installer_team_required_flag;
+      const includeInstallation = serviceType
+        ? serviceType === 'delivery_installation'
+        : (hasInstallationEstimate || requiresInstallerTeam);
 
-      if (requiresInstallerTeam) {
+      if (includeInstallation && requiresInstallerTeam) {
         requiresInstallation = true;
       }
 
-      if (hasInstallationEstimate || requiresInstallerTeam) {
+      if (includeInstallation) {
         hasAnyInstallationNeeded = true;
       }
 
-      if (hasInstallationEstimate) {
+      if (includeInstallation && hasInstallationEstimate) {
         if (op.dismantle_required) {
-          totalInstallationTime += (product.dismantle_time || 0);
+          const dismantleMinutes = (op.custom_dismantle_time ?? product.dismantle_time) || 0;
+          totalInstallationTime += Number(dismantleMinutes || 0) * Math.max(quantity, 1);
         }
 
         let installationMinutes = 0;
@@ -462,7 +537,7 @@ async function calculateOrderTimes(orders) {
           installationMinutes = Number(maxMinutes);
         }
 
-        totalInstallationTime += installationMinutes;
+        totalInstallationTime += installationMinutes * Math.max(quantity, 1);
       }
 
       const length = Number(product.package_length_cm || 0);
@@ -491,17 +566,17 @@ async function calculateOrderTimes(orders) {
 async function fetchTeams() {
   const deliveryTeams = await prisma.teams.findMany({
     where: { team_type: 'delivery' },
-    include: { assignments: { include: { employee: true } } }
+    include: { assignments: { include: { employee: { include: { role: true } } } } }
   });
 
   const warehouseTeams = await prisma.teams.findMany({
     where: { team_type: 'warehouse' },
-    include: { assignments: { include: { employee: true } } }
+    include: { assignments: { include: { employee: { include: { role: true } } } } }
   });
 
   const installationTeams = await prisma.teams.findMany({
     where: { team_type: 'installation' },
-    include: { assignments: { include: { employee: true } } }
+    include: { assignments: { include: { employee: { include: { role: true } } } } }
   });
 
   console.log(`Delivery teams: ${deliveryTeams.length}`);
@@ -509,6 +584,150 @@ async function fetchTeams() {
   console.log(`Installation teams: ${installationTeams.length}`);
 
   return { deliveryTeams, warehouseTeams, installationTeams };
+}
+
+function teamHasAllRoles(team, keyword) {
+  const key = String(keyword || '').toLowerCase();
+  const members = team?.assignments || [];
+  if (members.length === 0) return false;
+  return members.every(a => {
+    const roleName = a?.employee?.role?.name || '';
+    return roleName.toLowerCase().includes(key);
+  });
+}
+
+function teamHasSomeRoles(team, keyword) {
+  const key = String(keyword || '').toLowerCase();
+  const members = team?.assignments || [];
+  if (members.length === 0) return false;
+  return members.some(a => {
+    const roleName = a?.employee?.role?.name || '';
+    return roleName.toLowerCase().includes(key);
+  });
+}
+
+async function getTeamAssignmentCounts(teamIds, fieldName) {
+  if (!teamIds.length) return new Map();
+  const rows = await prisma.time_slots.groupBy({
+    by: [fieldName],
+    where: {
+      [fieldName]: { in: teamIds }
+    },
+    _count: { id: true }
+  });
+  const map = new Map();
+  teamIds.forEach(id => map.set(id, 0));
+  rows.forEach(r => map.set(r[fieldName], r._count.id));
+  return map;
+}
+
+async function getTruckAssignmentCounts(truckIds) {
+  if (!truckIds.length) return new Map();
+  const rows = await prisma.time_slots.groupBy({
+    by: ['truck_id'],
+    where: { truck_id: { in: truckIds } },
+    _count: { id: true }
+  });
+  const map = new Map();
+  truckIds.forEach(id => map.set(id, 0));
+  rows.forEach(r => map.set(r.truck_id, r._count.id));
+  return map;
+}
+
+function pickLeastUsedTeam(teams, countsMap) {
+  if (!teams.length) return null;
+  let best = teams[0];
+  let bestCount = countsMap.get(best.id) ?? 0;
+  for (const team of teams) {
+    const count = countsMap.get(team.id) ?? 0;
+    if (count < bestCount) {
+      best = team;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function pickLeastUsedTruck(trucks, countsMap, requiredTone, totalVolumeCm3) {
+  const candidates = trucks
+    .map(truck => ({ truck, tone: Number(truck?.tone || 0), volume: getTruckVolumeCm3(truck) }))
+    .filter(entry => entry.tone >= requiredTone && entry.volume >= totalVolumeCm3);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    const aCount = countsMap.get(a.truck.id) ?? 0;
+    const bCount = countsMap.get(b.truck.id) ?? 0;
+    if (aCount !== bCount) return aCount - bCount;
+    if (a.tone !== b.tone) return a.tone - b.tone;
+    return a.volume - b.volume;
+  });
+  return candidates[0].truck;
+}
+
+async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, trucks) {
+  console.log(`[ensureTimeslotAssignments] Running for timeslot: ${timeslotId}`);
+
+  const orderCount = await prisma.orders.count({
+    where: { time_slot_id: timeslotId, order_status: 'Scheduled' }
+  });
+
+  if (orderCount === 0) {
+    console.log(`[ensureTimeslotAssignments] No orders in timeslot. Clearing assignments.`);
+    await prisma.time_slots.update({
+      where: { id: timeslotId },
+      data: { delivery_team_id: null, warehouse_team_id: null, truck_id: null }
+    });
+    return;
+  }
+
+  const timeslot = await prisma.time_slots.findUnique({ where: { id: timeslotId } });
+  if (!timeslot) {
+    console.log(`[ensureTimeslotAssignments] Timeslot not found.`);
+    return;
+  }
+
+  // --- Start Debug Logging ---
+  console.log('[ensureTimeslotAssignments] All delivery teams fetched:', JSON.stringify(teams.deliveryTeams, null, 2));
+  console.log('[ensureTimeslotAssignments] All warehouse teams fetched:', JSON.stringify(teams.warehouseTeams, null, 2));
+
+  const deliveryCandidates = (teams.deliveryTeams || []).filter(t => teamHasSomeRoles(t, 'delivery'));
+  const warehouseCandidates = (teams.warehouseTeams || []).filter(t => teamHasAllRoles(t, 'storekeeper'));
+
+  console.log('[ensureTimeslotAssignments] Delivery team candidates after filtering:', JSON.stringify(deliveryCandidates, null, 2));
+  console.log('[ensureTimeslotAssignments] Warehouse team candidates after filtering:', JSON.stringify(warehouseCandidates, null, 2));
+  // --- End Debug Logging ---
+
+  const deliveryCounts = await getTeamAssignmentCounts(deliveryCandidates.map(t => t.id), 'delivery_team_id');
+  const warehouseCounts = await getTeamAssignmentCounts(warehouseCandidates.map(t => t.id), 'warehouse_team_id');
+
+  const deliveryTeam = timeslot.delivery_team_id && deliveryCandidates.some(t => t.id === timeslot.delivery_team_id)
+    ? deliveryCandidates.find(t => t.id === timeslot.delivery_team_id)
+    : pickLeastUsedTeam(deliveryCandidates, deliveryCounts);
+
+  const warehouseTeam = timeslot.warehouse_team_id && warehouseCandidates.some(t => t.id === timeslot.warehouse_team_id)
+    ? warehouseCandidates.find(t => t.id === timeslot.warehouse_team_id)
+    : pickLeastUsedTeam(warehouseCandidates, warehouseCounts);
+    
+  // --- More Debug Logging ---
+  console.log('[ensureTimeslotAssignments] Chosen delivery team:', JSON.stringify(deliveryTeam, null, 2));
+  console.log('[ensureTimeslotAssignments] Chosen warehouse team:', JSON.stringify(warehouseTeam, null, 2));
+  // --- End Debug Logging ---
+
+  const requiredTone = slotVolumeCm3 > 0 ? (slotVolumeCm3 > getTruckCapacitySummary(trucks).maxOneTonCapacity ? 3 : 1) : 1;
+  const truckCounts = await getTruckAssignmentCounts(trucks.map(t => t.id));
+  const currentTruck = timeslot.truck_id ? trucks.find(t => t.id === timeslot.truck_id) : null;
+  const currentTruckFits = currentTruck && Number(currentTruck?.tone || 0) >= requiredTone && getTruckVolumeCm3(currentTruck) >= slotVolumeCm3;
+  const chosenTruck = currentTruckFits ? currentTruck : pickLeastUsedTruck(trucks, truckCounts, requiredTone, slotVolumeCm3);
+
+  console.log(`[ensureTimeslotAssignments] Updating timeslot with DeliveryTeamID: ${deliveryTeam?.id || null}, WarehouseTeamID: ${warehouseTeam?.id || null}`);
+
+  await prisma.time_slots.update({
+    where: { id: timeslotId },
+    data: {
+      delivery_team_id: deliveryTeam?.id || null,
+      warehouse_team_id: warehouseTeam?.id || null,
+      truck_id: chosenTruck?.id || null
+    }
+  });
 }
 
 /**
@@ -558,7 +777,6 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
   let installationSchedulesCreated = 0;
 
   // Team assignment counters (round-robin)
-  let deliveryTeamIndex = 0;
   let warehouseTeamIndex = 0;
   let installationTeamIndex = 0;
 
@@ -603,13 +821,11 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
       const suitableOrders = orders.filter(order => {
         const building = order.buildings;
 
-        // Check building access window
+        // Check building access window overlap with slot
         if (building?.access_time_window_start && building?.access_time_window_end) {
           const accessStart = dayjs(`${timeslot.date} ${building.access_time_window_start}`);
           const accessEnd = dayjs(`${timeslot.date} ${building.access_time_window_end}`);
-
-          // Timeslot must stay within building access window
-          if (slotStart.isBefore(accessStart) || slotEnd.isAfter(accessEnd)) {
+          if (slotEnd.isBefore(accessStart) || slotStart.isAfter(accessEnd)) {
             return false;
           }
         }
@@ -629,25 +845,6 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
       // Optimize route for these orders
       console.log('   [Scheduler] Step 8.2: optimizing route for suitable orders');
       const optimizedRoute = await optimizeRoute(suitableOrders, config.warehouse_address, slotStart.toDate());
-
-      // Assign teams to this timeslot
-      if (!timeslot.delivery_team_id && teams.deliveryTeams.length > 0) {
-        const deliveryTeam = teams.deliveryTeams[deliveryTeamIndex % teams.deliveryTeams.length];
-        const warehouseTeam = teams.warehouseTeams[warehouseTeamIndex % teams.warehouseTeams.length];
-
-        await prisma.time_slots.update({
-          where: { id: timeslot.id },
-          data: {
-            delivery_team_id: deliveryTeam.id,
-            warehouse_team_id: warehouseTeam.id
-          }
-        });
-
-        console.log(`   [Scheduler] Assigned Delivery Team: ${deliveryTeam.id}, Warehouse Team: ${warehouseTeam.id}`);
-
-        deliveryTeamIndex++;
-        warehouseTeamIndex++;
-      }
 
       // Start scheduling from the available start time calculated above
       let currentTime = availableStartTime.clone();
@@ -673,11 +870,26 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
         }
 
         console.log(`   [Scheduler] Step 8.3: scheduling order ${order.id} at ${currentTime.format('HH:mm')}`);
-        const orderStart = currentTime.clone();
+        const building = order.buildings;
+        let orderStart = currentTime.clone();
         const serviceMinutes = order.calculatedServiceTime || order.calculatedDeliveryTime;
-        const orderEnd = currentTime.add(serviceMinutes, 'minute');
+        if (building?.access_time_window_start && building?.access_time_window_end) {
+          const accessStart = dayjs(`${timeslot.date} ${building.access_time_window_start}`);
+          if (orderStart.isBefore(accessStart)) {
+            orderStart = accessStart;
+          }
+        }
+        const orderEnd = orderStart.add(serviceMinutes, 'minute');
 
         // Check if order still fits in slot
+        if (building?.access_time_window_end) {
+          const accessEnd = dayjs(`${timeslot.date} ${building.access_time_window_end}`);
+          if (orderEnd.isAfter(accessEnd)) {
+            console.log(`   Order ${order.id} exceeds access window, skipping remaining orders`);
+            break;
+          }
+        }
+
         if (orderEnd.isAfter(slotEnd)) {
           console.log(`   Order ${order.id} exceeds slot time, skipping remaining orders`);
           break;
@@ -709,6 +921,7 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
           }
         });
 
+        copyCalculatedFields(fullOrder, order);
         scheduled.push(fullOrder);
         slotVolumeCm3 += orderVolumeCm3;
 
@@ -754,26 +967,7 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
 
       console.log(`   [Scheduler] Total travel time for this route: ${Math.round(travelTimeAccumulated)} minutes (with traffic)`);
 
-      if (slotVolumeCm3 > 0) {
-        const requiredTone = slotRequiresThreeTon ? 3 : 1;
-        const currentTruck = timeslot.truck_id ? trucks.find(t => t.id === timeslot.truck_id) : null;
-        const currentTruckTone = Number(currentTruck?.tone || 0);
-        const currentTruckVolume = currentTruck ? getTruckVolumeCm3(currentTruck) : 0;
-        const currentTruckFits = currentTruck && currentTruckTone >= requiredTone && currentTruckVolume >= slotVolumeCm3;
-
-        if (!currentTruckFits) {
-          const assignedTruck = pickTruckForVolume(trucks, requiredTone, slotVolumeCm3);
-          if (assignedTruck) {
-            await prisma.time_slots.update({
-              where: { id: timeslot.id },
-              data: { truck_id: assignedTruck.id }
-            });
-            console.log(`   [Scheduler] Truck assigned to slot ${timeslot.id}: ${assignedTruck.plate_no || assignedTruck.id}`);
-          } else if (slotRequiresThreeTon) {
-            console.log(`   [Scheduler] No 3-ton truck fits slot ${timeslot.id}, orders remain scheduled but truck unassigned`);
-          }
-        }
-      }
+      await ensureTimeslotAssignments(timeslot.id, slotVolumeCm3, teams, trucks);
     }
 
     // Any remaining orders are unscheduled
@@ -791,6 +985,7 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
 
       // Add reason field to the order object
       fullOrder.unscheduled_reason = 'No suitable timeslot found (access window conflict or insufficient time)';
+      copyCalculatedFields(fullOrder, order);
 
       unscheduled.push(fullOrder);
       console.log(`   Unscheduled Order ${order.id}: No suitable timeslot`);
@@ -860,8 +1055,8 @@ async function optimizeRoute(orders, warehouseAddress, departureTime) {
       order.truck_loading_sequence = route.length - deliveryIndex;
     });
 
-    // Estimate travel times (10 min per stop)
-    const travelTimes = new Array(route.length).fill(10);
+    // Estimate travel times (17 min per stop)
+    const travelTimes = new Array(route.length).fill(17);
 
     return {
       orders: route,
@@ -872,8 +1067,24 @@ async function optimizeRoute(orders, warehouseAddress, departureTime) {
   }
 }
 
+async function updateTimeslotResources(timeslotId) {
+  if (!timeslotId) return;
+  console.log(`[Scheduler] Updating resources for timeslot ${timeslotId}...`);
+  try {
+    const teams = await fetchTeams();
+    const trucks = await fetchTrucks();
+    const slotVolumeCm3 = await getTimeslotVolumeCm3(timeslotId);
+    await ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, trucks);
+    console.log(`[Scheduler] Resources updated for timeslot ${timeslotId}`);
+  } catch (error) {
+    console.error(`[Scheduler] Failed to update resources for timeslot ${timeslotId}:`, error);
+  }
+}
+
 module.exports = {
   scheduleOrders,
   generateTimeSlots,
-  loadConfiguration
+  loadConfiguration,
+  updateTimeslotResources
 };
+

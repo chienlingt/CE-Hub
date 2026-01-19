@@ -5,13 +5,21 @@ import {
     addBuilding,
     updateBuilding,
     deleteBuilding,
-    getAllZones
+    getAllZones,
+    getOrdersByBuildingId,
+    reassignOrdersAndDeleteBuilding
 } from "../../../services/informationService";
 import { StatusBadge } from "../../common/Badge";
+import Modal from "../../common/Modal";
 
 export default function BuildingInfo() {
     const [formFields, setFormFields] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [reassignModalOpen, setReassignModalOpen] = useState(false);
+    const [ordersToReassign, setOrdersToReassign] = useState([]);
+    const [selectedBuilding, setSelectedBuilding] = useState('');
+    const [allBuildings, setAllBuildings] = useState([]);
+    const [buildingToDelete, setBuildingToDelete] = useState(null);
 
     useEffect(() => {
         async function loadZones() {
@@ -77,6 +85,45 @@ export default function BuildingInfo() {
         notes: ""
     };
 
+    async function handleDeleteBuilding(id) {
+        try {
+            const orders = await getOrdersByBuildingId(id);
+            if (orders.length === 0) {
+                if (window.confirm("Are you sure you want to delete this building?")) {
+                    await deleteBuilding(id);
+                    window.location.reload();
+                }
+            } else {
+                const buildings = await getAllBuildings();
+                setAllBuildings(buildings);
+                setOrdersToReassign(orders);
+                setBuildingToDelete(id);
+                setReassignModalOpen(true);
+            }
+        } catch (error) {
+            console.error("Failed to delete building or check for orders", error);
+            alert("Failed to delete building. Please try again.");
+        }
+    }
+
+    async function handleReassignment(e) {
+        e.preventDefault();
+        if (!selectedBuilding) {
+            alert("Please select a building to reassign orders to.");
+            return;
+        }
+        try {
+            await reassignOrdersAndDeleteBuilding(buildingToDelete, selectedBuilding);
+            setReassignModalOpen(false);
+            setBuildingToDelete(null);
+            setSelectedBuilding('');
+            window.location.reload();
+        } catch (error) {
+            console.error("Failed to reassign orders and delete building", error);
+            alert("Failed to reassign orders and delete building. Please try again.");
+        }
+    }
+
     if (loading) {
         return (
             <div className="flex items-center justify-center">
@@ -87,15 +134,52 @@ export default function BuildingInfo() {
     }
 
     return (
-        <InfoPage
-            title="Building"
-            getData={getAllBuildings}
-            addData={addBuilding}
-            updateData={updateBuilding}
-            deleteData={deleteBuilding}
-            tableColumns={tableColumns}
-            formFields={formFields}
-            initialState={initialState}
-        />
+        <>
+            <InfoPage
+                title="Building"
+                getData={getAllBuildings}
+                addData={addBuilding}
+                updateData={updateBuilding}
+                deleteData={deleteBuilding}
+                tableColumns={tableColumns}
+                formFields={formFields}
+                initialState={initialState}
+                customDeleteHandler={handleDeleteBuilding}
+            />
+            <Modal show={reassignModalOpen} onClose={() => setReassignModalOpen(false)}>
+                <h3 className="text-xl font-semibold mb-4">Reassign Orders</h3>
+                <p>This building has {ordersToReassign.length} associated orders. Please reassign them to another building before deleting.</p>
+                <form onSubmit={handleReassignment} className="space-y-3 mt-4">
+                    <select
+                        value={selectedBuilding}
+                        onChange={(e) => setSelectedBuilding(e.target.value)}
+                        className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        required
+                    >
+                        <option value="">Select a building</option>
+                        {allBuildings
+                            .filter(b => b.id !== buildingToDelete)
+                            .map(b => (
+                            <option key={b.id} value={b.id}>{b.building_name}</option>
+                        ))}
+                    </select>
+                    <div className="flex gap-3 pt-2">
+                        <button
+                            type="submit"
+                            className="flex-1 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors duration-200 text-sm font-medium"
+                        >
+                            Reassign and Delete
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setReassignModalOpen(false)}
+                            className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors duration-200 text-sm font-medium"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </Modal>
+        </>
     );
 }

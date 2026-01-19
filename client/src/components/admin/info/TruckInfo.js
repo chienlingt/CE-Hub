@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 import InfoPage from "../../common/InfoPage";
 import {
     getAllTrucks,
     addTruck,
     updateTruck,
     deleteTruck,
+    checkTruckAssociations,
 } from "../../../services/informationService";
 
 const tableColumns = [
@@ -87,6 +88,23 @@ function toApiFormat(truck) {
 }
 
 export default function TruckInfo() {
+    async function handleDeleteTruck(id) {
+        try {
+            const { has_associations } = await checkTruckAssociations(id);
+            if (has_associations) {
+                alert("This truck cannot be deleted because it is associated with existing lorry trips, truck zones, or time slots. Please remove the associations before deleting.");
+            } else {
+                if (window.confirm("Are you sure you want to delete this truck?")) {
+                    await deleteTruck(id);
+                    window.location.reload();
+                }
+            }
+        } catch (error) {
+            console.error("Failed to delete truck or check for associations", error);
+            alert("Failed to delete truck. Please try again.");
+        }
+    }
+
     return (
         <InfoPage
             title="Truck"
@@ -99,6 +117,7 @@ export default function TruckInfo() {
             initialState={initialState}
             normalizeData={normalizeTruck}
             toApiFormatData={toApiFormat}
+            customDeleteHandler={handleDeleteTruck}
         />
     );
 }

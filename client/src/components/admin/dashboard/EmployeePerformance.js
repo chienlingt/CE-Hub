@@ -91,7 +91,7 @@ export default function EmployeePerformance() {
   const getEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
 
   const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
-  const isCompletedStatus = (status) => ['completed', 'delivered'].includes(normalizeStatus(status));
+  const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
 
   const getRoleLabel = (employee) => {
     const role = employee?.role;
@@ -125,7 +125,15 @@ export default function EmployeePerformance() {
 
   const getOrderCompletionDate = (order) => {
     if (!order) return null;
-    const tryFields = ['actual_end_date_time', 'actual_arrival_date_time', 'updated_at', 'updatedAt'];
+    const tryFields = [
+      'install_end_date_time',
+      'InstallEndDateTime',
+      'delivery_end_date_time',
+      'DeliveryEndDateTime',
+      'actual_arrival_date_time',
+      'updated_at',
+      'updatedAt'
+    ];
     for (const f of tryFields) {
       const v = order[f];
       if (!v) continue;

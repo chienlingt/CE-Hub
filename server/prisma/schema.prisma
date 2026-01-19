@@ -44,6 +44,7 @@ model teams {
   id                     String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   team_type              String?
   created_at             DateTime                    @default(now())
+  available_flag         Boolean                     @default(true)
   assignments            employee_team_assignments[]
   installation_schedules installation_schedules[]
   delivery_timeslots     time_slots[]                @relation("DeliveryTeamSlots")
@@ -186,6 +187,15 @@ model orders {
   issue_reason              String?                 @db.VarChar(255)
   issue_desc                String?
   issue_evidence            String[]
+  delivery_start_date_time  DateTime?               @db.Timestamp(6)
+  delivery_end_date_time    DateTime?               @db.Timestamp(6)
+  install_start_date_time   DateTime?               @db.Timestamp(6)
+  install_end_date_time     DateTime?               @db.Timestamp(6)
+  delivery_address          String?
+  delivery_city             String?
+  delivery_postcode         String?
+  delivery_state            String?
+  issue_status              String?
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
@@ -210,6 +220,7 @@ model products {
   estimated_installation_time_max Int?
   no_lie_down_flag                Boolean?
   dismantle_required_flag         Boolean?
+  available_flag                  Boolean          @default(true)
   order_products                  order_products[]
 }
 
@@ -223,19 +234,21 @@ model reports {
 }
 
 model time_slots {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  date              String?
-  time_window_start String?
-  time_window_end   String?
-  available_flag    Boolean?
-  created_at        DateTime?
-  delivery_team_id  String?   @db.Uuid
-  warehouse_team_id String?   @db.Uuid
-  truck_id          String?   @db.Uuid
-  orders            orders[]
-  delivery_team     teams?    @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
-  truck             trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
-  warehouse_team    teams?    @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  date                    String?
+  time_window_start       String?
+  time_window_end         String?
+  available_flag          Boolean?
+  created_at              DateTime?
+  delivery_team_id        String?   @db.Uuid
+  warehouse_team_id       String?   @db.Uuid
+  truck_id                String?   @db.Uuid
+  loading_start_date_time DateTime? @db.Timestamp(6)
+  loading_end_date_time   DateTime? @db.Timestamp(6)
+  orders                  orders[]
+  delivery_team           teams?    @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
+  truck                   trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
+  warehouse_team          teams?    @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
 }
 
 model truck_zones {

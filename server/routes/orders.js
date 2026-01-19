@@ -3,13 +3,11 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const { extractBuildingName, normalizeBuildingName } = require('../utils/addressParser');
-const { scheduleOrders } = require('../services/scheduler');
+const { scheduleOrders, updateTimeslotResources } = require('../services/scheduler');
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
 
-const TRAVEL_FALLBACK_MINUTES = 10;
-const BETWEEN_ORDER_BUFFER_MINUTES = 10;
-const SERVICE_BUFFER_MINUTES = 10;
+const TRAVEL_FALLBACK_MINUTES = 17;
 
 function getTruckVolumeCm3(truck) {
   const length = Number(truck?.length_cm || 0);
@@ -44,29 +42,193 @@ function pickTruckForVolume(trucks, minTone, totalVolumeCm3) {
   return candidates.length > 0 ? candidates[0].truck : null;
 }
 
+function teamHasAllRoles(team, keyword) {
+  const key = String(keyword || '').toLowerCase();
+  const members = team?.assignments || [];
+  if (members.length === 0) return false;
+  return members.every(a => {
+    const roleName = a?.employee?.role?.name || '';
+    return roleName.toLowerCase().includes(key);
+  });
+}
+
+function teamHasSomeRoles(team, keyword) {
+  const key = String(keyword || '').toLowerCase();
+  const members = team?.assignments || [];
+  if (members.length === 0) return false;
+  return members.some(a => {
+    const roleName = a?.employee?.role?.name || '';
+    return roleName.toLowerCase().includes(key);
+  });
+}
+
+async function getTeamAssignmentCounts(teamIds, fieldName) {
+  if (!teamIds.length) return new Map();
+  const rows = await prisma.time_slots.groupBy({
+    by: [fieldName],
+    where: { [fieldName]: { in: teamIds } },
+    _count: { id: true }
+  });
+  const map = new Map();
+  teamIds.forEach(id => map.set(id, 0));
+  rows.forEach(r => map.set(r[fieldName], r._count.id));
+  return map;
+}
+
+async function getTruckAssignmentCounts(truckIds) {
+  if (!truckIds.length) return new Map();
+  const rows = await prisma.time_slots.groupBy({
+    by: ['truck_id'],
+    where: { truck_id: { in: truckIds } },
+    _count: { id: true }
+  });
+  const map = new Map();
+  truckIds.forEach(id => map.set(id, 0));
+  rows.forEach(r => map.set(r.truck_id, r._count.id));
+  return map;
+}
+
+function pickLeastUsedTeam(teams, countsMap) {
+  if (!teams.length) return null;
+  let best = teams[0];
+  let bestCount = countsMap.get(best.id) ?? 0;
+  for (const team of teams) {
+    const count = countsMap.get(team.id) ?? 0;
+    if (count < bestCount) {
+      best = team;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function pickLeastUsedTruck(trucks, countsMap, requiredTone, totalVolumeCm3) {
+  const candidates = trucks
+    .map(truck => ({ truck, tone: Number(truck?.tone || 0), volume: getTruckVolumeCm3(truck) }))
+    .filter(entry => entry.tone >= requiredTone && entry.volume >= totalVolumeCm3);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    const aCount = countsMap.get(a.truck.id) ?? 0;
+    const bCount = countsMap.get(b.truck.id) ?? 0;
+    if (aCount !== bCount) return aCount - bCount;
+    if (a.tone !== b.tone) return a.tone - b.tone;
+    return a.volume - b.volume;
+  });
+  return candidates[0].truck;
+}
+
+async function ensureTimeslotAssignments(timeslotId, totalVolumeCm3) {
+  const orderCount = await prisma.orders.count({
+    where: { time_slot_id: timeslotId, order_status: 'Scheduled' }
+  });
+
+  if (orderCount === 0) {
+    await prisma.time_slots.update({
+      where: { id: timeslotId },
+      data: { delivery_team_id: null, warehouse_team_id: null, truck_id: null }
+    });
+    return;
+  }
+
+  const [timeslot, teams, trucks] = await Promise.all([
+    prisma.time_slots.findUnique({ where: { id: timeslotId } }),
+    prisma.teams.findMany({
+      include: { assignments: { include: { employee: { include: { role: true } } } } }
+    }),
+    prisma.trucks.findMany()
+  ]);
+
+  if (!timeslot) return;
+
+  const deliveryCandidates = teams.filter(t => teamHasSomeRoles(t, 'delivery'));
+  const warehouseCandidates = teams.filter(t => teamHasAllRoles(t, 'storekeeper'));
+
+  const deliveryCounts = await getTeamAssignmentCounts(deliveryCandidates.map(t => t.id), 'delivery_team_id');
+  const warehouseCounts = await getTeamAssignmentCounts(warehouseCandidates.map(t => t.id), 'warehouse_team_id');
+
+  const deliveryTeam = timeslot.delivery_team_id && deliveryCandidates.some(t => t.id === timeslot.delivery_team_id)
+    ? deliveryCandidates.find(t => t.id === timeslot.delivery_team_id)
+    : pickLeastUsedTeam(deliveryCandidates, deliveryCounts);
+
+  const warehouseTeam = timeslot.warehouse_team_id && warehouseCandidates.some(t => t.id === timeslot.warehouse_team_id)
+    ? warehouseCandidates.find(t => t.id === timeslot.warehouse_team_id)
+    : pickLeastUsedTeam(warehouseCandidates, warehouseCounts);
+
+  const maxOneTonCapacity = getMaxCapacityByTone(trucks, tone => tone > 0 && tone <= 1);
+  const requiredTone = totalVolumeCm3 > maxOneTonCapacity && maxOneTonCapacity > 0 ? 3 : 1;
+  const truckCounts = await getTruckAssignmentCounts(trucks.map(t => t.id));
+  const currentTruck = timeslot.truck_id ? trucks.find(t => t.id === timeslot.truck_id) : null;
+  const currentTruckFits = currentTruck
+    && Number(currentTruck?.tone || 0) >= requiredTone
+    && getTruckVolumeCm3(currentTruck) >= totalVolumeCm3;
+  const chosenTruck = currentTruckFits ? currentTruck : pickLeastUsedTruck(trucks, truckCounts, requiredTone, totalVolumeCm3);
+
+  await prisma.time_slots.update({
+    where: { id: timeslotId },
+    data: {
+      delivery_team_id: deliveryTeam?.id || null,
+      warehouse_team_id: warehouseTeam?.id || null,
+      truck_id: chosenTruck?.id || null
+    }
+  });
+}
+
+async function clearTimeslotIfEmpty(timeslotId) {
+  const remaining = await prisma.orders.count({
+    where: { time_slot_id: timeslotId, order_status: 'Scheduled' }
+  });
+  if (remaining === 0) {
+    await prisma.time_slots.update({
+      where: { id: timeslotId },
+      data: { delivery_team_id: null, warehouse_team_id: null, truck_id: null }
+    });
+  }
+}
+
 function calculateOrderServiceMinutes(order) {
   let totalDeliveryMinutes = 0;
   let totalInstallationMinutes = 0;
+  let hasAnyInstallationNeeded = false;
 
   for (const op of order.order_products || []) {
     const product = op.products || {};
     const quantity = Number(op.quantity || 0);
-
-    totalDeliveryMinutes += 15 * Math.max(quantity, 1);
-
-    if (op.dismantle_required) {
-      totalInstallationMinutes += Number(product.dismantle_time || 0);
-    }
+    const serviceType = String(op.service_type || '').toLowerCase();
 
     const customMin = op.custom_installation_time_min ?? null;
     const customMax = op.custom_installation_time_max ?? null;
     const productMin = product.estimated_installation_time_min ?? null;
     const productMax = product.estimated_installation_time_max ?? null;
-    const installationMinutes = customMax ?? customMin ?? productMax ?? productMin ?? 0;
-    totalInstallationMinutes += Number(installationMinutes || 0);
+    const minMinutes = customMin ?? productMin ?? null;
+    const maxMinutes = customMax ?? productMax ?? null;
+    const hasInstallationEstimate = minMinutes !== null || maxMinutes !== null;
+    const requiresInstallerTeam = !!product.installer_team_required_flag;
+    const includeInstallation = serviceType
+      ? serviceType === 'delivery_installation'
+      : (hasInstallationEstimate || requiresInstallerTeam);
+
+    if (includeInstallation) {
+      hasAnyInstallationNeeded = true;
+      if (op.dismantle_required) {
+        const dismantleMinutes = (op.custom_dismantle_time ?? product.dismantle_time) || 0;
+        totalInstallationMinutes += Number(dismantleMinutes || 0) * Math.max(quantity, 1);
+      }
+
+      let installationMinutes = 0;
+      if (minMinutes !== null && maxMinutes !== null) {
+        installationMinutes = (Number(minMinutes) + Number(maxMinutes)) / 2;
+      } else if (minMinutes !== null) {
+        installationMinutes = Number(minMinutes);
+      } else if (maxMinutes !== null) {
+        installationMinutes = Number(maxMinutes);
+      }
+
+      totalInstallationMinutes += installationMinutes * Math.max(quantity, 1);
+    }
   }
 
-  return totalDeliveryMinutes + totalInstallationMinutes + SERVICE_BUFFER_MINUTES;
+  totalDeliveryMinutes = order.order_products?.length ? (hasAnyInstallationNeeded ? 0 : 10) : 0;
+  return totalDeliveryMinutes + totalInstallationMinutes;
 }
 
 function calculateOrderVolumeCm3(order) {
@@ -92,7 +254,7 @@ async function estimateTravelMinutes(fromAddress, toAddress) {
     const toCoords = await getCoordinatesFromAddress(toAddress);
     const route = await calculateRoute([fromCoords, toCoords], new Date());
     const durationSeconds = route.durationWithTraffic ?? route.duration ?? 0;
-    return Math.max(Math.ceil(durationSeconds / 60), TRAVEL_FALLBACK_MINUTES);
+    return Math.max(Math.ceil(durationSeconds / 60), 1);
   } catch (error) {
     console.warn('[Order Reassign] Travel estimate fallback:', error.message);
     return TRAVEL_FALLBACK_MINUTES;
@@ -134,6 +296,14 @@ router.get('/', async (req, res) => {
         { customers: { phone: { contains: search } } },
         { buildings: { building_name: { contains: search, mode: 'insensitive' } } }
       ];
+    }
+
+    // Issues filter
+    if (req.query.issues_only === 'true') {
+        where.AND = [
+            { issue_reason: { not: null } },
+            { issue_reason: { not: '' } }
+        ];
     }
 
     // Build orderBy clause
@@ -278,12 +448,17 @@ router.post('/', async (req, res) => {
         special_equipment_needed: req.body.special_equipment_needed || null,
         created_at: new Date(),
         updated_at: new Date(),
+        // Snapshot the delivery address at the time of order creation
+        delivery_address: customer.address,
+        delivery_city: customer.city,
+        delivery_postcode: customer.postcode,
+        delivery_state: customer.state,
         order_products: {
           create: products.map((p) => ({
             product_id: p.product_id,
             quantity: p.quantity,
             dismantle_required: p.dismantle_required,
-            service_type: p.service_type || service_type || 'delivery', // Use product-level or order-level service type
+            service_type: p.service_type || service_type || 'delivery',
             custom_installation_time_min: p.custom_installation_time_min || null,
             custom_installation_time_max: p.custom_installation_time_max || null,
           })),
@@ -349,6 +524,8 @@ router.put('/:id', async (req, res) => {
     if (!existingOrder) {
       return res.status(404).json({ error: 'Order not found' });
     }
+
+    const previousTimeSlotId = existingOrder.time_slot_id;
 
     // Check if order status allows editing
     if (existingOrder.order_status === 'Delivered') {
@@ -474,10 +651,78 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// PATCH /:id/status - Update order_status only (shared by warehouse/delivery/installer)
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const { order_status } = req.body || {};
+
+    if (!order_status || typeof order_status !== 'string') {
+      return res.status(400).json({ error: 'order_status is required' });
+    }
+
+    const now = new Date();
+    const existingOrder = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+      select: {
+        delivery_start_date_time: true,
+        delivery_end_date_time: true,
+        install_start_date_time: true,
+        install_end_date_time: true
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const data = {
+      order_status,
+      updated_at: now
+    };
+
+    if (order_status === 'Delivering') {
+      data.delivery_start_date_time = now;
+      data.actual_start_date_time = now;
+    }
+
+    if (order_status === 'Delivered') {
+      data.delivery_end_date_time = now;
+      data.actual_arrival_date_time = now;
+    }
+
+    if (order_status === 'Installing') {
+      data.install_start_date_time = now;
+    }
+
+    if (order_status === 'Completed') {
+      if (!existingOrder.delivery_end_date_time) {
+        data.delivery_end_date_time = now;
+        data.actual_arrival_date_time = now;
+      }
+      if (existingOrder.install_start_date_time && !existingOrder.install_end_date_time) {
+        data.install_end_date_time = now;
+      }
+    }
+
+    const updatedOrder = await prisma.orders.update({
+      where: { id: req.params.id },
+      data
+    });
+
+    return res.json({ success: true, order: updatedOrder });
+  } catch (err) {
+    console.error('PATCH /api/orders/:id/status error', err);
+    if (err.code === 'P2025') {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.status(500).json({ error: 'Failed to update order status', details: err.message });
+  }
+});
+
 // PATCH /:id - Reassign order to different timeslot (admin only)
 router.patch('/:id', async (req, res) => {
   try {
-    const { time_slot_id, force_truck_tone } = req.body;
+    const { time_slot_id, force_truck_tone, scheduled_start_date_time, scheduled_end_date_time } = req.body;
 
     if (time_slot_id === undefined) {
       return res.status(400).json({ error: 'time_slot_id is required' });
@@ -496,6 +741,8 @@ router.patch('/:id', async (req, res) => {
     if (!existingOrder) {
       return res.status(404).json({ error: 'Order not found' });
     }
+
+    const previousTimeSlotId = existingOrder.time_slot_id;
 
     // Check if order status allows reassignment
     if (existingOrder.order_status === 'Delivered') {
@@ -539,6 +786,10 @@ router.patch('/:id', async (req, res) => {
         }
       });
 
+      if (previousTimeSlotId) {
+        await updateTimeslotResources(previousTimeSlotId);
+      }
+
       return res.json({
         success: true,
         order: updatedOrder,
@@ -560,16 +811,6 @@ router.patch('/:id', async (req, res) => {
     const slotEnd = dayjs(`${slotDate} ${newTimeslot.time_window_end}`);
 
     const building = existingOrder.buildings;
-    if (building?.access_time_window_start && building?.access_time_window_end) {
-      const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
-      const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
-      if (slotStart.isBefore(accessStart) || slotEnd.isAfter(accessEnd)) {
-        return res.status(409).json({
-          error: 'Timeslot exceeds building access window',
-          code: 'ACCESS_WINDOW'
-        });
-      }
-    }
 
     const slotOrders = await prisma.orders.findMany({
       where: {
@@ -587,61 +828,108 @@ router.patch('/:id', async (req, res) => {
     });
 
     const lastOrder = slotOrders.find(o => o.scheduled_end_date_time);
-    const orderServiceMinutes = calculateOrderServiceMinutes(existingOrder);
     const orderVolumeCm3 = calculateOrderVolumeCm3(existingOrder);
     const slotVolumeCm3 = slotOrders.reduce((sum, order) => sum + calculateOrderVolumeCm3(order), 0);
     const totalVolumeCm3 = slotVolumeCm3 + orderVolumeCm3;
 
-    let fromAddress = null;
-    if (lastOrder) {
-      fromAddress = lastOrder.customers?.address || lastOrder.buildings?.address || lastOrder.buildings?.building_name || null;
-    }
-    if (!fromAddress) {
-      const config = await prisma.scheduler_config.findFirst();
-      fromAddress = config?.warehouse_address || null;
-    }
+    const manualStart = scheduled_start_date_time ? dayjs(scheduled_start_date_time) : null;
+    const manualEnd = scheduled_end_date_time ? dayjs(scheduled_end_date_time) : null;
 
-    const toAddress = existingOrder.customers?.address || existingOrder.buildings?.address || existingOrder.buildings?.building_name || null;
-    const travelMinutes = await estimateTravelMinutes(fromAddress, toAddress);
-
-    let availableStart = slotStart.clone();
-    if (lastOrder?.scheduled_end_date_time) {
-      const lastEnd = dayjs(lastOrder.scheduled_end_date_time);
-      if (lastEnd.isAfter(availableStart)) {
-        availableStart = lastEnd.add(BETWEEN_ORDER_BUFFER_MINUTES, 'minute');
+    if (manualStart && manualEnd) {
+      if (!manualStart.isValid() || !manualEnd.isValid()) {
+        return res.status(400).json({ error: 'Invalid scheduled time provided' });
       }
-    }
 
-    let orderStart = availableStart.add(travelMinutes, 'minute');
-    if (building?.access_time_window_start) {
-      const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
-      if (orderStart.isBefore(accessStart)) {
-        orderStart = accessStart;
+      if (!manualEnd.isAfter(manualStart)) {
+        return res.status(400).json({ error: 'End time must be after start time' });
       }
-    }
 
-    const orderEnd = orderStart.add(orderServiceMinutes, 'minute');
-    if (building?.access_time_window_end) {
-      const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
-      if (orderEnd.isAfter(accessEnd)) {
+      if (manualStart.isBefore(slotStart) || manualEnd.isAfter(slotEnd)) {
         return res.status(409).json({
-          error: 'Order exceeds building access window',
-          code: 'ACCESS_WINDOW'
+          error: 'Selected time is outside the timeslot window',
+          code: 'TIME_WINDOW'
         });
       }
-    }
 
-    if (orderEnd.isAfter(slotEnd)) {
-      return res.status(409).json({
-        error: 'Not enough time in selected timeslot',
-        code: 'TIME_WINDOW'
+      if (building?.access_time_window_start && building?.access_time_window_end) {
+        const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
+        const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
+        if (manualStart.isBefore(accessStart) || manualEnd.isAfter(accessEnd)) {
+          return res.status(409).json({
+            error: 'Order exceeds building access window',
+            code: 'ACCESS_WINDOW'
+          });
+        }
+      }
+
+      const hasOverlap = slotOrders.some(existing => {
+        const existingStart = existing.scheduled_start_date_time ? dayjs(existing.scheduled_start_date_time) : null;
+        const existingEnd = existing.scheduled_end_date_time ? dayjs(existing.scheduled_end_date_time) : null;
+        if (!existingStart || !existingEnd) return false;
+        return manualStart.isBefore(existingEnd) && manualEnd.isAfter(existingStart);
       });
+
+      if (hasOverlap) {
+        return res.status(409).json({
+          error: 'Timeslot is occupied for the selected time range',
+          code: 'TIME_CONFLICT'
+        });
+      }
+
+    } else {
+      const orderServiceMinutes = calculateOrderServiceMinutes(existingOrder);
+      let fromAddress = null;
+      if (lastOrder) {
+        fromAddress = lastOrder.customers?.address || lastOrder.buildings?.address || lastOrder.buildings?.building_name || null;
+      }
+      if (!fromAddress) {
+        const config = await prisma.scheduler_config.findFirst();
+        fromAddress = config?.warehouse_address || null;
+      }
+
+      const toAddress = existingOrder.customers?.address || existingOrder.buildings?.address || existingOrder.buildings?.building_name || null;
+      const travelMinutes = await estimateTravelMinutes(fromAddress, toAddress);
+
+      let availableStart = slotStart.clone();
+      if (lastOrder?.scheduled_end_date_time) {
+        const lastEnd = dayjs(lastOrder.scheduled_end_date_time);
+        if (lastEnd.isAfter(availableStart)) {
+          availableStart = lastEnd;
+        }
+      }
+
+      let orderStart = availableStart.add(travelMinutes, 'minute');
+      if (building?.access_time_window_start) {
+        const accessStart = dayjs(`${slotDate} ${building.access_time_window_start}`);
+        if (orderStart.isBefore(accessStart)) {
+          orderStart = accessStart;
+        }
+      }
+
+      const orderEnd = orderStart.add(orderServiceMinutes, 'minute');
+      if (building?.access_time_window_end) {
+        const accessEnd = dayjs(`${slotDate} ${building.access_time_window_end}`);
+        if (orderEnd.isAfter(accessEnd)) {
+          return res.status(409).json({
+            error: 'Order exceeds building access window',
+            code: 'ACCESS_WINDOW'
+          });
+        }
+      }
+
+      if (orderEnd.isAfter(slotEnd)) {
+        return res.status(409).json({
+          error: 'Timeslot is occupied or not enough time in selected timeslot',
+          code: 'TIME_WINDOW'
+        });
+      }
+
+      req.body.scheduled_start_date_time = orderStart.toDate();
+      req.body.scheduled_end_date_time = orderEnd.toDate();
     }
 
     const allTrucks = await prisma.trucks.findMany();
-    const maxOneTonCapacity = getMaxCapacityByTone(allTrucks, tone => tone > 0 && tone <= 1);
     const maxThreeTonCapacity = getMaxCapacityByTone(allTrucks, tone => tone >= 3);
-
     if (maxThreeTonCapacity > 0 && totalVolumeCm3 > maxThreeTonCapacity) {
       return res.status(409).json({
         error: 'Truck not fit for this order size',
@@ -649,46 +937,13 @@ router.patch('/:id', async (req, res) => {
       });
     }
 
-    const requiresThreeTon = maxOneTonCapacity > 0 && totalVolumeCm3 > maxOneTonCapacity;
-    const currentTruck = newTimeslot.truck_id ? allTrucks.find(t => t.id === newTimeslot.truck_id) : null;
-    const currentTruckTone = Number(currentTruck?.tone || 0);
-    const currentTruckVolume = currentTruck ? getTruckVolumeCm3(currentTruck) : 0;
-
-    if (requiresThreeTon) {
-      if (currentTruckTone >= 3 && currentTruckVolume >= totalVolumeCm3) {
-        // Current truck fits
-      } else {
-        const upgradeTruck = pickTruckForVolume(allTrucks, 3, totalVolumeCm3);
-        if (!upgradeTruck) {
-          return res.status(409).json({
-            error: 'Truck not fit for this order size',
-            code: 'TRUCK_NOT_FIT'
-          });
-        }
-
-        if (!force_truck_tone || Number(force_truck_tone) < 3) {
-          return res.status(409).json({
-            error: 'Truck space not enough, reassign truck?',
-            code: 'TRUCK_UPGRADE_REQUIRED',
-            recommended_tone: 3,
-            truck_id: upgradeTruck.id
-          });
-        }
-
-        await prisma.time_slots.update({
-          where: { id: time_slot_id },
-          data: { truck_id: upgradeTruck.id }
-        });
-      }
-    }
-
     // Update order timeslot
     const updatedOrder = await prisma.orders.update({
       where: { id: req.params.id },
       data: {
         time_slot_id: time_slot_id,
-        scheduled_start_date_time: orderStart.toDate(),
-        scheduled_end_date_time: orderEnd.toDate(),
+        scheduled_start_date_time: manualStart ? manualStart.toDate() : req.body.scheduled_start_date_time,
+        scheduled_end_date_time: manualEnd ? manualEnd.toDate() : req.body.scheduled_end_date_time,
         order_status: 'Scheduled',
         updated_at: new Date()
       },
@@ -719,6 +974,11 @@ router.patch('/:id', async (req, res) => {
       }
     });
 
+    await updateTimeslotResources(time_slot_id);
+    if (previousTimeSlotId && previousTimeSlotId !== time_slot_id) {
+      await updateTimeslotResources(previousTimeSlotId);
+    }
+
     console.log(`Order ${req.params.id} reassigned to timeslot ${time_slot_id}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
@@ -740,6 +1000,31 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     res.status(500).json({ error: 'Failed to delete order', details: err.message });
+  }
+});
+
+router.patch('/:id/issue', async (req, res) => {
+  try {
+    const { issue_status, issue_priority_level, issue_reason, issue_desc } = req.body;
+    
+    // Construct update data with only provided fields
+    const data = {};
+    if (issue_status !== undefined) data.issue_status = issue_status;
+    if (issue_priority_level !== undefined) data.issue_priority_level = issue_priority_level;
+    if (issue_reason !== undefined) data.issue_reason = issue_reason;
+    if (issue_desc !== undefined) data.issue_desc = issue_desc;
+
+    data.updated_at = new Date();
+
+    const order = await prisma.orders.update({
+      where: { id: req.params.id },
+      data
+    });
+    
+    res.json(order);
+  } catch (err) {
+    console.error('PATCH /api/orders/:id/issue error', err);
+    res.status(500).json({ error: 'Failed to update order issue', details: err.message });
   }
 });
 

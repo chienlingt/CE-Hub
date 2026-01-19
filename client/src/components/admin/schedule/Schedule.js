@@ -235,6 +235,99 @@ export default function Schedule() {
     });
   };
 
+  const calculateServiceTimes = (order) => {
+    const orderId = field.orderId(order);
+    const orderProductRows = orderProducts.filter(op => String(field.orderProductOrderId(op)) === String(orderId));
+    let totalDeliveryTime = 0;
+    let totalInstallationTime = 0;
+    let requiresInstallation = false;
+    let hasAnyInstallationNeeded = false;
+
+    for (const op of orderProductRows) {
+      const product = productsList.find(p => String(field.productId(p)) === String(field.orderProductProductId(op))) || {};
+      const serviceType = String(op?.service_type ?? op?.ServiceType ?? '').toLowerCase();
+      const customMin = op?.custom_installation_time_min ?? op?.CustomInstallationTimeMin ?? op?.customInstallTimeMin ?? null;
+      const customMax = op?.custom_installation_time_max ?? op?.CustomInstallationTimeMax ?? op?.customInstallTimeMax ?? null;
+      const productMin = product?.estimated_installation_time_min ?? product?.EstimatedInstallationTimeMin ?? null;
+      const productMax = product?.estimated_installation_time_max ?? product?.EstimatedInstallationTimeMax ?? null;
+      const minMinutes = customMin ?? productMin ?? null;
+      const maxMinutes = customMax ?? productMax ?? null;
+      const hasInstallationEstimate = minMinutes !== null || maxMinutes !== null;
+      const requiresInstallerTeam = !!field.productInstallerRequired(product);
+      const includeInstallation = serviceType
+        ? serviceType === 'delivery_installation'
+        : (hasInstallationEstimate || requiresInstallerTeam);
+
+      if (includeInstallation && requiresInstallerTeam) {
+        requiresInstallation = true;
+      }
+      if (includeInstallation) {
+        hasAnyInstallationNeeded = true;
+      }
+
+      if (includeInstallation && hasInstallationEstimate) {
+        const dismantleRequired = op?.dismantle_required ?? op?.DismantleRequired ?? op?.dismantleRequired ?? false;
+        if (dismantleRequired) {
+          const dismantleMinutes = op?.custom_dismantle_time ?? op?.CustomDismantleTime ?? product?.dismantle_time ?? product?.DismantleTime ?? 0;
+          totalInstallationTime += Number(dismantleMinutes || 0) * Math.max(op.quantity || 0, 1);
+        }
+
+        let installationMinutes = 0;
+        if (minMinutes !== null && maxMinutes !== null) {
+          installationMinutes = (Number(minMinutes) + Number(maxMinutes)) / 2;
+        } else if (minMinutes !== null) {
+          installationMinutes = Number(minMinutes);
+        } else if (maxMinutes !== null) {
+          installationMinutes = Number(maxMinutes);
+        }
+        totalInstallationTime += (installationMinutes * (op.quantity || 1));
+      }
+    }
+
+    totalDeliveryTime = orderProductRows.length ? (hasAnyInstallationNeeded ? 0 : 10) : 0;
+
+    return {
+      calculatedDeliveryTime: totalDeliveryTime,
+      calculatedInstallationTime: totalInstallationTime,
+      calculatedServiceTime: totalDeliveryTime + totalInstallationTime,
+      requiresInstallation
+    };
+  };
+
+  const unscheduledOrders = useMemo(() => {
+    return orders
+      .filter(order => {
+        const status = String(field.orderStatus(order) || '').toLowerCase();
+        const hasSlot = !!field.orderTimeSlotId(order);
+        const hasScheduledTimes = !!(order.scheduled_start_date_time || order.ScheduledStartDateTime);
+        return status === 'pending' && !hasSlot && !hasScheduledTimes;
+      })
+      .map(order => {
+        const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
+        const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
+        const serviceTimes = calculateServiceTimes(order);
+        const orderId = field.orderId(order);
+        const orderProductRows = orderProducts.filter(op => String(field.orderProductOrderId(op)) === String(orderId));
+        const products = orderProductRows.map(op => {
+          const product = productsList.find(p => String(field.productId(p)) === String(field.orderProductProductId(op))) || {};
+          return {
+            ...op,
+            ProductName: field.productName(product)
+          };
+        });
+
+        return {
+          ...order,
+          ...serviceTimes,
+          CustomerName: field.customerName(customer) || 'N/A',
+          BuildingName: field.buildingName(building) || 'N/A',
+          BuildingAccessStart: building?.access_time_window_start ?? building?.AccessTimeWindowStart ?? null,
+          BuildingAccessEnd: building?.access_time_window_end ?? building?.AccessTimeWindowEnd ?? null,
+          products
+        };
+      });
+  }, [orders, customers, buildings, orderProducts, productsList, field]);
+
   // --- CRUD handlers ---
   const handleEditTimeSlot = (slot) => {
     setAddOrEdit('edit');
@@ -333,11 +426,26 @@ export default function Schedule() {
 
   // --- Order reassignment handlers ---
   const handleEditOrder = (order) => {
+    // Extract time from ISO string if available
+    const getHHMM = (dt) => {
+      if (!dt) return '';
+      const d = new Date(dt);
+      if (isNaN(d.getTime())) return '';
+      // localized time might fail if not careful, better to slice if ISO, but safer to use methods
+      // Assuming naive local time handling for now as mostly used in this app
+      return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    };
+
     setEditingOrder({
       ...order,
       OrderID: field.orderId(order),
       CurrentTimeSlotID: field.orderTimeSlotId(order),
-      NewTimeSlotID: field.orderTimeSlotId(order)
+      NewTimeSlotID: field.orderTimeSlotId(order),
+      UseManualTime: false,
+      ScheduledStartTime: '',
+      ScheduledEndTime: '',
+      _prefillStartTime: getHHMM(order.scheduled_start_date_time || order.ScheduledStartDateTime),
+      _prefillEndTime: getHHMM(order.scheduled_end_date_time || order.ScheduledEndDateTime),
     });
     setShowOrderEditModal(true);
   };
@@ -347,6 +455,72 @@ export default function Schedule() {
     setOrderEditError('');
     try {
       const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
+      // --- Validation Start ---
+      if (!editingOrder.NewTimeSlotID) throw new Error('Please select a timeslot.');
+      
+      let scheduledStartISO = null;
+      let scheduledEndISO = null;
+
+      if (editingOrder.UseManualTime) {
+         if (!editingOrder.ScheduledStartTime || !editingOrder.ScheduledEndTime) {
+             throw new Error('Please enter both start and end time.');
+         }
+         // Get Date from Timeslot
+         const targetSlot = timeSlots.find(ts => String(field.timeSlotId(ts)) === String(editingOrder.NewTimeSlotID));
+         if (!targetSlot) throw new Error('Invalid timeslot selected.');
+         
+         const baseDate = field.timeSlotDate(targetSlot); // YYYY-MM-DD
+         // Construct ISO strings assuming local time
+         scheduledStartISO = new Date(`${baseDate}T${editingOrder.ScheduledStartTime}`).toISOString();
+         scheduledEndISO = new Date(`${baseDate}T${editingOrder.ScheduledEndTime}`).toISOString();
+
+         // Check if End Time is after Start Time
+         if (editingOrder.ScheduledEndTime <= editingOrder.ScheduledStartTime) {
+             throw new Error('End time must be after start time.');
+         }
+
+         // Validate Access Window
+         const buildingRec = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(editingOrder)));
+         if (buildingRec) {
+            const accStartFull = buildingRec.access_time_window_start || buildingRec.AccessTimeWindowStart;
+            const accEndFull = buildingRec.access_time_window_end || buildingRec.AccessTimeWindowEnd;
+            
+            if (accStartFull && accEndFull) {
+                 // Slicing to ensure HH:mm comparison (db might return HH:mm:ss)
+                 const startStr = String(accStartFull).slice(0, 5);
+                 const endStr = String(accEndFull).slice(0, 5);
+                 
+                 if (editingOrder.ScheduledStartTime < startStr || editingOrder.ScheduledEndTime > endStr) {
+                     throw new Error(`Time is outside building access window (${startStr} - ${endStr})`);
+                 }
+            }
+         }
+
+         // Validate Overlap
+         const existingOrders = getOrdersForSlot(editingOrder.NewTimeSlotID);
+         const myId = editingOrder.OrderID;
+         
+         const isOverlapping = existingOrders.some(existing => {
+             if (String(field.orderId(existing)) === String(myId)) return false; // skip self
+             const exStart = existing.scheduled_start_date_time || existing.ScheduledStartDateTime;
+             const exEnd = existing.scheduled_end_date_time || existing.ScheduledEndDateTime;
+             if (!exStart || !exEnd) return false;
+             
+             // Check overlap: StartA < EndB && EndA > StartB
+             // We can compare ISO strings
+             if ((scheduledStartISO < exEnd) && (scheduledEndISO > exStart)) {
+                 console.log(`[Validation] Overlap detected with Order ${field.orderId(existing)} (${exStart} - ${exEnd})`);
+                 return true;
+             }
+             return false;
+         });
+
+         if (isOverlapping) {
+             throw new Error('Selected time overlaps with another order in this timeslot. Please choose a different time.');
+         }
+      }
+      // --- Validation End ---
 
       const attemptReassign = async (payload) => {
         const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
@@ -359,7 +533,11 @@ export default function Schedule() {
       };
 
       let { response, data } = await attemptReassign({
-        time_slot_id: editingOrder.NewTimeSlotID
+        time_slot_id: editingOrder.NewTimeSlotID,
+        ...(editingOrder.UseManualTime ? {
+          scheduled_start_date_time: scheduledStartISO,
+          scheduled_end_date_time: scheduledEndISO
+        } : {})
       });
 
       if (!response.ok || !data.success) {
@@ -368,6 +546,10 @@ export default function Schedule() {
           if (confirmUpgrade) {
             ({ response, data } = await attemptReassign({
               time_slot_id: editingOrder.NewTimeSlotID,
+              ...(editingOrder.UseManualTime ? {
+                scheduled_start_date_time: scheduledStartISO,
+                scheduled_end_date_time: scheduledEndISO
+              } : {}),
               force_truck_tone: data.recommended_tone || 3
             }));
           }
@@ -513,9 +695,15 @@ export default function Schedule() {
                 // Get truck/team IDs directly from time_slots table
                 const truckId = field.timeSlotTruckId(slot);
                 const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
+                const warehouseTeamId = field.timeSlotWarehouseTeamId(slot);
+
                 const truck = getTruck(truckId) || {};
                 const deliveryTeam = getTeam(deliveryTeamId) || {};
-                const teamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
+                const warehouseTeam = getTeam(warehouseTeamId) || {};
+
+                const deliveryTeamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
+                const warehouseTeamMembers = getEmployeesForTeam(field.teamId(warehouseTeam)) || [];
+                
                 const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
                   const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
                   const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
@@ -552,15 +740,17 @@ export default function Schedule() {
                     </div>
 
                     <div className="text-xs text-gray-600 mt-1">
-                      <div className="flex items-center gap-1"><Truck size={10} />{field.truckPlate(truck)}</div>
                       <div className="flex items-center gap-1"><Package size={10} />{slotOrders.length} orders</div>
+                      <div className="flex items-center gap-1"><Truck size={10} />{field.truckPlate(truck) || 'N/A'}</div>
+                      {deliveryTeamId && <div className="flex items-center gap-1"><Users size={10} />D: {field.teamType(deliveryTeam) || 'N/A'}</div>}
+                      {warehouseTeamId && <div className="flex items-center gap-1"><Users size={10} />W: {field.teamType(warehouseTeam) || 'N/A'}</div>}
                     </div>
 
                     {expandedSlots.has(slotId) && (
                       <div className="mt-2 pt-2 border-t border-gray-200 text-xs space-y-1">
-                        <div><strong>Team:</strong> {field.teamType(deliveryTeam) || '—'}</div>
+                        {deliveryTeamId && <div><strong>Delivery Team:</strong> {field.teamType(deliveryTeam) || '—'} ({deliveryTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'})</div>}
+                        {warehouseTeamId && <div><strong>Warehouse Team:</strong> {field.teamType(warehouseTeam) || '—'} ({warehouseTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'})</div>}
                         <div><strong>Truck:</strong> {field.truckTone(truck)}T - {field.truckPlate(truck)}</div>
-                        <div><strong>Team Members:</strong> {teamMembers.map(e => field.employeeName(e)).join(', ') || 'None'}</div>
                         {slotOrders.map((order, orderIdx) => {
                           const orderKey = field.orderId(order) || `${slotId}-order-${orderIdx}`;
                           return (
@@ -613,9 +803,15 @@ export default function Schedule() {
             // Get truck/team IDs directly from time_slots table
             const truckId = field.timeSlotTruckId(slot);
             const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
+            const warehouseTeamId = field.timeSlotWarehouseTeamId(slot);
+
             const truck = getTruck(truckId) || {};
             const deliveryTeam = getTeam(deliveryTeamId) || {};
-            const teamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
+            const warehouseTeam = getTeam(warehouseTeamId) || {};
+
+            const deliveryTeamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
+            const warehouseTeamMembers = getEmployeesForTeam(field.teamId(warehouseTeam)) || [];
+
             const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
               const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
               const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
@@ -652,24 +848,37 @@ export default function Schedule() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Truck size={16} /> Truck Details</h3>
                     <div className="bg-white p-3 rounded-md border text-sm">
-                      <div><strong>Plate:</strong> {field.truckPlate(truck)}</div>
+                      <div><strong>Plate:</strong> {field.truckPlate(truck) || 'N/A'}</div>
                       <div><strong>Capacity:</strong> {field.truckTone(truck)}T</div>
                       <div><strong>Dimensions:</strong> {field.truckLength(truck)}×{field.truckWidth(truck)}×{field.truckHeight(truck)}cm</div>
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Users size={16} /> Team Details</h3>
-                    <div className="bg-white p-3 rounded-md border text-sm">
-                      <div><strong>Team:</strong> {field.teamType(deliveryTeam)}</div>
-                      <div><strong>ID:</strong> {field.teamId(deliveryTeam)}</div>
-                      <div><strong>Members:</strong> {teamMembers.map(e => field.employeeName(e)).join(', ')}</div>
+                  {deliveryTeamId && (
+                    <div className="space-y-2">
+                      <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Users size={16} /> Delivery Team</h3>
+                      <div className="bg-white p-3 rounded-md border text-sm">
+                        <div><strong>Type:</strong> {field.teamType(deliveryTeam) || 'N/A'}</div>
+                        <div><strong>ID:</strong> {field.teamId(deliveryTeam) || 'N/A'}</div>
+                        <div><strong>Members:</strong> {deliveryTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'}</div>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {warehouseTeamId && (
+                    <div className="space-y-2">
+                      <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Users size={16} /> Warehouse Team</h3>
+                      <div className="bg-white p-3 rounded-md border text-sm">
+                        <div><strong>Type:</strong> {field.teamType(warehouseTeam) || 'N/A'}</div>
+                        <div><strong>ID:</strong> {field.teamId(warehouseTeam) || 'N/A'}</div>
+                        <div><strong>Members:</strong> {warehouseTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4">
@@ -885,11 +1094,53 @@ export default function Schedule() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Reassign to Timeslot</label>
               <select
                 value={editingOrder.NewTimeSlotID || ''}
-                onChange={e => setEditingOrder(o => ({ ...o, NewTimeSlotID: e.target.value }))}
+                onChange={e => {
+                  const newId = e.target.value;
+                  const selectedSlot = timeSlots.find(ts => String(field.timeSlotId(ts)) === String(newId));
+                  const slotStart = selectedSlot ? field.timeSlotStart(selectedSlot) : '';
+                  const slotEnd = selectedSlot ? field.timeSlotEnd(selectedSlot) : '';
+                  setEditingOrder(o => ({
+                    ...o,
+                    NewTimeSlotID: newId,
+                    ScheduledStartTime: o.UseManualTime && !o.ScheduledStartTime ? slotStart : o.ScheduledStartTime,
+                    ScheduledEndTime: o.UseManualTime && !o.ScheduledEndTime ? slotEnd : o.ScheduledEndTime
+                  }));
+                }}
                 className="w-full p-2 border border-gray-300 rounded-md text-sm"
               >
                 <option value="">-- Select Timeslot --</option>
-                {timeSlots.map(slot => {
+                {timeSlots
+                  .filter(slot => {
+                    const getRefDate = (d) => {
+                       if (d instanceof Date) return d;
+                       if (typeof d === 'string') return new Date(d);
+                       return new Date();
+                    };
+                    // Robust date string comparison
+                    const slotD = getRefDate(field.timeSlotDate(slot));
+                    if (isNaN(slotD.getTime())) return false;
+                    
+                    // Create local YYYY-MM-DD strings for comparison
+                    const toLocalYMD = (date) => {
+                       const year = date.getFullYear();
+                       const month = String(date.getMonth() + 1).padStart(2, '0');
+                       const day = String(date.getDate()).padStart(2, '0');
+                       return `${year}-${month}-${day}`;
+                    };
+                    
+                    const now = new Date();
+                    const slotDateStr = toLocalYMD(slotD);
+                    const todayStr = toLocalYMD(now);
+                    
+                    if (slotDateStr > todayStr) return true;
+                    if (slotDateStr < todayStr) return false;
+                    
+                    // Same day: check time
+                    const currentHHMM = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                    const slotStart = field.timeSlotStart(slot) || "00:00";
+                    return slotStart > currentHHMM;
+                  })
+                  .map(slot => {
                   const slotDate = field.timeSlotDate(slot);
                   const slotStart = field.timeSlotStart(slot);
                   const slotEnd = field.timeSlotEnd(slot);
@@ -904,6 +1155,54 @@ export default function Schedule() {
               </select>
               <p className="text-xs text-gray-500 mt-1">Select a new timeslot for this order</p>
             </div>
+
+            {/* Time Override Inputs */}
+            {editingOrder.NewTimeSlotID && (
+              <div className="bg-gray-50 p-2 rounded border border-gray-200 space-y-2">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={!!editingOrder.UseManualTime}
+                    onChange={(e) => {
+                      const useManual = e.target.checked;
+                      setEditingOrder(o => ({
+                        ...o,
+                        UseManualTime: useManual,
+                        ScheduledStartTime: useManual ? (o.ScheduledStartTime || o._prefillStartTime || '') : '',
+                        ScheduledEndTime: useManual ? (o.ScheduledEndTime || o._prefillEndTime || '') : ''
+                      }));
+                    }}
+                  />
+                  Set exact start/end time (saved as is, no buffer)
+                </label>
+
+                {editingOrder.UseManualTime && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Start Time</label>
+                      <input
+                        type="time"
+                        value={editingOrder.ScheduledStartTime || ''}
+                        onChange={e => setEditingOrder(o => ({ ...o, ScheduledStartTime: e.target.value }))}
+                        className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">End Time</label>
+                      <input
+                        type="time"
+                        value={editingOrder.ScheduledEndTime || ''}
+                        onChange={e => setEditingOrder(o => ({ ...o, ScheduledEndTime: e.target.value }))}
+                        className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                      />
+                    </div>
+                    <div className="col-span-2 text-xs text-gray-500">
+                      Validates against access window ({accessStart || 'N/A'}-{accessEnd || 'N/A'}) and checks for overlaps within the selected timeslot.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 mt-4">
@@ -1017,9 +1316,57 @@ export default function Schedule() {
           <div className="mt-2 text-xs text-gray-500">Note: This will trigger the server-side scheduler (server endpoint: POST /api/scheduler/run).</div>
         </div> */}
 
+        {unscheduledOrders.length > 0 && (
+          <div className="mb-4 p-4 border border-amber-200 bg-amber-50 rounded-lg">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+              <div className="text-sm font-semibold text-amber-900">Unassigned Orders ({unscheduledOrders.length})</div>
+              {/* <div className="text-xs text-amber-700">Assign to a timeslot or edit order details, then rerun the auto-scheduler.</div> */}
+            </div>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {unscheduledOrders.map(order => {
+                const orderId = field.orderId(order);
+                const accessStart = order.BuildingAccessStart || 'N/A';
+                const accessEnd = order.BuildingAccessEnd || 'N/A';
+                const productPreview = (order.products || []).slice(0, 3);
+                return (
+                  <div key={orderId} className="bg-white border border-amber-100 rounded-md p-3">
+                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                      <div className="text-sm space-y-1">
+                        <div className="font-medium text-gray-800">{order.CustomerName}</div>
+                        <div className="text-xs text-gray-600">{order.BuildingName}</div>
+                        <div className="text-xs text-gray-500">Order ID: {String(orderId || '').slice(0, 12)}...</div>
+                        <div className="text-xs text-gray-600">Access window: {accessStart} - {accessEnd}</div>
+                        <div className="text-xs text-gray-700">
+                          Service time: {order.calculatedServiceTime || 0} min
+                          <span className="text-gray-500"> (Delivery {order.calculatedDeliveryTime || 0} / Install {order.calculatedInstallationTime || 0})</span>
+                          <span className="text-gray-500"> • Installation required: {order.requiresInstallation ? 'Yes' : 'No'}</span>
+                        </div>
+                        {productPreview.length > 0 && (
+                          <div className="text-xs text-gray-600">
+                            Products: {productPreview.map(p => p.ProductName || 'Unknown').join(', ')}
+                            {order.products?.length > productPreview.length ? ` +${order.products.length - productPreview.length} more` : ''}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleEditOrder(order)}
+                          className="px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-xs font-medium"
+                        >
+                          Assign to Timeslot
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center gap-4">
           <div className="flex bg-gray-100 rounded-lg p-1">
-            {['daily','weekly','monthly'].map(mode => (
+            {['daily','weekly'].map(mode => (
               <button key={mode} onClick={() => setViewMode(mode)} className={`px-3 py-1 rounded capitalize text-sm ${viewMode === mode ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-800'}`}>{mode}</button>
             ))}
           </div>
@@ -1038,7 +1385,7 @@ export default function Schedule() {
       <div className="mb-6">
         {viewMode === 'daily' && renderDailyView()}
         {viewMode === 'weekly' && renderWeeklyView()}
-        {viewMode === 'monthly' && renderMonthlyView()}
+        {/* {viewMode === 'monthly' && renderMonthlyView()} */}
       </div>
 
       {showAddModal && renderTimeSlotModal()}

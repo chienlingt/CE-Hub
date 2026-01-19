@@ -1,5 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Modal from "./Modal";
+
+const SortIcon = ({ order }) => {
+    if (!order) return <span className="text-gray-400">↕</span>;
+    return order === 'asc' ? <span>▲</span> : <span>▼</span>;
+};
 
 function InfoTable({
     columns,
@@ -7,7 +12,10 @@ function InfoTable({
     loading,
     onEdit,
     onDelete,
-    saving
+    saving,
+    sortKey,
+    sortOrder,
+    onSort
 }) {
     return (
         <div className="overflow-x-auto">
@@ -16,8 +24,15 @@ function InfoTable({
                     <tr>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
                         {columns.map(col => (
-                            <th key={col.key} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                {col.label}
+                            <th 
+                                key={col.key} 
+                                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
+                                onClick={() => onSort(col.key)}
+                            >
+                                <div className="flex items-center gap-2">
+                                    {col.label}
+                                    {sortKey === col.key && <SortIcon order={sortOrder} />}
+                                </div>
                             </th>
                         ))}
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -91,7 +106,8 @@ function InfoModal({
     onFormChange,
     onFormSubmit,
     saving,
-    error
+    error,
+    formErrors = {}
 }) {
     return (
         <Modal show={show} onClose={onClose}>
@@ -104,8 +120,8 @@ function InfoModal({
                 </div>
             )}
             <form onSubmit={onFormSubmit} className="space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {formFields.map(field => (
+                <div className="grid grid-cols-1 gap-3">
+                    {formFields.filter(field => !field.showWhen || field.showWhen(formData)).map(field => (
                         <div key={field.key}>
                         <label className="block font-medium mb-1 text-sm">{field.label}</label>
                         {field.type === 'select' ? (
@@ -133,6 +149,7 @@ function InfoModal({
                             />
                         )}
                         {field.guidance && <div className="text-xs text-gray-400 mt-1">{field.guidance}</div>}
+                        {formErrors[field.key] && <div className="text-xs text-red-500 mt-1">{formErrors[field.key]}</div>}
                         </div>
                     ))}
                 </div>
@@ -140,7 +157,7 @@ function InfoModal({
                     <button
                         type="submit"
                         className="flex-1 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors duration-200 text-sm font-medium disabled:opacity-50"
-                        disabled={saving}
+                        disabled={saving || Object.keys(formErrors).length > 0}
                     >
                         {saving
                             ? mode === "add" ? "Adding..." : "Saving..."
@@ -171,6 +188,7 @@ export default function InfoPage({
     initialState,
     normalizeData = (data) => data,
     toApiFormatData = (data) => data,
+    customDeleteHandler
 }) {
     const [data, setData] = useState([]);
     const [modalOpen, setModalOpen] = useState(false);
@@ -181,21 +199,44 @@ export default function InfoPage({
     const [saving, setSaving] = useState(false);
     const [successMsg, setSuccessMsg] = useState("");
     const [error, setError] = useState(null);
+    const [formErrors, setFormErrors] = useState({});
+    const [sortKey, setSortKey] = useState('created_at');
+    const [sortOrder, setSortOrder] = useState('desc');
 
-    useEffect(() => {
-        refreshData();
-    }, []);
+    const validate = (data) => {
+        const errors = {};
+        formFields.forEach(field => {
+            if (field.required && (!data[field.key] || data[field.key].toString().trim() === '')) {
+                errors[field.key] = `${field.label} is required.`;
+            }
+        });
+        return errors;
+    };
 
-    async function refreshData() {
+
+    const refreshData = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            const result = await getData();
+            const result = await getData({ sortBy: sortKey, sortOrder });
             setData(result.map(normalizeData));
         } catch (e) {
             setError(`Failed to fetch data: ${e.message}`);
         }
         setLoading(false);
+    }, [getData, normalizeData, sortKey, sortOrder]);
+
+    useEffect(() => {
+        refreshData();
+    }, [refreshData]);
+
+    function handleSort(key) {
+        if (sortKey === key) {
+            setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortKey(key);
+            setSortOrder('asc');
+        }
     }
 
     function openAddModal() {
@@ -204,6 +245,7 @@ export default function InfoPage({
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
     }
 
     function openEditModal(idx) {
@@ -213,20 +255,38 @@ export default function InfoPage({
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
     }
 
     function handleModalChange(e) {
         const { name, value, type } = e.target;
         let val = value;
         const field = formFields.find(f => f.key === name);
-        if (field?.type === 'number') {
+
+        if (field?.type === 'select') {
+            if (field.options.some(o => typeof o.value === 'boolean')) {
+                val = value === 'true';
+            }
+        } else if (field?.type === 'number') {
             val = value === "" ? "" : Number(value);
         }
-        setModalData(prev => ({ ...prev, [name]: val }));
+        
+        setModalData(prev => {
+            const newData = { ...prev, [name]: val };
+            const errors = validate(newData);
+            setFormErrors(errors);
+            return newData;
+        });
     }
 
     async function handleModalSubmit(e) {
         e.preventDefault();
+        const errors = validate(modalData);
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            setError("Please fill in all required fields.");
+            return;
+        }
         setSaving(true);
         setError(null);
         setSuccessMsg("");
@@ -248,6 +308,10 @@ export default function InfoPage({
     }
 
     async function handleDelete(id) {
+        if (customDeleteHandler) {
+            return customDeleteHandler(id);
+        }
+
         if (!window.confirm(`Delete this ${title}?`)) return;
         setSaving(true);
         setError(null);
@@ -283,6 +347,9 @@ export default function InfoPage({
                 onEdit={openEditModal}
                 onDelete={handleDelete}
                 saving={saving}
+                sortKey={sortKey}
+                sortOrder={sortOrder}
+                onSort={handleSort}
             />
 
             <InfoModal
@@ -296,6 +363,7 @@ export default function InfoPage({
                 onFormSubmit={handleModalSubmit}
                 saving={saving}
                 error={error}
+                formErrors={formErrors}
             />
         </div>
     );

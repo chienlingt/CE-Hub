@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
+import Select from 'react-select';
 import {
     getAllTeams,
     getAllEmployeeTeamAssignments,
     getAllEmployees,
     addTeam,
     deleteTeam,
-    updateTeam
+    updateTeam,
+    getTeamDeletability
 } from "../../../services/informationService";
 import InfoModal from "../../common/InfoModal";
 import FormField from "../../common/FormField";
@@ -18,63 +20,64 @@ export default function TeamInfo() {
     const [modalOpen, setModalOpen] = useState(false);
     const [modalMode, setModalMode] = useState("add");
     const [modalData, setModalData] = useState({});
+    const [selectedEmployees, setSelectedEmployees] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
     const [successMsg, setSuccessMsg] = useState("");
+    const [formErrors, setFormErrors] = useState({});
+
+    const validate = (data) => {
+        const errors = {};
+        if (!data.team_type || data.team_type.trim() === '') {
+            errors.team_type = "Team type is required.";
+        }
+        return errors;
+    };
 
     useEffect(() => {
         loadAllData();
     }, []);
 
-    function getTeamId(team) {
-        return team?.id || team?.TeamID || team?.team_id || team?.teamId || null;
-    }
+    const employeeOptions = useMemo(() => 
+        employees.map(e => ({ value: getEmployeeId(e), label: e.name || e.display_name }))
+    , [employees]);
 
-    function getTeamType(team) {
-        return team?.team_type || team?.teamType || team?.TeamType || null;
-    }
-
-    function getAssignmentTeamId(assignment) {
-        return (
-            assignment?.team_id ||
-            assignment?.teamId ||
-            assignment?.TeamID ||
-            assignment?.team?.id ||
-            assignment?.team?.TeamID ||
-            assignment?.team?.team_id ||
-            null
+    const assignedEmployeeIds = useMemo(() => {
+        const activeTeams = teams.filter(t => t.available_flag).map(t => getTeamId(t));
+        return new Set(
+            assignments
+                .filter(a => activeTeams.includes(getAssignmentTeamId(a)))
+                .map(a => getAssignmentEmployeeId(a))
         );
-    }
+    }, [teams, assignments]);
 
-    function getAssignmentEmployeeId(assignment) {
-        return (
-            assignment?.employee_id ||
-            assignment?.employeeId ||
-            assignment?.EmployeeID ||
-            assignment?.employee?.id ||
-            assignment?.employee?.EmployeeID ||
-            assignment?.employee?.employee_id ||
-            null
-        );
-    }
+    const sortedTeams = useMemo(() => {
+        return [...teams].sort((a, b) => {
+            const aActive = a.available_flag !== false;
+            const bActive = b.available_flag !== false;
+            if (aActive === bActive) return 0;
+            return aActive ? -1 : 1;
+        });
+    }, [teams]);
 
-    function getEmployeeId(employee) {
-        return employee?.id || employee?.EmployeeID || employee?.employee_id || null;
-    }
+    function getTeamId(team) { return team?.id || team?.TeamID || team?.team_id || team?.teamId || null; }
+    function getTeamType(team) { return team?.team_type || team?.teamType || team?.TeamType || null; }
+    function getAssignmentTeamId(a) { return a?.team_id || a?.teamId || a?.TeamID || a?.team?.id || null; }
+    function getAssignmentEmployeeId(a) { return a?.employee_id || a?.employeeId || a?.EmployeeID || a?.employee?.id || null; }
+    function getEmployeeId(employee) { return employee?.id || employee?.EmployeeID || employee?.employee_id || null; }
 
     async function loadAllData() {
         setLoading(true);
+        setError(null);
+        setSuccessMsg("");
         try {
             const [teamsData, assignmentsData, employeesData] = await Promise.all([
-                getAllTeams(),
-                getAllEmployeeTeamAssignments(),
-                getAllEmployees()
+                getAllTeams(), getAllEmployeeTeamAssignments(), getAllEmployees()
             ]);
-
             setTeams(teamsData);
             setAssignments(assignmentsData);
-            setEmployees(employeesData);
+            setEmployees(employeesData.filter(e => e.active_flag));
         } catch (e) {
             setError("Failed to load data: " + e.message);
             console.error('[TeamInfo] Load error:', e);
@@ -85,44 +88,49 @@ export default function TeamInfo() {
     function getTeamMembers(teamId) {
         if (!teamId) return [];
         const employeeIds = new Set(
-            assignments
-                .filter(a => getAssignmentTeamId(a) === teamId)
-                .map(a => getAssignmentEmployeeId(a))
-                .filter(Boolean)
+            assignments.filter(a => getAssignmentTeamId(a) === teamId).map(a => getAssignmentEmployeeId(a)).filter(Boolean)
         );
-
         return employees.filter(emp => employeeIds.has(getEmployeeId(emp)));
     }
 
     function openAddModal() {
         setModalMode("add");
         setModalData({ team_type: "" });
+        setSelectedEmployees([]);
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
     }
 
     function openEditModal(team) {
+        const teamId = getTeamId(team);
+        const members = getTeamMembers(teamId);
         setModalMode("edit");
-        setModalData({
-            ...team,
-            id: getTeamId(team),
-            team_type: getTeamType(team) || ""
-        });
+        setModalData({ ...team, id: teamId, team_type: getTeamType(team) || "" });
+        setSelectedEmployees(members.map(m => ({ value: getEmployeeId(m), label: m.name || m.display_name })));
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
     }
 
     function handleModalChange(e) {
         const { name, value } = e.target;
-        setModalData(prev => ({ ...prev, [name]: value }));
+        setModalData(prev => {
+            const newData = { ...prev, [name]: value };
+            const errors = validate(newData);
+            setFormErrors(errors);
+            return newData;
+        });
     }
 
     async function handleModalSubmit(e) {
         e.preventDefault();
-        if (!modalData.team_type) {
-            setError("Please enter a team type");
+        const errors = validate(modalData);
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            setError("Please fill in all required fields.");
             return;
         }
 
@@ -131,13 +139,19 @@ export default function TeamInfo() {
         setSuccessMsg("");
 
         try {
+            const employeeIds = selectedEmployees.map(e => e.value);
+            const payload = {
+                team_type: modalData.team_type,
+                employeeIds: employeeIds,
+            };
+
             if (modalMode === "add") {
-                await addTeam({ team_type: modalData.team_type });
+                await addTeam(payload);
                 setSuccessMsg("Team added successfully!");
             } else {
                 const teamId = getTeamId(modalData);
-                await updateTeam(teamId, { team_type: modalData.team_type });
-                setSuccessMsg("Team updated successfully!");
+                const result = await updateTeam(teamId, payload);
+                setSuccessMsg(result.message || "Team updated successfully!");
             }
             setModalOpen(false);
             await loadAllData();
@@ -148,27 +162,54 @@ export default function TeamInfo() {
     }
 
     async function handleDeleteTeam(teamId) {
-        const members = getTeamMembers(teamId);
-        if (members.length > 0) {
-            setError(`Cannot delete team. ${members.length} employee(s) are still assigned to this team.`);
-            return;
+        setSaving(true);
+        setError(null);
+        setSuccessMsg("");
+        try {
+            const { status, message } = await getTeamDeletability(teamId);
+            if (status === 'BLOCKED') {
+                setError(message);
+                setSaving(false);
+                return;
+            }
+            if (window.confirm(message)) {
+                const result = await deleteTeam(teamId);
+                setSuccessMsg(result.message || "Team deletion process completed.");
+                await loadAllData();
+            } else {
+                setSaving(false);
+            }
+        } catch (e) {
+            setError("An unexpected error occurred: " + e.message);
+            setSaving(false);
         }
+    }
 
-        if (!window.confirm("Delete this team?")) return;
-
+    async function handleDeactivateTeam() {
+        if (!window.confirm("This action is IRREVERSIBLE. The team will be made inactive and its members unassigned. Continue?")) return;
+        
         setSaving(true);
         setError(null);
         setSuccessMsg("");
 
         try {
-            await deleteTeam(teamId);
-            setSuccessMsg("Team deleted successfully!");
+            const teamId = getTeamId(modalData);
+            await updateTeam(teamId, { available_flag: false });
+            setSuccessMsg("Team has been made inactive.");
+            setModalOpen(false);
             await loadAllData();
         } catch (e) {
-            setError("Failed to delete team: " + e.message);
+            setError("Failed to deactivate team: " + e.message);
         }
         setSaving(false);
     }
+
+    const availableEmployeesForSelect = useMemo(() => {
+        const currentTeamMemberIds = new Set(selectedEmployees.map(e => e.value));
+        return employeeOptions.filter(
+            (opt) => !assignedEmployeeIds.has(opt.value) || currentTeamMemberIds.has(opt.value)
+        );
+    }, [employeeOptions, assignedEmployeeIds, selectedEmployees]);
 
     return (
         <div className="bg-white p-6 rounded-lg shadow-sm">
@@ -187,31 +228,23 @@ export default function TeamInfo() {
             <div className="space-y-4">
                 {loading ? (
                     <div className="text-center py-8">
-                        <div className="flex items-center justify-center">
-                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                            <span className="ml-2 text-gray-500">Loading teams...</span>
-                        </div>
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                        <span className="mt-2 text-gray-500 block">Loading teams...</span>
                     </div>
                 ) : teams.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                        No teams found. Create your first team using the "Add Team" button.
-                    </div>
+                    <div className="text-center py-8 text-gray-500">No teams found.</div>
                 ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {teams.map(team => {
-                            const teamId = getTeamId(team);
-                            const teamType = getTeamType(team);
-                            return (
-                                <TeamCard
-                                    key={teamId || team.id || team.TeamID}
-                                    team={{ ...team, id: teamId, team_type: teamType }}
-                                    members={getTeamMembers(teamId)}
-                                    onEdit={openEditModal}
-                                    onDelete={handleDeleteTeam}
-                                    saving={saving}
-                                />
-                            );
-                        })}
+                        {sortedTeams.map(team => (
+                            <TeamCard
+                                key={getTeamId(team)}
+                                team={team}
+                                members={getTeamMembers(getTeamId(team))}
+                                onEdit={openEditModal}
+                                onDelete={handleDeleteTeam}
+                                saving={saving}
+                            />
+                        ))}
                     </div>
                 )}
             </div>
@@ -224,6 +257,7 @@ export default function TeamInfo() {
                 onFormSubmit={handleModalSubmit}
                 saving={saving}
                 error={error}
+                formErrors={formErrors}
             >
                 <FormField
                     fieldKey="team_type"
@@ -232,7 +266,35 @@ export default function TeamInfo() {
                     onChange={handleModalChange}
                     placeholder="e.g. Delivery Team, Installation Team, etc."
                     required
+                    error={formErrors.team_type}
                 />
+                {modalMode === 'edit' && (
+                    <div className="mt-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Assign Members</label>
+                        <Select
+                            isMulti
+                            options={availableEmployeesForSelect}
+                            value={selectedEmployees}
+                            onChange={setSelectedEmployees}
+                            placeholder="Select employees..."
+                            closeMenuOnSelect={false}
+                        />
+                        <div className="mt-6 border-t pt-4">
+                            <h4 className="text-md font-semibold text-red-600">Danger Zone</h4>
+                            <p className="text-sm text-gray-500 mt-1">
+                                Deactivating a team is an irreversible action.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={handleDeactivateTeam}
+                                disabled={saving}
+                                className="mt-2 w-full bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:bg-red-400 transition-colors duration-200 text-sm font-medium"
+                            >
+                                {saving ? 'Deactivating...' : 'Set Team to Inactive'}
+                            </button>
+                        </div>
+                    </div>
+                )}
             </InfoModal>
         </div>
     );

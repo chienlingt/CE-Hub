@@ -5,14 +5,35 @@ const prisma = require('../prismaClient');
 // GET all buildings
 router.get('/', async (req, res) => {
   try {
+    const { sortBy, sortOrder } = req.query;
+    let orderBy = { created_at: 'desc' }; // default sort
+    if (sortBy && sortOrder) {
+      orderBy = { [sortBy]: sortOrder };
+    }
+
     const buildings = await prisma.buildings.findMany({
-      include: { zone: true }
+      include: { zone: true },
+      orderBy: orderBy
     });
     res.json(buildings);
   } catch (err) {
     console.error('GET /api/buildings error', err);
     res.status(500).json({ error: 'Failed to fetch buildings', details: err.message });
   }
+});
+
+// GET orders for a specific building
+router.get('/:id/orders', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const orders = await prisma.orders.findMany({
+            where: { building_id: id }
+        });
+        res.json(orders);
+    } catch (err) {
+        console.error(`GET /api/buildings/${req.params.id}/orders error`, err);
+        res.status(500).json({ error: 'Failed to fetch orders for building', details: err.message });
+    }
 });
 
 // CREATE building
@@ -82,6 +103,35 @@ router.delete('/:id', async (req, res) => {
     }
     res.status(500).json({ error: 'Failed to delete building', details: err.message });
   }
+});
+
+// Reassign orders and delete a building
+router.post('/reassign-and-delete', async (req, res) => {
+    const { oldBuildingId, newBuildingId } = req.body;
+
+    if (!oldBuildingId || !newBuildingId) {
+        return res.status(400).json({ error: 'oldBuildingId and newBuildingId are required' });
+    }
+
+    try {
+        await prisma.$transaction(async (tx) => {
+            // 1. Update orders
+            await tx.orders.updateMany({
+                where: { building_id: oldBuildingId },
+                data: { building_id: newBuildingId }
+            });
+
+            // 2. Delete the old building
+            await tx.buildings.delete({
+                where: { id: oldBuildingId }
+            });
+        });
+
+        res.json({ message: 'Orders reassigned and building deleted successfully' });
+    } catch (err) {
+        console.error('POST /api/buildings/reassign-and-delete error', err);
+        res.status(500).json({ error: 'Failed to reassign orders and delete building', details: err.message });
+    }
 });
 
 module.exports = router;

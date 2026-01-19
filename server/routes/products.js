@@ -22,12 +22,34 @@ function normalizeProductPayload(payload) {
 
 router.get('/', async (req, res) => {
   try {
-    const products = await prisma.products.findMany();
+    const { sortBy, sortOrder } = req.query;
+    let orderBy = { created_at: 'desc' }; // default sort
+    if (sortBy && sortOrder) {
+      orderBy = { [sortBy]: sortOrder };
+    }
+
+    const products = await prisma.products.findMany({
+      orderBy: orderBy
+    });
     res.json(products);
   } catch (err) {
     console.error('GET /api/products error', err);
     res.status(500).json({ error: 'Failed to fetch products' });
   }
+});
+
+// Check if a product has any associations in order_products
+router.get('/:id/associations', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const association = await prisma.order_products.findFirst({
+            where: { product_id: id }
+        });
+        res.json({ has_associations: !!association });
+    } catch (err) {
+        console.error(`GET /api/products/${req.params.id}/associations error`, err);
+        res.status(500).json({ error: 'Failed to check product associations', details: err.message });
+    }
 });
 
 router.post('/', async (req, res) => {

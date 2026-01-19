@@ -5,7 +5,15 @@ const prisma = require('../prismaClient');
 
 router.get('/', async (req, res) => {
   try {
-    const zones = await prisma.zones.findMany();
+    const { sortBy, sortOrder } = req.query;
+    let orderBy = { created_at: 'desc' }; // default sort
+    if (sortBy && sortOrder) {
+      orderBy = { [sortBy]: sortOrder };
+    }
+
+    const zones = await prisma.zones.findMany({
+      orderBy: orderBy
+    });
     res.json(zones);
   } catch (err) {
     console.error('GET /api/zones error', err);

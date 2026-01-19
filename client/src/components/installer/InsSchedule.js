@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, MapPin, User, Package, Wrench, AlertTriangle, CheckCircle, Phone, Mail } from 'lucide-react';
+import { Calendar, Clock, MapPin, User, Package, Wrench, AlertTriangle, CheckCircle, Phone, Mail, Play, Check } from 'lucide-react';
 import {
     getAllOrders,
     getAllOrderProducts,
@@ -8,7 +8,8 @@ import {
     getAllBuildings,
     getAllEmployees,
     getAllEmployeeTeamAssignments,
-    getAllTeams
+    getAllTeams,
+    updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -105,12 +106,14 @@ const InstallationSchedule = () => {
     orderStatus: (order) => order.order_status || order.OrderStatus || 'Pending',
     orderScheduledStart: (order) => order.scheduled_start_date_time || order.ScheduledStartDateTime,
     orderScheduledEnd: (order) => order.scheduled_end_date_time || order.ScheduledEndDateTime,
-    orderActualStart: (order) => order.actual_start_date_time || order.ActualStartDateTime,
-    orderActualEnd: (order) => order.actual_end_date_time || order.ActualEndDateTime,
+    deliveryStart: (order) => order.delivery_start_date_time || order.DeliveryStartDateTime,
+    deliveryEnd: (order) => order.delivery_end_date_time || order.DeliveryEndDateTime,
     orderAttempts: (order) => order.number_of_attempts || order.NumberOfAttempts || 0,
     orderRating: (order) => order.customer_rating || order.CustomerRating,
     orderFeedback: (order) => order.customer_feedback || order.CustomerFeedback || '',
     orderDelayReason: (order) => order.delay_reason || order.DelayReason || '',
+    installStart: (order) => order.install_start_date_time || order.InstallStartDateTime,
+    installEnd: (order) => order.install_end_date_time || order.InstallEndDateTime,
     customerId: (cust) => cust.id || cust.CustomerID,
     customerName: (cust) => cust.full_name || cust.FullName || cust.name || '',
     customerEmail: (cust) => cust.email,
@@ -197,6 +200,12 @@ const InstallationSchedule = () => {
 
   const getStatusColor = (status) => {
     switch (status) {
+      case 'Installing':
+        return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'Delivered':
+        return 'bg-teal-100 text-teal-800 border-teal-200';
+      case 'Loaded':
+        return 'bg-indigo-100 text-indigo-800 border-indigo-200';
       case 'Scheduled':
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'In Progress':
@@ -212,6 +221,12 @@ const InstallationSchedule = () => {
 
   const getStatusIcon = (status) => {
     switch (status) {
+      case 'Installing':
+        return <Clock className="w-4 h-4" />;
+      case 'Delivered':
+        return <CheckCircle className="w-4 h-4" />;
+      case 'Loaded':
+        return <Package className="w-4 h-4" />;
       case 'Scheduled':
         return <Calendar className="w-4 h-4" />;
       case 'In Progress':
@@ -310,10 +325,33 @@ const InstallationSchedule = () => {
     );
   }
 
+  const orderRequiresInstaller = (order) => {
+    const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
+    return orderProds.some(op => {
+      const product = products.find(p => field.productId(p) === field.orderProductProductId(op));
+      return product && field.productInstallerRequired(product);
+    });
+  };
+
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const result = await updateOrderStatusApi(orderId, newStatus);
+      const updated = result?.order;
+      setOrders(prev => prev.map(order =>
+        field.orderId(order) === orderId
+          ? (updated ? { ...order, ...updated } : { ...order, order_status: newStatus, OrderStatus: newStatus })
+          : order
+      ));
+    } catch (error) {
+      console.error('Failed to update order status:', error);
+      alert('Failed to update order status. Please try again.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">Installation Schedule</h1>
+      <div className="max-w-full mx-auto">
+        {/* <h1 className="text-2xl font-bold text-gray-900 mb-6">Installation Schedule</h1> */}
 
         {/* Filters */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
@@ -366,7 +404,11 @@ const InstallationSchedule = () => {
               const installSchedule = order.installationSchedule;
               const installTeam = installSchedule ? teams.find(t => field.teamId(t) === field.installScheduleTeamId(installSchedule)) : null;
               const estArrival = installSchedule ? field.installScheduleEstArrival(installSchedule) : null;
-              const installStatus = installSchedule ? field.installScheduleStatus(installSchedule) : field.orderStatus(order);
+              const orderStatus = field.orderStatus(order);
+              const installStatus = orderStatus === 'Completed'
+                ? 'Completed'
+                : (installSchedule ? field.installScheduleStatus(installSchedule) : orderStatus);
+              const requiresInstaller = orderRequiresInstaller(order);
 
               // Get products for this order
               const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
@@ -394,6 +436,24 @@ const InstallationSchedule = () => {
                         </span>
                       )}
                     </div>
+                    {requiresInstaller && orderStatus === 'Delivered' && (
+                      <button
+                        onClick={() => updateOrderStatus(field.orderId(order), 'Installing')}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="Start Installation"
+                      >
+                        <Play className="h-4 w-4" />
+                      </button>
+                    )}
+                    {requiresInstaller && orderStatus === 'Installing' && (
+                      <button
+                        onClick={() => updateOrderStatus(field.orderId(order), 'Completed')}
+                        className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                        title="Mark Installation Completed"
+                      >
+                        <Check className="h-4 w-4" />
+                      </button>
+                    )}
                     <div className="text-right">
                       <p className="text-sm text-gray-600">Attempt #{field.orderAttempts(order) || 1}</p>
                       {field.orderRating(order) && (
@@ -430,10 +490,22 @@ const InstallationSchedule = () => {
                             </p>
                           </div>
                           <div>
-                            <p className="text-gray-600">Actual</p>
+                            <p className="text-gray-600">Delivery</p>
                             <p className="font-medium">
-                              {field.orderActualStart(order) ? formatTime(field.orderActualStart(order)) : 'Not started'} -
-                              {field.orderActualEnd(order) ? formatTime(field.orderActualEnd(order)) : 'Ongoing'}
+                              {field.deliveryStart(order) ? formatTime(field.deliveryStart(order)) : 'Not started'} -
+                              {field.deliveryEnd(order) ? formatTime(field.deliveryEnd(order)) : 'Not completed'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-gray-600">Install Start</p>
+                            <p className="font-medium">
+                              {field.installStart(order) ? formatTime(field.installStart(order)) : 'Not started'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-gray-600">Install End</p>
+                            <p className="font-medium">
+                              {field.installEnd(order) ? formatTime(field.installEnd(order)) : 'Not completed'}
                             </p>
                           </div>
                         </div>

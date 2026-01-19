@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Calendar,
   Clock,
@@ -21,6 +22,7 @@ import {
 const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
 export default function AutoScheduleReview() {
+  const navigate = useNavigate();
   const [schedule, setSchedule] = useState([]);
   const [unscheduled, setUnscheduled] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -152,6 +154,12 @@ export default function AutoScheduleReview() {
       stock_transfer: 'Stock Transfer'
     };
     return types[serviceType] || serviceType || 'N/A';
+  };
+
+  const formatMinutes = (value) => {
+    const minutes = Number(value);
+    if (!Number.isFinite(minutes) || minutes <= 0) return '0 min';
+    return `${minutes} min`;
   };
 
   const handleToggleExpand = (orderId) => {
@@ -360,9 +368,9 @@ export default function AutoScheduleReview() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Scheduled Time
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {/* <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Loading Seq
-                    </th>
+                    </th> */}
                     <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Actions
                     </th>
@@ -400,10 +408,37 @@ export default function AutoScheduleReview() {
                   key={idx}
                   className="bg-red-50 rounded-xl p-4 border-l-4 border-red-500"
                 >
-                  <div className="flex justify-between items-start">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-gray-900">Order ID: {item.orderId}</p>
-                      <p className="text-sm text-gray-600 mt-1">Reason: {item.reason}</p>
+                      <p className="font-semibold text-gray-900">Order ID: {item.id}</p>
+                      <p className="text-sm text-gray-600 mt-1">Reason: {item.unscheduled_reason || 'No suitable timeslot found'}</p>
+                      <div className="mt-2 text-sm text-gray-700 space-y-1">
+                        <p><span className="font-medium">Customer:</span> {item.customers?.full_name || 'N/A'}</p>
+                        <p><span className="font-medium">Building:</span> {item.buildings?.building_name || 'N/A'}</p>
+                        <p><span className="font-medium">Products:</span> {getTotalProductCount(item.order_products)} item(s)</p>
+                        <p>
+                          <span className="font-medium">Service Time:</span>{' '}
+                          {formatMinutes(item.calculatedServiceTime)}
+                          <span className="text-xs text-gray-500">
+                            {' '}({formatMinutes(item.calculatedDeliveryTime)} delivery, {formatMinutes(item.calculatedInstallationTime)} install)
+                          </span>
+                        </p>
+                        <p><span className="font-medium">Installation Required:</span> {item.requiresInstallation ? 'Yes' : 'No'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => navigate('/schedule')}
+                        className="px-3 py-1.5 bg-white border border-red-200 text-red-700 rounded-md hover:bg-red-100 text-sm font-medium"
+                      >
+                        Assign in Schedule
+                      </button>
+                      <button
+                        onClick={() => navigate('/customer/manage-orders')}
+                        className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-100 text-sm font-medium"
+                      >
+                        Edit Order
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -462,11 +497,11 @@ function ScheduledOrderRow({ order, isExpanded, onToggleExpand, getTotalProductC
             to {formatTime(order.scheduled_end_date_time)}
           </div>
         </td>
-        <td className="px-4 py-4 whitespace-nowrap">
+        {/* <td className="px-4 py-4 whitespace-nowrap">
           <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
             #{order.truck_loading_sequence || 'N/A'}
           </span>
-        </td>
+        </td> */}
         <td className="px-4 py-4 whitespace-nowrap text-center text-sm">
           <button
             onClick={() => onToggleExpand(order.id)}

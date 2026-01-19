@@ -6,14 +6,38 @@ const prisma = require('../prismaClient');
 // GET /api/trucks
 router.get('/', async (req, res) => {
   try {
+    const { sortBy, sortOrder } = req.query;
+    let orderBy = { created_at: 'desc' }; // default sort
+    if (sortBy && sortOrder) {
+      orderBy = { [sortBy]: sortOrder };
+    }
+
     const trucks = await prisma.trucks.findMany({
-      include: { truck_zones: { include: { zones: true } } }
+      include: { truck_zones: { include: { zones: true } } },
+      orderBy: orderBy
     });
     res.json(trucks);
   } catch (err) {
     console.error('GET /api/trucks error', err);
     res.status(500).json({ error: 'Failed to fetch trucks' });
   }
+});
+
+// Check if a truck has any associations
+router.get('/:id/associations', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [lorryTrip, truckZone, timeSlot] = await Promise.all([
+            prisma.lorry_trips.findFirst({ where: { truck_id: id } }),
+            prisma.truck_zones.findFirst({ where: { truck_id: id } }),
+            prisma.time_slots.findFirst({ where: { truck_id: id } })
+        ]);
+
+        res.json({ has_associations: !!lorryTrip || !!truckZone || !!timeSlot });
+    } catch (err) {
+        console.error(`GET /api/trucks/${req.params.id}/associations error`, err);
+        res.status(500).json({ error: 'Failed to check truck associations', details: err.message });
+    }
 });
 
 // POST /api/trucks

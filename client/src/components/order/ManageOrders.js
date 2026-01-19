@@ -258,7 +258,7 @@ export default function ManageOrders() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 w-full">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-gray-800">Manage Orders</h1>
       </div>
@@ -658,6 +658,33 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [resetToPending, setResetToPending] = useState(false);
+  const [formErrors, setFormErrors] = useState({});
+
+  const validate = (data) => {
+    const errors = {};
+    if (!data.full_name) {
+        errors.full_name = "Full name is required.";
+    }
+    if (!data.email) {
+        errors.email = "Email is required.";
+    } else if (!/\S+@\S+\.\S+/.test(data.email)) {
+        errors.email = "Email is invalid.";
+    }
+    if (!data.phone) {
+        errors.phone = "Phone is required.";
+    }
+    return errors;
+  };
+
+  const handleCustomerDataChange = (e) => {
+    const { name, value } = e.target;
+    setCustomerData(prev => {
+        const newData = { ...prev, [name]: value };
+        const errors = validate(newData);
+        setFormErrors(errors);
+        return newData;
+    });
+  };
 
   // Data
   const [customers, setCustomers] = useState([]);
@@ -789,10 +816,11 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Validation
-    if (!customerData.full_name || !customerData.email || !customerData.phone) {
-      setError('Customer name, email, and phone are required');
-      return;
+    const errors = validate(customerData);
+    if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        setError('Please fill in all required customer fields.');
+        return;
     }
 
     if (cart.length === 0) {
@@ -861,7 +889,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl max-w-full w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
           <div>
@@ -901,37 +929,44 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
                   <input
                     type="text"
+                    name="full_name"
                     value={customerData.full_name}
-                    onChange={(e) => setCustomerData({ ...customerData, full_name: e.target.value })}
+                    onChange={handleCustomerDataChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                     required
                   />
+                  {formErrors.full_name && <p className="text-xs text-red-500 mt-1">{formErrors.full_name}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                   <input
                     type="email"
+                    name="email"
                     value={customerData.email}
-                    onChange={(e) => setCustomerData({ ...customerData, email: e.target.value })}
+                    onChange={handleCustomerDataChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                     required
                   />
+                  {formErrors.email && <p className="text-xs text-red-500 mt-1">{formErrors.email}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Phone *</label>
                   <input
                     type="tel"
+                    name="phone"
                     value={customerData.phone}
-                    onChange={(e) => setCustomerData({ ...customerData, phone: e.target.value })}
+                    onChange={handleCustomerDataChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                     required
                   />
+                  {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
                   <textarea
+                    name="address"
                     value={customerData.address}
-                    onChange={(e) => setCustomerData({ ...customerData, address: e.target.value })}
+                    onChange={handleCustomerDataChange}
                     rows={2}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                   />
@@ -941,8 +976,9 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
                     <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
                     <input
                       type="text"
+                      name="city"
                       value={customerData.city}
-                      onChange={(e) => setCustomerData({ ...customerData, city: e.target.value })}
+                      onChange={handleCustomerDataChange}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                     />
                   </div>
@@ -950,8 +986,9 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Postcode</label>
                     <input
                       type="text"
+                      name="postcode"
                       value={customerData.postcode}
-                      onChange={(e) => setCustomerData({ ...customerData, postcode: e.target.value })}
+                      onChange={handleCustomerDataChange}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                     />
                   </div>
@@ -1163,7 +1200,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
             </button>
             <button
               type="submit"
-              disabled={saving || cart.length === 0}
+              disabled={saving || cart.length === 0 || Object.keys(formErrors).length > 0}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               {saving ? 'Saving...' : 'Save Changes'}

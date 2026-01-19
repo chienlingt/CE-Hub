@@ -9,6 +9,10 @@ const FormField = ({
     options = [],
     required = false,
     guidance,
+    error,
+    placeholder,
+    pattern,
+    title
 }) => {
     const renderField = () => {
         switch (type) {
@@ -21,23 +25,11 @@ const FormField = ({
                         className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         required={required}
                     >
-                        <option value="">Select an option</option>
-                        {options.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                            </option>
+                        <option value="">{placeholder || 'Select...'}</option>
+                        {options.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                     </select>
-                );
-            case 'boolean':
-                return (
-                    <input
-                        type="checkbox"
-                        name={fieldKey}
-                        checked={!!value}
-                        onChange={onChange}
-                        className="h-5 w-5 text-green-600"
-                    />
                 );
             case 'textarea':
                 return (
@@ -46,32 +38,33 @@ const FormField = ({
                         value={value ?? ''}
                         onChange={onChange}
                         className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        rows={2}
                         required={required}
+                        placeholder={placeholder}
                     />
                 );
             default:
                 return (
                     <input
                         name={fieldKey}
+                        type={type}
                         value={value ?? ''}
                         onChange={onChange}
                         className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         required={required}
-                        type={type}
+                        placeholder={placeholder}
+                        pattern={pattern}
+                        title={title}
                     />
                 );
         }
     };
 
     return (
-        <div>
-            <label className="block font-medium mb-1 text-sm">
-                {label}
-                {required && <span className="text-red-500 ml-1" title="Required field">★</span>}
-            </label>
+        <div key={fieldKey}>
+            <label className="block font-medium mb-1 text-sm">{label}</label>
             {renderField()}
             {guidance && <div className="text-xs text-gray-400 mt-1">{guidance}</div>}
+            {error && <div className="text-xs text-red-500 mt-1">{error}</div>}
         </div>
     );
 };

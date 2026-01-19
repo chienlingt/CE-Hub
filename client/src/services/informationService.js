@@ -45,8 +45,14 @@ async function apiFetch(path, options = {}) {
   }
   const res = await fetch(url, opts);
   if (!res.ok) {
-    const text = await res.text().catch(() => null);
-    const err = new Error(`API request failed: ${res.status} ${res.statusText} ${text ? ` - ${text}` : ''}`);
+    let err;
+    try {
+        const errorBody = await res.json();
+        err = new Error(errorBody.error || `API Error: ${res.status}`);
+    } catch (e) {
+        const text = await res.text().catch(() => `Status ${res.status}`);
+        err = new Error(`API request failed: ${text}`);
+    }
     err.status = res.status;
     throw err;
   }
@@ -58,9 +64,14 @@ async function apiFetch(path, options = {}) {
 
 // ========== GENERIC HELPERS ==========
 
-async function getAllDocs(collectionName) {
+async function getAllDocs(collectionName, options = {}) {
   const endpoint = endpointMap[collectionName] || collectionName.toLowerCase();
-  const result = await apiFetch(`${endpoint}`);
+  const { sortBy, sortOrder } = options;
+  let url = `${endpoint}`;
+  if (sortBy && sortOrder) {
+    url += `?sortBy=${encodeURIComponent(sortBy)}&sortOrder=${encodeURIComponent(sortOrder)}`;
+  }
+  const result = await apiFetch(url);
   // assume server returns { meta, data } or an array
   if (Array.isArray(result)) return result;
   return result.data || result;
@@ -95,55 +106,66 @@ async function deleteDocGeneric(collectionName, id) {
 // ========== COLLECTION-SPECIFIC EXPORTS ==========
 
 // -- Employee --
-export const getAllEmployees = () => getAllDocs("Employee");
+export const getAllEmployees = (options) => getAllDocs("Employee", options);
 export const getEmployeeById = (id) => getDocById("Employee", id);
 export const addEmployee = (data) => addDocGeneric("Employee", data);
 export const updateEmployee = (id, data) => updateDocGeneric("Employee", id, data);
 export const deleteEmployee = (id) => deleteDocGeneric("Employee", id);
+export const getEmployeeDeletability = (id) => apiFetch(`employees/${encodeURIComponent(id)}/deletability`);
 
 // -- Truck --
-export const getAllTrucks = () => getAllDocs("Truck");
+export const getAllTrucks = (options) => getAllDocs("Truck", options);
 export const getTruckById = (id) => getDocById("Truck", id);
 export const addTruck = (data) => addDocGeneric("Truck", data);
 export const updateTruck = (id, data) => updateDocGeneric("Truck", id, data);
 export const deleteTruck = (id) => deleteDocGeneric("Truck", id);
+export const checkTruckAssociations = (id) => apiFetch(`trucks/${encodeURIComponent(id)}/associations`);
 
 // -- Zone --
-export const getAllZones = () => getAllDocs("Zone");
+export const getAllZones = (options) => getAllDocs("Zone", options);
 export const getZoneById = (id) => getDocById("Zone", id);
 export const addZone = (data) => addDocGeneric("Zone", data);
 export const updateZone = (id, data) => updateDocGeneric("Zone", id, data);
 export const deleteZone = (id) => deleteDocGeneric("Zone", id);
 
 // -- TruckZone --
-export const getAllTruckZone = () => getAllDocs("TruckZone");
+export const getAllTruckZone = (options) => getAllDocs("TruckZone", options);
 export const addTruckZone = (data) => addDocGeneric("TruckZone", data);
 export const updateTruckZone = (id, data) => updateDocGeneric("TruckZone", id, data);
 export const deleteTruckZone = (id) => deleteDocGeneric("TruckZone", id);
 
 // -- Building --
-export const getAllBuildings = () => getAllDocs("Building");
+export const getAllBuildings = (options) => getAllDocs("Building", options);
 export const getBuilding = (id) => getDocById("Building", id);
 export const addBuilding = (data) => addDocGeneric("Building", data);
 export const updateBuilding = (id, data) => updateDocGeneric("Building", id, data);
 export const deleteBuilding = (id) => deleteDocGeneric("Building", id);
+export const getOrdersByBuildingId = (id) => apiFetch(`buildings/${encodeURIComponent(id)}/orders`);
+export const reassignOrdersAndDeleteBuilding = (oldBuildingId, newBuildingId) => {
+    return apiFetch('buildings/reassign-and-delete', {
+        method: 'POST',
+        body: { oldBuildingId, newBuildingId }
+    });
+};
 
 // -- Product --
-export const getAllProducts = () => getAllDocs("Product");
+export const getAllProducts = (options) => getAllDocs("Product", options);
 export const getProduct = (id) => getDocById("Product", id);
 export const addProduct = (data) => addDocGeneric("Product", data);
 export const updateProduct = (id, data) => updateDocGeneric("Product", id, data);
 export const deleteProduct = (id) => deleteDocGeneric("Product", id);
+export const checkProductAssociations = (id) => apiFetch(`products/${encodeURIComponent(id)}/associations`);
 
 // -- Team --
-export const getAllTeams = () => getAllDocs("Team");
+export const getAllTeams = (options) => getAllDocs("Team", options);
 export const getTeam = (id) => getDocById("Team", id);
 export const addTeam = (data) => addDocGeneric("Team", data);
 export const updateTeam = (id, data) => updateDocGeneric("Team", id, data);
 export const deleteTeam = (id) => deleteDocGeneric("Team", id);
+export const getTeamDeletability = (id) => apiFetch(`teams/${encodeURIComponent(id)}/deletability`);
 
 // -- EmployeeTeamAssignment --
-export const getAllEmployeeTeamAssignments = () => getAllDocs("EmployeeTeamAssignment");
+export const getAllEmployeeTeamAssignments = (options) => getAllDocs("EmployeeTeamAssignment", options);
 export const getEmployeeTeamAssignment = (id) => getDocById("EmployeeTeamAssignment", id);
 export const deleteEmployeeTeamAssignment = (id) => deleteDocGeneric("EmployeeTeamAssignment", id);
 
@@ -167,14 +189,17 @@ export async function assignOrUpdateEmployeeTeam(employeeId, teamId) {
 }
 
 // -- Order / OrderProduct --
-export const getAllOrders = () => getAllDocs("Order");
+export const getAllOrders = (options) => getAllDocs("Order", options);
+export const getOrdersWithIssues = () => apiFetch('orders?issues_only=true');
+export const resolveOrderIssue = (id, data) => apiFetch(`orders/${encodeURIComponent(id)}/issue`, { method: 'PATCH', body: data });
 export const getAllOrdersSummary = () => apiFetch('orders?include_products=false');
 export const getOrder = (id) => getDocById("Order", id);
 export const addOrder = (data) => addDocGeneric("Order", data, { idField: "OrderID", prefix: "ORD_" });
 export const updateOrder = (id, data) => updateDocGeneric("Order", id, data);
+export const updateOrderStatus = (id, order_status) => apiFetch(`orders/${encodeURIComponent(id)}/status`, { method: 'PATCH', body: { order_status } });
 export const deleteOrder = (id) => deleteDocGeneric("Order", id);
 
-export const getAllOrderProducts = () => getAllDocs("OrderProduct");
+export const getAllOrderProducts = (options) => getAllDocs("OrderProduct", options);
 export const addOrderProduct = (data) => addDocGeneric("OrderProduct", data);
 export const updateOrderProduct = (id, data) => updateDocGeneric("OrderProduct", id, data);
 export const deleteOrderProduct = (id) => deleteDocGeneric("OrderProduct", id);
@@ -213,32 +238,32 @@ export async function getBuildingById(buildingId) {
 }
 
 // -- Cases --
-export const getAllCases = () => getAllDocs("Report");
+export const getAllCases = (options) => getAllDocs("Report", options);
 export const addCases = (data) => addDocGeneric("Report", data);
 export const updateCases = (id, data) => updateDocGeneric("Report", id, data);
 export const deleteCases = (id) => deleteDocGeneric("Report", id);
 
 // -- Customer --
-export const getAllCustomers = () => getAllDocs("Customer");
+export const getAllCustomers = (options) => getAllDocs("Customer", options);
 export const getCustomer = (id) => getDocById("Customer", id);
 export const addCustomer = (data) => addDocGeneric("Customer", data, { idField: "CustomerID", prefix: "CUS_" });
 export const updateCustomer = (id, data) => updateDocGeneric("Customer", id, data);
 export const deleteCustomer = (id) => deleteDocGeneric("Customer", id);
 
 // -- TimeSlot --
-export const getAllTimeSlots = () => getAllDocs("TimeSlot");
+export const getAllTimeSlots = (options) => getAllDocs("TimeSlot", options);
 export const addTimeSlot = (data) => addDocGeneric("TimeSlot", data, { idField: "TimeSlotID", prefix: "TSL_" });
 export const updateTimeSlot = (id, data) => updateDocGeneric("TimeSlot", id, data);
 export const deleteTimeSlot = (id) => deleteDocGeneric("TimeSlot", id);
 
 // -- LorryTrip --
-export const getAllLorryTrips = () => getAllDocs("LorryTrip");
+export const getAllLorryTrips = (options) => getAllDocs("LorryTrip", options);
 export const addLorryTrip = (data) => addDocGeneric("LorryTrip", data, { idField: "LorryTripID", prefix: "TRP_" });
 export const updateLorryTrip = (id, data) => updateDocGeneric("LorryTrip", id, data);
 export const deleteLorryTrip = (id) => deleteDocGeneric("LorryTrip", id);
 
 // -- Outlets --
-export const getAllOutlets = () => getAllDocs("Outlet");
+export const getAllOutlets = (options) => getAllDocs("Outlet", options);
 
 // -- Installer --
 export const getInstallerByEmployeeId = (id) => apiFetch(`installers/employee/${id}`);
@@ -246,7 +271,7 @@ export const addInstaller = (data) => addDocGeneric("Installer", data);
 export const updateInstaller = (id, data) => updateDocGeneric("Installer", id, data);
 
 // -- Roles
-export const getRoles = () => getAllDocs("Roles");
+export const getRoles = (options) => getAllDocs("Roles", options);
 
 // ========== COMMON HELPERS ==========
 

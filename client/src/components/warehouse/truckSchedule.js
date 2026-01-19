@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User } from 'lucide-react';
+import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check } from 'lucide-react';
 import {
   getAllOrders,
   getAllOrderProducts,
@@ -9,7 +9,9 @@ import {
   getAllTimeSlots,
   getAllTeams,
   getAllEmployeeTeamAssignments,
-  getAllTrucks
+  getAllTrucks,
+  updateTimeSlot,
+  updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -110,6 +112,8 @@ const WarehouseLoadingSchedule = () => {
     timeSlotDate: (ts) => ts.date || ts.Date,
     timeSlotStart: (ts) => ts.time_window_start || ts.TimeWindowStart,
     timeSlotEnd: (ts) => ts.time_window_end || ts.TimeWindowEnd,
+    timeSlotLoadingStart: (ts) => ts.loading_start_date_time || ts.LoadingStartDateTime,
+    timeSlotLoadingEnd: (ts) => ts.loading_end_date_time || ts.LoadingEndDateTime,
     timeSlotDeliveryTeamId: (ts) => ts.delivery_team_id || ts.DeliveryTeamID,
     timeSlotWarehouseTeamId: (ts) => ts.warehouse_team_id || ts.WarehouseTeamID,
     timeSlotTruckId: (ts) => ts.truck_id || ts.TruckID,
@@ -202,7 +206,9 @@ const WarehouseLoadingSchedule = () => {
         LoadingStartTime: field.timeSlotStart(ts),
         LoadingEndTime: field.timeSlotEnd(ts),
         DepartureTime: field.timeSlotEnd(ts),
-        Status: status
+        Status: status,
+        LoadingStartDateTime: field.timeSlotLoadingStart(ts),
+        LoadingEndDateTime: field.timeSlotLoadingEnd(ts)
       };
     });
 
@@ -377,6 +383,8 @@ const WarehouseLoadingSchedule = () => {
 
   const getStatusColor = (status) => {
     switch (status) {
+      case 'Delivered':
+        return 'bg-teal-100 text-teal-800 border-teal-200';
       case 'Scheduled':
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'Loading':
@@ -396,6 +404,8 @@ const WarehouseLoadingSchedule = () => {
 
   const getStatusIcon = (status) => {
     switch (status) {
+      case 'Delivered':
+        return <CheckCircle className="w-4 h-4" />;
       case 'Scheduled':
         return <Calendar className="w-4 h-4" />;
       case 'Loading':
@@ -410,6 +420,35 @@ const WarehouseLoadingSchedule = () => {
         return <CheckCircle className="w-4 h-4" />;
       default:
         return <Info className="w-4 h-4" />;
+    }
+  };
+
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const result = await updateOrderStatusApi(orderId, newStatus);
+      const updated = result?.order;
+      setOrders(prev => prev.map(order =>
+        field.orderId(order) === orderId
+          ? (updated ? { ...order, ...updated } : { ...order, order_status: newStatus, OrderStatus: newStatus })
+          : order
+      ));
+    } catch (error) {
+      console.error('Failed to update order status:', error);
+      alert('Failed to update order status. Please try again.');
+    }
+  };
+
+  const updateLoadingTimestamp = async (timeSlotId, payload) => {
+    try {
+      await updateTimeSlot(timeSlotId, payload);
+      setTimeSlots(prev => prev.map(slot =>
+        field.timeSlotId(slot) === timeSlotId
+          ? { ...slot, ...payload }
+          : slot
+      ));
+    } catch (error) {
+      console.error('Failed to update loading timestamp:', error);
+      alert('Failed to update loading timestamp. Please try again.');
     }
   };
 
@@ -438,7 +477,7 @@ const WarehouseLoadingSchedule = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-full mx-auto">
         {/* Filters and View Toggle */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -539,12 +578,38 @@ const WarehouseLoadingSchedule = () => {
                         <div>
                           <h3 className="text-xl font-semibold text-gray-900">{truck.CarPlate}</h3>
                           <p className="text-gray-600">Trip ID: {trip.LorryTripID}</p>
+                          <div className="text-xs text-gray-500 mt-1">
+                            Loading Start: {trip.LoadingStartDateTime ? new Date(trip.LoadingStartDateTime).toLocaleString() : 'Not started'}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Loading End: {trip.LoadingEndDateTime ? new Date(trip.LoadingEndDateTime).toLocaleString() : 'Not completed'}
+                          </div>
                         </div>
                       </div>
                       <span className={`px-3 py-1 rounded-full text-sm font-medium border flex items-center space-x-1 ${getStatusColor(trip.Status)}`}>
                         {getStatusIcon(trip.Status)}
                         <span>{trip.Status}</span>
                       </span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-4">
+                      {!trip.LoadingStartDateTime && (
+                        <button
+                          onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_start_date_time: new Date().toISOString() })}
+                          className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
+                          title="Start Loading"
+                        >
+                          Start Loading
+                        </button>
+                      )}
+                      {trip.LoadingStartDateTime && !trip.LoadingEndDateTime && (
+                        <button
+                          onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_end_date_time: new Date().toISOString() })}
+                          className="px-3 py-1 rounded-md bg-green-600 text-white text-xs hover:bg-green-700"
+                          title="End Loading"
+                        >
+                          End Loading
+                        </button>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -614,6 +679,7 @@ const WarehouseLoadingSchedule = () => {
                         {tripOrders.map(order => {
                           const orderItems = orderProductsData.filter(op => op.OrderID === order.OrderID);
                           const customer = customersObj[order.CustomerID];
+                          const status = order.OrderStatus;
 
                           return (
                             <div key={order.OrderID} className="border rounded-lg p-4">
@@ -629,7 +695,29 @@ const WarehouseLoadingSchedule = () => {
                                   Seq: {order.LoadingSequence} | {customer?.name} - {customer?.address}
                                 </div>
                               </div>
-
+                                                              <div className="flex items-center justify-between mb-3">
+                                                              <div className="text-sm text-gray-600">
+                                                                {status === 'Loaded' ? 'Loaded by warehouse' : status}
+                                                              </div>
+                                                              {status === 'Scheduled' && (
+                                                                <button
+                                                                  onClick={() => updateOrderStatus(order.OrderID, 'Loading')}
+                                                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                                                  title="Start Loading"
+                                                                >
+                                                                  <Play className="h-4 w-4" />
+                                                                </button>
+                                                              )}
+                                                              {status === 'Loading' && (
+                                                                <button
+                                                                  onClick={() => updateOrderStatus(order.OrderID, 'Loaded')}
+                                                                  className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                                                  title="Mark as Loaded"
+                                                                >
+                                                                  <Check className="h-4 w-4" />
+                                                                </button>
+                                                              )}
+                                                            </div>
                               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                                 {orderItems.map((item, index) => {
                                   const product = productsObj[item.ProductID];

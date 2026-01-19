@@ -4,6 +4,7 @@ import {
     addEmployee,
     updateEmployee,
     deleteEmployee,
+    getEmployeeDeletability,
     getAllTeams,
     getAllEmployeeTeamAssignments,
     assignOrUpdateEmployeeTeam,
@@ -105,6 +106,49 @@ export default function EmployeeInfo() {
     const [showEmailSuggestion, setShowEmailSuggestion] = useState(false);
     const [emailInputRef, setEmailInputRef] = useState(null);
 
+    const validate = (data, mode, employees) => {
+        const errors = {};
+        const requiredFields = {
+            name: 'Name',
+            role: 'Role',
+            email: 'Email',
+            contact_number: 'Contact Number'
+        };
+
+        if (mode === "add") {
+            requiredFields.password = 'Password';
+        }
+
+        for (const [field, label] of Object.entries(requiredFields)) {
+            if (!data[field] || data[field].toString().trim() === '') {
+                errors[field] = `${label} is required`;
+            }
+        }
+
+        if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+            errors.email = 'Please enter a valid email address';
+        }
+
+        const currentEmployeeId = mode === "edit" ? (data.EmployeeID || data.id) : null;
+        if (data.email && employees.some(emp => emp.email && emp.email.toLowerCase() === data.email.toLowerCase() && emp.id !== currentEmployeeId)) {
+            errors.email = 'This email address is already in use';
+        }
+
+        if (data.contact_number && !/^01[0-9]{8,9}$/.test(data.contact_number)) {
+            errors.contact_number = 'Contact number must be in format 01XXXXXXXX (10-11 digits)';
+        }
+
+        if (data.password && data.password.length < 6) {
+            if (mode === "add" || (mode === "edit" && data.password)) {
+                errors.password = 'Password must be at least 6 characters long';
+            }
+        }
+
+        return errors;
+    };
+
+    const [formErrors, setFormErrors] = useState({});
+
     useEffect(() => {
         loadAllData();
     }, []);
@@ -167,6 +211,8 @@ export default function EmployeeInfo() {
                 };
             });
 
+            enriched.sort((a, b) => a.name.localeCompare(b.name));
+
             setEmployees(employeesData || []);
             setTeams(teamsData || []);
             setEmployeeTeamMap(empTeamMap);
@@ -197,6 +243,7 @@ export default function EmployeeInfo() {
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
         setSuggestedEmail("");
         setShowEmailSuggestion(false);
     }
@@ -210,7 +257,7 @@ export default function EmployeeInfo() {
         setSelectedRoleName(role ? role.name : "");
 
         let installerData = {};
-        if (role && role.name.toLowerCase() === "installer") {
+        /* if (role && role.name.toLowerCase() === "installer") {
             try {
                 const installer = await getInstallerByEmployeeId(employee.EmployeeID);
                 if (installer) {
@@ -223,7 +270,7 @@ export default function EmployeeInfo() {
             } catch (error) {
                 console.error("Failed to fetch installer data", error);
             }
-        }
+        } */
 
         setModalData({
             ...employee,
@@ -235,6 +282,7 @@ export default function EmployeeInfo() {
         setModalOpen(true);
         setSuccessMsg("");
         setError(null);
+        setFormErrors({});
         setSuggestedEmail("");
         setShowEmailSuggestion(false);
     }
@@ -248,7 +296,12 @@ export default function EmployeeInfo() {
             val = value === "true";
         }
 
-        setModalData(prev => ({ ...prev, [name]: val }));
+        setModalData(prev => {
+            const newData = { ...prev, [name]: val };
+            const errors = validate(newData, modalMode, employees);
+            setFormErrors(errors);
+            return newData;
+        });
 
         if (name === "role") {
             const role = rolesList.find(r => r.id === val);
@@ -288,57 +341,10 @@ export default function EmployeeInfo() {
     }
 
     async function handleModalSubmit() {
-        const requiredFields = {
-            name: 'Name',
-            role: 'Role',
-            email: 'Email',
-            contact_number: 'Contact Number'
-        };
-
-        if (modalMode === "add") {
-            requiredFields.password = 'Password';
-        }
-
-        const missingFields = [];
-        for (const [field, label] of Object.entries(requiredFields)) {
-            if (!modalData[field] || modalData[field].toString().trim() === '') {
-                missingFields.push(label);
-            }
-        }
-
-        if (missingFields.length > 0) {
-            setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
-            return;
-        }
-
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(modalData.email)) {
-            setError('Please enter a valid email address');
-            return;
-        }
-
-        const currentEmployeeId = modalMode === "edit" ? (modalData.EmployeeID || modalData.id) : null;
-        const isDuplicateEmail = employees.some(emp =>
-            emp.email &&
-            emp.email.toLowerCase() === modalData.email.toLowerCase() &&
-            emp.id !== currentEmployeeId
-        );
-
-        if (isDuplicateEmail) {
-            setError('This email address is already in use by another employee. Please use a different email.');
-            return;
-        }
-
-        if (modalData.contact_number) {
-            const contactRegex = /^01[0-9]{8,9}$/;
-            if (!contactRegex.test(modalData.contact_number)) {
-                setError('Contact number must be in format 01XXXXXXXX (10-11 digits)');
-                return;
-            }
-        }
-
-        if (modalMode === "add" && modalData.password && modalData.password.length < 6) {
-            setError('Password must be at least 6 characters long');
+        const errors = validate(modalData, modalMode, employees);
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            setError("Please fill in all required fields correctly.");
             return;
         }
 
@@ -364,7 +370,7 @@ export default function EmployeeInfo() {
                 if (modalData.team) {
                     await assignOrUpdateEmployeeTeam(newEmpId, modalData.team);
                 }
-                if (isInstaller) {
+                /* if (isInstaller) {
                     const installerData = {
                         employee_id: newEmpId,
                         company_name: modalData.company_name,
@@ -372,7 +378,7 @@ export default function EmployeeInfo() {
                         collection_point: modalData.collection_point
                     };
                     await addInstaller(installerData);
-                }
+                } */
 
                 setSuccessMsg("Employee added successfully!");
             } else {
@@ -383,8 +389,18 @@ export default function EmployeeInfo() {
 
                 await updateEmployee(empId, employeeData);
 
-                if (isInstaller) {
-                    const installer = await getInstallerByEmployeeId(empId);
+                /* if (isInstaller) {
+                    let installer = null;
+                    try {
+                        installer = await getInstallerByEmployeeId(empId);
+                    } catch (error) {
+                        if (error.status !== 404) {
+                            // re-throw if it's not a 'Not Found' error
+                            throw error;
+                        }
+                        // If it's a 404, we just proceed with installer = null
+                    }
+
                     const installerData = {
                         company_name: modalData.company_name,
                         product_category: modalData.product_category,
@@ -396,7 +412,7 @@ export default function EmployeeInfo() {
                         installerData.employee_id = empId;
                         await addInstaller(installerData);
                     }
-                }
+                } */
 
                 const oldTeam = modalData.teamId ?? null;
                 const newTeam = modalData.team ?? null;
@@ -432,24 +448,35 @@ export default function EmployeeInfo() {
     }
 
     async function handleDelete(employeeId) {
-        if (!window.confirm("Delete this employee? This will also remove their team assignment.")) return;
-
         setSaving(true);
         setError(null);
         setSuccessMsg("");
 
         try {
-            await deleteEmployee(employeeId);
-            setSuccessMsg("Employee deleted successfully!");
-            await loadAllData();
+            const { status, message } = await getEmployeeDeletability(employeeId);
+
+            if (status === 'BLOCKED') {
+                setError(message);
+                setSaving(false);
+                return;
+            }
+
+            // status is 'CAN_DEACTIVATE'
+            if (window.confirm(message)) {
+                const result = await deleteEmployee(employeeId);
+                setSuccessMsg(result.message || "Employee deactivated successfully!");
+                await loadAllData();
+            } else {
+                // User cancelled the confirmation
+                setSaving(false);
+            }
         } catch (e) {
-            setError("Failed to delete employee: " + (e?.message || e));
-            console.error(e);
+            setError("An unexpected error occurred during deactivation: " + (e?.message || e));
+            setSaving(false); // Ensure saving is reset on error
         }
-        setSaving(false);
     }
 
-    function renderInputField(k, val, onChange) {
+    function renderInputField(k, val, onChange, formErrors) {
         const requiredWhenAdd = modalMode === "add" && k !== "team";
 
         if (k === "active_flag") {
@@ -475,7 +502,9 @@ export default function EmployeeInfo() {
                     className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                     <option value="">Select a team</option>
-                    {teams.map(team => {
+                    {teams
+                        .filter(team => team.available_flag !== false)
+                        .map(team => {
                         const teamId = team.TeamID || team.id;
                         const teamType = team.TeamType || team.teamType || team.team_type;
                         return (
@@ -771,7 +800,8 @@ export default function EmployeeInfo() {
                                     {FIELD_LABELS[k] || k}
                                     {k !== "team" && <span className="text-red-500">*</span>}
                                 </label>
-                                {renderInputField(k, modalData[k], handleModalChange)}
+                                {renderInputField(k, modalData[k], handleModalChange, formErrors)}
+                                {formErrors[k] && <p className="text-xs text-red-500 mt-1">{formErrors[k]}</p>}
                                 {FIELD_GUIDANCE[k] && (
                                     <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE[k]}</p>
                                 )}
@@ -783,7 +813,7 @@ export default function EmployeeInfo() {
                             return (
                                 <React.Fragment key={k}>
                                     {field}
-                                    <div className="bg-blue-50 p-4 rounded-md border border-blue-100 space-y-4">
+                                    {/* <div className="bg-blue-50 p-4 rounded-md border border-blue-100 space-y-4">
                                         <p className="text-sm font-semibold text-blue-800 border-b border-blue-200 pb-2">
                                             Installer Details
                                         </p>
@@ -814,7 +844,7 @@ export default function EmployeeInfo() {
                                                 <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["collection_point"]}</p>
                                             )}
                                         </div>
-                                    </div>
+                                    </div> */}
                                 </React.Fragment>
                             );
                         }
@@ -829,7 +859,8 @@ export default function EmployeeInfo() {
                             {modalMode === "add" && <span className="text-red-500">*</span>}
                             {modalMode === "edit" && <span className="text-xs text-gray-500 ml-2">(leave blank to keep current password)</span>}
                         </label>
-                        {renderInputField("password", modalData["password"], handleModalChange)}
+                        {renderInputField("password", modalData["password"], handleModalChange, formErrors)}
+                        {formErrors.password && <p className="text-xs text-red-500 mt-1">{formErrors.password}</p>}
                         {FIELD_GUIDANCE["password"] && (
                             <p className="text-xs text-gray-500 mt-1">{FIELD_GUIDANCE["password"]}</p>
                         )}
@@ -840,7 +871,7 @@ export default function EmployeeInfo() {
                             type="button"
                             onClick={handleModalSubmit}
                             className="flex-1 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors duration-200 text-sm font-medium disabled:opacity-50"
-                            disabled={saving}
+                            disabled={saving || Object.keys(formErrors).length > 0}
                         >
                             {saving
                                 ? (modalMode === "add" ? "Adding..." : "Saving...")

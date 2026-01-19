@@ -34,6 +34,8 @@ app.use('/api/time-slots', require('./routes/time-slots'));
 app.use('/api/lorry-trips', require('./routes/lorry-trips'));
 app.use('/api/order-products', require('./routes/order-products'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/order-issues', require('./routes/order-issues'));
+app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/scheduler', require('./routes/scheduler'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/installers', require('./routes/installers'));

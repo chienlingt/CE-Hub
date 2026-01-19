@@ -10,7 +10,8 @@ const InfoModal = ({
     onFormSubmit,
     saving,
     children,
-    error
+    error,
+    formErrors = {}
 }) => {
     return (
         <Modal show={show} onClose={onClose}>
@@ -28,7 +29,7 @@ const InfoModal = ({
                     <button
                         type="submit"
                         className="flex-1 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors duration-200 text-sm font-medium disabled:opacity-50"
-                        disabled={saving}
+                        disabled={saving || Object.keys(formErrors).length > 0}
                     >
                         {saving
                             ? mode === "add" ? "Adding..." : "Saving..."

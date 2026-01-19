@@ -82,4 +82,25 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+const { getCoordinatesFromAddress } = require('../services/routingService');
+
+router.get('/validate-address', async (req, res) => {
+  const { address } = req.query;
+
+  if (!address) {
+    return res.status(400).json({ error: 'Address is required' });
+  }
+
+  try {
+    const coordinates = await getCoordinatesFromAddress(address);
+    if (coordinates) {
+      res.json({ message: 'Address is valid', coordinates });
+    } else {
+      res.status(404).json({ error: 'Address not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to validate address', details: error.message });
+  }
+});
+
 module.exports = router;

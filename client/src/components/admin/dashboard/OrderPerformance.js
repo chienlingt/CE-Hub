@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ScopeMonthSelector from '../../common/ScopeMonthSelector';
 import {
   getAllOrdersSummary, getAllCustomers, getAllBuildings, getAllOrderProducts, getAllProducts,
-  getAllEmployees, getAllEmployeeTeamAssignments, getAllTeams
+  getAllEmployees, getAllEmployeeTeamAssignments, getAllTeams, getAllTimeSlots
 } from '../../../services/informationService';
 import {
   Package, CheckCircle, Star, Clock, ChevronDown, ChevronUp, User, MapPin, ClipboardList, Users
@@ -17,6 +17,7 @@ export default function OrderPerformance() {
   const [employees, setEmployees] = useState([]);
   const [teamAssignments, setTeamAssignments] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [timeSlots, setTimeSlots] = useState([]);
   const [scope, setScope] = useState('month');
   const [expandedOrders, setExpandedOrders] = useState({});
 
@@ -35,6 +36,7 @@ export default function OrderPerformance() {
     getAllEmployees().then(setEmployees).catch(err => console.warn(err));
     getAllEmployeeTeamAssignments().then(setTeamAssignments).catch(err => console.warn(err));
     getAllTeams().then(setTeams).catch(err => console.warn(err));
+    getAllTimeSlots().then(setTimeSlots).catch(err => console.warn(err));
   }, []);
 
   const getCustomerId = (order) => order.customer_id ?? order.CustomerID ?? order.customerId;
@@ -42,6 +44,7 @@ export default function OrderPerformance() {
   const getOrderId = (order) => order.id ?? order.order_id ?? order.OrderID ?? order.orderId;
   const getOrderStatus = (order) => order.order_status ?? order.orderStatus ?? order.OrderStatus ?? order.status ?? '';
   const getOrderEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
+  const getOrderTimeSlotId = (order) => order.time_slot_id ?? order.TimeSlotID ?? order.timeSlotId;
 
   const getCustomerName = (customerId) => {
     const customer = customers.find(c => (c.id || c.CustomerID || c.customerId) === customerId);
@@ -242,6 +245,13 @@ export default function OrderPerformance() {
     return String(dateInput);
   };
 
+  const getTimeSlotByOrder = (order) => {
+    const tsId = getOrderTimeSlotId(order);
+    return timeSlots.find(ts => (ts.id || ts.TimeSlotID) === tsId) || null;
+  };
+
+  const displayDate = (value) => formatDateDisplay(value) || 'N/A';
+
   // Month navigation handlers
   const prevMonth = () => setSelectedMonthDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
   const nextMonth = () => setSelectedMonthDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
@@ -392,12 +402,30 @@ export default function OrderPerformance() {
                               Order Details
                             </div>
                             <div className="space-y-2 text-sm text-gray-600">
-                              <div>Created: {formatDateDisplay(order.created_at)}</div>
-                              <div>Scheduled Start: {formatDateDisplay(order.scheduled_start_date_time)}</div>
-                              <div>Scheduled End: {formatDateDisplay(order.scheduled_end_date_time)}</div>
-                              <div>Actual Start: {formatDateDisplay(order.actual_start_date_time)}</div>
-                              <div>Actual End: {formatDateDisplay(order.actual_end_date_time)}</div>
-                              <div>Arrival: {formatDateDisplay(order.actual_arrival_date_time)}</div>
+                              <div>Created: {displayDate(order.created_at)}</div>
+                              <div>Planned Start: {displayDate(order.scheduled_start_date_time)}</div>
+                              <div>Planned End: {displayDate(order.scheduled_end_date_time)}</div>
+                              <div>
+                                Completed At: {displayDate(
+                                  (order.install_end_date_time || order.InstallEndDateTime)
+                                  || (order.delivery_end_date_time || order.DeliveryEndDateTime)
+                                )}
+                              </div>
+                              {(() => {
+                                const slot = getTimeSlotByOrder(order);
+                                const loadingStart = slot?.loading_start_date_time || slot?.LoadingStartDateTime;
+                                const loadingEnd = slot?.loading_end_date_time || slot?.LoadingEndDateTime;
+                                return (
+                                  <>
+                                    <div>Loading Start (Timeslot): {displayDate(loadingStart)}</div>
+                                    <div>Loading End (Timeslot): {displayDate(loadingEnd)}</div>
+                                  </>
+                                );
+                              })()}
+                              <div>Delivery Start: {displayDate(order.delivery_start_date_time || order.DeliveryStartDateTime)}</div>
+                              <div>Delivery End: {displayDate(order.delivery_end_date_time || order.DeliveryEndDateTime)}</div>
+                              <div>Install Start: {displayDate(order.install_start_date_time || order.InstallStartDateTime)}</div>
+                              <div>Install End: {displayDate(order.install_end_date_time || order.InstallEndDateTime)}</div>
                             </div>
                           </div>
 

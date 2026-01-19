@@ -16,7 +16,10 @@ import TruckInfo from './admin/info/TruckInfo';
 import TruckZoneInfo from './admin/info/TruckZoneInfo';
 import TeamInfo from './admin/info/TeamInfo';
 import Cases from './admin/Cases';
+import OrderIssues from './admin/OrderIssues';
 import ReportIssue from './employee/ReportIssue';
+import IssueManagement from './admin/IssueManagement';
+import ComplaintManagement from './admin/ComplaintManagement';
 import Schedule from './admin/schedule/Schedule';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
@@ -61,7 +64,7 @@ const Layout = () => {
       icon: Home,
       route: '/dashboard',
       topNavItems: [
-        { id: 'overview', label: 'Overview', path: 'overview', component: Overview },
+        { id: 'overview', label: 'Overview', path: '', component: Overview },
         { id: 'employee-performance', label: 'Employee Performance', path: 'employee-performance', component: EmployeePerformance },
         { id: 'orders', label: 'Orders', path: 'order', component: OrderPerformance },
       ],
@@ -71,7 +74,7 @@ const Layout = () => {
       icon: Calendar,
       route: '/schedule',
       topNavItems: [
-        { id: 'schedule', label: 'Schedule', path: 'schedule', component: Schedule },
+        { id: 'schedule', label: 'Schedule', path: '', component: Schedule },
         { id: 'auto-scheduler', label: 'Auto Scheduler', path: 'auto-scheduler', component: AutoScheduleReview },
       ],
     },
@@ -80,12 +83,12 @@ const Layout = () => {
       icon: FileText,
       route: '/info',
       topNavItems: [
-        { id: 'employee', label: 'Employee', path: 'employee', component: EmployeeInfo },
+        { id: 'employee', label: 'Employee', path: '', component: EmployeeInfo },
         { id: 'team', label: 'Team', path: 'team', component: TeamInfo },
         { id: 'building', label: 'Building', path: 'building', component: BuildingInfo },
         { id: 'product', label: 'Product', path: 'product', component: ProductInfo },
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
-        { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
+        // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
       ],
     },
     cases: {
@@ -93,7 +96,9 @@ const Layout = () => {
       icon: Users,
       route: '/cases',
       topNavItems: [
-        { id: 'cases', label: 'Cases', path: 'cases', component: Cases },
+        { id: 'reports', label: 'Reports', path: '', component: Cases },
+        { id: 'order-issues', label: 'Order Issues', path: 'order-issues', component: IssueManagement },
+        { id: 'complaints', label: 'Complaints', path: 'complaints', component: ComplaintManagement },
       ],
     },
     access: {
@@ -101,7 +106,7 @@ const Layout = () => {
       icon: Users,
       route: '/access',
       topNavItems: [
-        { id: 'access', label: 'Access Control', path: 'access', component: RoleAccessControl },
+        { id: 'access', label: 'Access Control', path: '', component: RoleAccessControl },
       ],
     },
     delivery: {
@@ -109,7 +114,7 @@ const Layout = () => {
       icon: Users,
       route: '/delivery',
       topNavItems: [
-        { id: 'delivery', label: 'Delivery Schedule', path: 'delivery', component: DeliverySchedule },
+        { id: 'delivery', label: 'Delivery Schedule', path: '', component: DeliverySchedule },
       ],
     },
     installation: {
@@ -117,7 +122,7 @@ const Layout = () => {
       icon: Users,
       route: '/installation',
       topNavItems: [
-        { id: 'installation', label: 'Installation Schedule', path: 'installation', component: InstallationSchedule },
+        { id: 'installation', label: 'Installation Schedule', path: '', component: InstallationSchedule },
       ],
     },
     warehouse: {
@@ -125,7 +130,7 @@ const Layout = () => {
       icon: Users,
       route: '/warehouse',
       topNavItems: [
-        { id: 'warehouse', label: 'Warehouse Schedule', path: 'warehouse', component: WarehouseLoadingSchedule },
+        { id: 'warehouse', label: 'Warehouse Schedule', path: '', component: WarehouseLoadingSchedule },
       ],
     },
     customer: {
@@ -133,7 +138,7 @@ const Layout = () => {
       icon: Users,
       route: '/customer',
       topNavItems: [
-        { id: 'place-order', label: 'Place Order', path: 'place-order', component: PlaceOrder },
+        { id: 'place-order', label: 'Place Order', path: '', component: PlaceOrder },
         { id: 'manage-orders', label: 'Manage Orders', path: 'manage-orders', component: ManageOrders },
       ],
     }
@@ -190,8 +195,8 @@ const Layout = () => {
 
     const currentRoot = getPathRoot(location.pathname);
 
-    // Allow access to /cases for all users (no permission check)
-    if (currentRoot === '/cases') {
+    // Allow access to /reports for all users (no permission check)
+    if (currentRoot === '/reports') {
       setActiveSection('');
       setTopNavActive('');
       return;
@@ -344,7 +349,7 @@ const Layout = () => {
             <h1 className="text-xl font-bold text-gray-800 truncate">{currentSection?.title || 'TBMDelivery'}</h1>
             <div className="flex items-center space-x-4">
               <button
-                onClick={() => navigate('/cases')}
+                onClick={() => navigate('/reports')}
                 className="flex items-center space-x-2 px-3 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                 title="Report Issues"
               >
@@ -400,7 +405,7 @@ const Layout = () => {
         <div className="flex-1 overflow-auto p-2">
           <Routes>
             {/* Standalone route for Report Issue (accessible to all employees) */}
-            <Route path="/cases" element={<ReportIssue />} />
+            <Route path="/reports" element={<ReportIssue />} />
 
             {/*
               Add redirect routes for each section's base path to its first top child path, plus all top child routes

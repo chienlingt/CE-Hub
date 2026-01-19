@@ -6,16 +6,12 @@ import {
   Package,
   User,
   Star,
-  CheckCircle,
-  AlertCircle,
   Calendar,
   Route,
   Phone,
-  Building,
   Timer,
   ExternalLink,
   Play,
-  Pause,
   Check
 } from 'lucide-react';
 import {
@@ -28,7 +24,8 @@ import {
   getAllEmployeeTeamAssignments,
   getAllTimeSlots,
   getAllTeams,
-  getAllTrucks
+  getAllTrucks,
+  updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -47,7 +44,6 @@ export default function DeliverySchedule() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
-  const [currentOrder, setCurrentOrder] = useState(null);
 
 
   // Load all data
@@ -116,9 +112,8 @@ export default function DeliverySchedule() {
     orderStatus: (order) => order.order_status || order.OrderStatus || 'Pending',
     orderScheduledStart: (order) => order.scheduled_start_date_time || order.ScheduledStartDateTime,
     orderScheduledEnd: (order) => order.scheduled_end_date_time || order.ScheduledEndDateTime,
-    orderActualStart: (order) => order.actual_start_date_time || order.ActualStartDateTime,
-    orderActualEnd: (order) => order.actual_end_date_time || order.ActualEndDateTime,
-    orderActualArrival: (order) => order.actual_arrival_date_time || order.ActualArrivalDateTime,
+    orderDeliveryStart: (order) => order.delivery_start_date_time || order.DeliveryStartDateTime || order.actual_start_date_time || order.ActualStartDateTime,
+    orderDeliveryEnd: (order) => order.delivery_end_date_time || order.DeliveryEndDateTime || order.actual_arrival_date_time || order.ActualArrivalDateTime,
     orderAttempts: (order) => order.number_of_attempts || order.NumberOfAttempts || 0,
     orderRating: (order) => order.customer_rating || order.CustomerRating,
     orderFeedback: (order) => order.customer_feedback || order.CustomerFeedback || '',
@@ -200,7 +195,7 @@ export default function DeliverySchedule() {
   // Filter orders for delivery (scheduled orders only)
   const deliveryOrders = orders.filter(order => {
     const status = field.orderStatus(order);
-    return status === 'Scheduled' || status === 'In Progress' || status === 'Completed';
+    return ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Delivered', 'Completed'].includes(status);
   });
 
   // Filter orders by selected date
@@ -245,6 +240,9 @@ export default function DeliverySchedule() {
 
   const getStatusColor = (status) => {
     switch (status) {
+      case 'Delivering': return 'bg-blue-100 text-blue-800';
+      case 'Loaded': return 'bg-indigo-100 text-indigo-800';
+      case 'Delivered': return 'bg-teal-100 text-teal-800';
       case 'Completed': return 'bg-green-100 text-green-800';
       case 'In Progress': return 'bg-blue-100 text-blue-800';
       case 'Pending': return 'bg-yellow-100 text-yellow-800';
@@ -288,13 +286,27 @@ export default function DeliverySchedule() {
     return `https://www.google.com/maps/search/${encodeURIComponent(address)}`;
   };
 
+  const orderRequiresInstaller = (order) => {
+    const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
+    return orderProds.some(op => {
+      const product = products.find(p => field.productId(p) === field.orderProductProductId(op));
+      return product?.installer_team_required_flag ?? product?.InstallerTeamRequiredFlag ?? false;
+    });
+  };
+
   const updateOrderStatus = async (orderId, newStatus) => {
-    // TODO: Call API to update order status
-    setOrders(prev => prev.map(order =>
-      field.orderId(order) === orderId
-        ? { ...order, order_status: newStatus, OrderStatus: newStatus, actual_start_date_time: newStatus === 'In Progress' ? new Date() : order.actual_start_date_time }
-        : order
-    ));
+    try {
+      const result = await updateOrderStatusApi(orderId, newStatus);
+      const updated = result?.order;
+      setOrders(prev => prev.map(order =>
+        field.orderId(order) === orderId
+          ? (updated ? { ...order, ...updated } : { ...order, order_status: newStatus, OrderStatus: newStatus })
+          : order
+      ));
+    } catch (error) {
+      console.error('Failed to update order status:', error);
+      alert('Failed to update order status. Please try again.');
+    }
   };
 
   const getEstimatedDuration = (order) => {
@@ -330,45 +342,36 @@ export default function DeliverySchedule() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <Navigation className="h-8 w-8 text-blue-600 mr-3" />
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Delivery Schedule</h1>
-                <p className="text-gray-600">Optimized delivery routes and schedules</p>
-              </div>
+      <div className="max-w-full mx-auto">
+        {/* Filters */}
+        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <Calendar className="h-4 w-4 text-gray-500" />
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <User className="h-4 w-4 text-gray-500" />
-                <select
-                  value={selectedTeam}
-                  onChange={(e) => {
-                    setSelectedTeam(e.target.value);
-                    setTeamAutoSelectEnabled(false);
-                  }}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="all">All Teams</option>
-                  {deliveryTeams.map(team => (
-                    <option key={field.teamId(team)} value={field.teamId(team)}>
-                      {field.teamType(team)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Team</label>
+              <select
+                value={selectedTeam}
+                onChange={(e) => {
+                  setSelectedTeam(e.target.value);
+                  setTeamAutoSelectEnabled(false);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Teams</option>
+                {deliveryTeams.map(team => (
+                  <option key={field.teamId(team)} value={field.teamId(team)}>
+                    {field.teamType(team)}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>
@@ -468,6 +471,10 @@ export default function DeliverySchedule() {
                         }).filter(Boolean);
 
                         const loadingSeq = field.orderLoadingSequence(order);
+                        const requiresInstaller = orderRequiresInstaller(order);
+                        const completionStatus = requiresInstaller ? 'Delivered' : 'Completed';
+                        const completionLabel = requiresInstaller ? 'Mark Delivered' : 'Mark Completed';
+                        const status = field.orderStatus(order);
 
                         return (
                           <div key={field.orderId(order)} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
@@ -532,14 +539,14 @@ export default function DeliverySchedule() {
                                     <Timer className="h-3 w-3 mr-1" />
                                     Est. {getEstimatedDuration(order)}m
                                   </div>
-                                  {field.orderActualStart(order) && (
+                                  {field.orderDeliveryStart(order) && (
                                     <div className="text-blue-600">
-                                      Started: {formatTime(field.orderActualStart(order))}
+                                      Delivery Start: {formatTime(field.orderDeliveryStart(order))}
                                     </div>
                                   )}
-                                  {field.orderActualEnd(order) && (
+                                  {field.orderDeliveryEnd(order) && (
                                     <div className="text-green-600">
-                                      Completed: {formatTime(field.orderActualEnd(order))}
+                                      Delivery End: {formatTime(field.orderDeliveryEnd(order))}
                                     </div>
                                   )}
                                 </div>
@@ -548,20 +555,20 @@ export default function DeliverySchedule() {
                               {/* Actions */}
                               <div className="lg:col-span-2 flex items-center space-x-2">
                                 {/* Status Update Buttons */}
-                                {field.orderStatus(order) === 'Pending' && (
+                                {['Scheduled', 'Loaded'].includes(status) && (
                                   <button
-                                    onClick={() => updateOrderStatus(field.orderId(order), 'In Progress')}
+                                    onClick={() => updateOrderStatus(field.orderId(order), 'Delivering')}
                                     className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                     title="Start Delivery"
                                   >
                                     <Play className="h-4 w-4" />
                                   </button>
                                 )}
-                                {field.orderStatus(order) === 'In Progress' && (
+                                {['Delivering', 'Loaded', 'In Progress'].includes(status) && (
                                   <button
-                                    onClick={() => updateOrderStatus(field.orderId(order), 'Completed')}
+                                    onClick={() => updateOrderStatus(field.orderId(order), completionStatus)}
                                     className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                    title="Mark Complete"
+                                    title={completionLabel}
                                   >
                                     <Check className="h-4 w-4" />
                                   </button>

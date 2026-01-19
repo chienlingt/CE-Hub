@@ -1,139 +1,88 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle, Clock, User, FileText, Calendar } from 'lucide-react';
-import {
-    getAllCases,
-    getAllEmployees,
-    updateCases
-} from '../../services/informationService';
 
-/**
- * Cases component
- * - Normalizes API payloads to a consistent shape for the UI
- * - Handles loading, errors, filtering, and updating case status (mark resolved)
- * - Uses defensive parsing for dates and fields to avoid runtime errors
- */
+const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
-// Normalize a case object coming from the API to the UI shape used in this component
-function normalizeCase(c) {
-    // Common variants: snake_case from server or PascalCase/other from older code
-    return {
-        id: c.id ?? c.case_id ?? c.CasesID ?? c.CasesId,
-        EmployeeID: c.employee_id ?? c.EmployeeID ?? c.employeeId ?? null,
-        Content: c.content ?? c.Content ?? '',
-        Status: (c.status ?? c.Status ?? '').toString().toLowerCase() || 'pending',
-        DateCasesed: c.created_at ?? null
-    };
-}
-
-const getStatusIcon = (status) => {
-    switch (status) {
-        case 'resolved': return <CheckCircle className="w-4 h-4 text-green-600" />;
-        case 'pending': return <Clock className="w-4 h-4 text-yellow-600" />;
-        default: return <AlertTriangle className="w-4 h-4 text-red-600" />;
-    }
-};
-
-function formatDate(value) {
-    if (!value) return '';
-    // If Firestore-like Timestamp object
-    if (typeof value === 'object' && typeof value.toDate === 'function') {
-        const d = value.toDate();
-        return d.toLocaleString();
-    }
-    // If ISO string or Date
-    const d = (value instanceof Date) ? value : new Date(value);
-    if (Number.isNaN(d.getTime())) return String(value);
-    return d.toLocaleString('en-US', {
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: false
-    });
-}
-
-export default function Cases() {
-    const [cases, setCases] = useState([]);
-    const [employees, setEmployees] = useState([]);
+const IssueManagement = () => {
+    const [issues, setIssues] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all');
-    const [selectedCase, setSelectedCase] = useState(null);
-    const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
+    const [selectedIssue, setSelectedIssue] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const [filter, setFilter] = useState('all');
 
     useEffect(() => {
-        const ac = new AbortController();
-        const load = async () => {
-            setLoading(true);
-            setError(null);
-            try {
-                const [rawCases, rawEmployees] = await Promise.all([
-                    getAllCases(),
-                    getAllEmployees()
-                ]);
-                // Normalize both lists defensively
-                const normalizedCases = (Array.isArray(rawCases) ? rawCases : (rawCases?.data ?? [])).map(normalizeCase);
-                const normalizedEmployees = (Array.isArray(rawEmployees) ? rawEmployees : (rawEmployees?.data ?? [])).map(emp => ({
-                    id: emp.id ?? emp.employee_id ?? emp.EmployeeID,
-                    name: emp.name ?? emp.displayName ?? emp.display_name ?? `${emp.firstName ?? ''} ${emp.lastName ?? ''}`.trim()
-                }));
-                if (!ac.signal.aborted) {
-                    setCases(normalizedCases);
-                    setEmployees(normalizedEmployees);
-                }
-                // console.log('Loaded cases and employees:', normalizedCases, normalizedEmployees);
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    console.error('Error loading cases/employees:', err);
-                    setError('Failed to load data. ' + (err.message || ''));
-                }
-            } finally {
-                if (!ac.signal.aborted) setLoading(false);
-            }
-        };
-        load();
-        return () => ac.abort();
+        fetchIssues();
     }, []);
 
-    const employeeMap = new Map(
-        employees.map(e => [String(e.id ?? e.employeeId ?? e.EmployeeID ?? ''), e])
-    );
-    console.log('Employee Map:', Array.from(employeeMap.entries()))
-
-    const getEmployeeName = (employeeId) => {
-        if (!employeeId) return 'Unassigned';
-
-        const key = String(employeeId);
-        const emp = employeeMap.get(key);
-
-        console.log('Lookup:', { employeeId: key, found: emp });
-
-        return emp?.name ?? `Unknown Employee (${key})`;
+    const fetchIssues = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const res = await fetch(`${API_BASE}/api/order-issues`);
+            if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+            }
+            const data = await res.json();
+            setIssues(data);
+        } catch (err) {
+            console.error("Failed to fetch order issues:", err);
+            setError("Failed to load order issues.");
+        } finally {
+            setLoading(false);
+        }
     };
 
-
-    const updateCaseStatus = async (caseId, newStatus) => {
-        if (!caseId) return;
+    const handleResolveIssue = async (issueId) => {
         setSaving(true);
         setError(null);
         try {
-            // updateCases should accept (id, data) where data uses the server's expected field names.
-            // The informationService.updateCases likely maps to PUT /api/reports or similar; adjust if your API expects different field names.
-            await updateCases(caseId, { status: newStatus });
-            setCases(prev => prev.map(c => (c.id === caseId ? { ...c, Status: newStatus } : c)));
-            if (selectedCase && selectedCase.id === caseId){
-                console.log('Updating selected case status locally', selectedCase);
-                setSelectedCase(prev => ({ ...prev, Status: newStatus }));
+            const res = await fetch(`${API_BASE}/api/order-issues/${issueId}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ issue_status: 'resolved' }),
+            });
+
+            if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+            }
+
+            fetchIssues(); // Refresh the list
+            if (selectedIssue && selectedIssue.id === issueId) {
+                setSelectedIssue(prev => ({ ...prev, issue_status: 'resolved' }));
             }
         } catch (err) {
-            console.error('Error updating case status:', err);
-            setError('Failed to update status. ' + (err.message || ''));
+            console.error("Failed to resolve issue:", err);
+            setError("Failed to resolve issue.");
         } finally {
             setSaving(false);
         }
     };
 
+    const getStatusIcon = (status) => {
+        switch ((status || '').toLowerCase()) {
+            case 'resolved': return <CheckCircle className="w-4 h-4 text-green-600" />;
+            case 'pending': return <Clock className="w-4 h-4 text-yellow-600" />;
+            default: return <AlertTriangle className="w-4 h-4 text-red-600" />;
+        }
+    };
+
+    const formatDate = (dateString) => {
+        if (!dateString) return 'N/A';
+        const d = new Date(dateString);
+        if (Number.isNaN(d.getTime())) return String(dateString);
+        return d.toLocaleString('en-US', {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: false
+        });
+    };
+
     // Apply filter
-    const filteredCases = cases.filter(c => {
+    const filteredIssues = issues.filter(i => {
         if (filter === 'all') return true;
-        return (c.Status || '').toLowerCase() === filter;
+        return (i.issue_status || '').toLowerCase() === filter;
     });
 
     if (loading) {
@@ -141,7 +90,7 @@ export default function Cases() {
             <div className="min-h-screen bg-gray-50 flex items-center justify-center">
                 <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
-                    <p className="mt-4 text-gray-600">Loading cases...</p>
+                    <p className="mt-4 text-gray-600">Loading issues...</p>
                 </div>
             </div>
         );
@@ -166,7 +115,7 @@ export default function Cases() {
                             <div className="ml-4">
                                 <p className="text-sm font-medium text-gray-600">Pending Issues</p>
                                 <p className="text-2xl font-bold text-gray-900">
-                                    {cases.filter(r => (r.Status || '').toLowerCase() === 'pending').length}
+                                    {issues.filter(i => (i.issue_status || '').toLowerCase() === 'pending').length}
                                 </p>
                             </div>
                         </div>
@@ -180,7 +129,7 @@ export default function Cases() {
                             <div className="ml-4">
                                 <p className="text-sm font-medium text-gray-600">Resolved Issues</p>
                                 <p className="text-2xl font-bold text-gray-900">
-                                    {cases.filter(r => (r.Status || '').toLowerCase() === 'resolved').length}
+                                    {issues.filter(i => (i.issue_status || '').toLowerCase() === 'resolved').length}
                                 </p>
                             </div>
                         </div>
@@ -193,7 +142,7 @@ export default function Cases() {
                             </div>
                             <div className="ml-4">
                                 <p className="text-sm font-medium text-gray-600">Total</p>
-                                <p className="text-2xl font-bold text-gray-900">{cases.length}</p>
+                                <p className="text-2xl font-bold text-gray-900">{issues.length}</p>
                             </div>
                         </div>
                     </div>
@@ -204,7 +153,7 @@ export default function Cases() {
                     <div className="border-b border-gray-200">
                         <nav className="flex space-x-8 px-6">
                             {[
-                                { key: 'all', label: 'All Cases' },
+                                { key: 'all', label: 'All Issues' },
                                 { key: 'pending', label: 'Pending' },
                                 { key: 'resolved', label: 'Resolved' }
                             ].map(tab => (
@@ -228,9 +177,9 @@ export default function Cases() {
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Content</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reason</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -238,45 +187,47 @@ export default function Cases() {
                             </thead>
 
                             <tbody className="bg-white divide-y divide-gray-200">
-                                {filteredCases.length === 0 ? (
+                                {filteredIssues.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="text-center py-8 text-gray-500">No cases found.</td>
+                                        <td colSpan={6} className="text-center py-8 text-gray-500">No issues found.</td>
                                     </tr>
                                 ) : (
-                                    filteredCases.map((c, idx) => (
-                                        <tr key={c.id ?? idx} className="hover:bg-gray-50">
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{idx + 1}</td>
+                                    filteredIssues.map((issue, idx) => (
+                                        <tr key={issue.id} className="hover:bg-gray-50">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                {issue.id.substring(0, 8)}...
+                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
                                                 <div className="flex items-center">
                                                     <User className="w-4 h-4 text-gray-400 mr-2" />
-                                                    <span className="text-sm text-gray-900">{getEmployeeName(c.EmployeeID)}</span>
+                                                    <span className="text-sm text-gray-900">{issue.customers?.full_name || 'Generic Customer'}</span>
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4">
-                                                <div className="text-sm text-gray-900 max-w-xs truncate">{c.Content}</div>
+                                                <div className="text-sm text-gray-900 max-w-xs truncate">{issue.issue_reason}</div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
                                                 <div className="flex items-center">
-                                                    {getStatusIcon(c.Status)}
-                                                    <span className="ml-2 text-sm text-gray-900 capitalize">{c.Status}</span>
+                                                    {getStatusIcon(issue.issue_status)}
+                                                    <span className="ml-2 text-sm text-gray-900 capitalize">{issue.issue_status}</span>
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                 <div className="flex items-center">
                                                     <Calendar className="w-4 h-4 mr-1" />
-                                                    {formatDate(c.DateCasesed)}
+                                                    {formatDate(issue.created_at)}
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                                 <button
-                                                    onClick={() => setSelectedCase(c)}
+                                                    onClick={() => setSelectedIssue(issue)}
                                                     className="text-blue-600 hover:text-blue-900"
                                                 >
                                                     View
                                                 </button>
-                                                {(c.Status || '').toLowerCase() === 'pending' && (
+                                                {(issue.issue_status || '').toLowerCase() === 'pending' && (
                                                     <button
-                                                        onClick={() => updateCaseStatus(c.id, 'resolved')}
+                                                        onClick={() => handleResolveIssue(issue.id)}
                                                         className="text-green-600 hover:text-green-900"
                                                         disabled={saving}
                                                     >
@@ -292,22 +243,22 @@ export default function Cases() {
                     </div>
                 </div>
 
-                {filteredCases.length === 0 && (
+                {filteredIssues.length === 0 && (
                     <div className="text-center py-12">
                         <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500">No cases found for the selected filter.</p>
+                        <p className="text-gray-500">No issues found for the selected filter.</p>
                     </div>
                 )}
             </div>
 
             {/* Detail modal */}
-            {selectedCase && (
+            {selectedIssue && (
                 <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
                     <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
                         <div className="mt-3">
                             <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-bold text-gray-900">Case Details</h3>
-                                <button onClick={() => setSelectedCase(null)} className="text-gray-400 hover:text-gray-600">
+                                <h3 className="text-lg font-bold text-gray-900">Issue Details</h3>
+                                <button onClick={() => setSelectedIssue(null)} className="text-gray-400 hover:text-gray-600">
                                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
                                     </svg>
@@ -316,36 +267,51 @@ export default function Cases() {
 
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Employee</label>
-                                    <p className="mt-1 text-sm text-gray-900">{getEmployeeName(selectedCase.EmployeeID)}</p>
+                                    <label className="block text-sm font-medium text-gray-700">Order ID</label>
+                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.id}</p>
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Issue Description</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedCase.Content}</p>
+                                    <label className="block text-sm font-medium text-gray-700">Customer</label>
+                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.customers?.full_name || 'N/A'}</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Reason</label>
+                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.issue_reason}</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Description</label>
+                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.issue_desc}</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Priority</label>
+                                    <p className="mt-1 text-sm text-gray-900 capitalize">{selectedIssue.issue_priority_level}</p>
                                 </div>
 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Status</label>
                                     <div className="flex items-center mt-1">
-                                        {getStatusIcon(selectedCase.Status)}
-                                        <span className="ml-2 text-sm text-gray-900 capitalize">{selectedCase.Status}</span>
+                                        {getStatusIcon(selectedIssue.issue_status)}
+                                        <span className="ml-2 text-sm text-gray-900 capitalize">{selectedIssue.issue_status}</span>
                                     </div>
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Date</label>
-                                    <p className="mt-1 text-sm text-gray-900">{formatDate(selectedCase.DateCasesed)}</p>
+                                    <label className="block text-sm font-medium text-gray-700">Date Reported</label>
+                                    <p className="mt-1 text-sm text-gray-900">{formatDate(selectedIssue.created_at)}</p>
                                 </div>
                             </div>
 
                             <div className="flex justify-end space-x-3 mt-6">
-                                <button onClick={() => setSelectedCase(null)} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Close</button>
-                                {(selectedCase.Status || '').toLowerCase() === 'pending' && (
+                                <button onClick={() => setSelectedIssue(null)} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Close</button>
+                                {(selectedIssue.issue_status || '').toLowerCase() === 'pending' && (
                                     <button
                                         onClick={() => {
-                                            updateCaseStatus(selectedCase.id, 'resolved');
-                                            setSelectedCase(null);
+                                            handleResolveIssue(selectedIssue.id);
+                                            setSelectedIssue(null);
                                         }}
                                         className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
                                         disabled={saving}
@@ -360,4 +326,6 @@ export default function Cases() {
             )}
         </div>
     );
-}
+};
+
+export default IssueManagement;

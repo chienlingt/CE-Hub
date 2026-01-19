@@ -178,14 +178,19 @@ export default function Overview() {
 
   const getOrderCompletionDate = (order) => {
     if (!order) return null;
-    const v = order.actual_arrival_date_time;
-    if (!v) return null;
-    if (typeof v?.toDate === 'function') {
-      const d = v.toDate();
+    const candidate =
+      order.install_end_date_time ||
+      order.InstallEndDateTime ||
+      order.delivery_end_date_time ||
+      order.DeliveryEndDateTime ||
+      order.actual_arrival_date_time;
+    if (!candidate) return null;
+    if (typeof candidate?.toDate === 'function') {
+      const d = candidate.toDate();
       if (d instanceof Date && !isNaN(d.getTime())) return d;
     }
-    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-      const d = v instanceof Date ? v : new Date(v);
+    if (typeof candidate === 'string' || typeof candidate === 'number' || candidate instanceof Date) {
+      const d = candidate instanceof Date ? candidate : new Date(candidate);
       if (d instanceof Date && !isNaN(d.getTime())) return d;
     }
     return null;
