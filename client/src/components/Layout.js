@@ -98,7 +98,7 @@ const Layout = () => {
       topNavItems: [
         { id: 'reports', label: 'Reports', path: '', component: Cases },
         { id: 'order-issues', label: 'Order Issues', path: 'order-issues', component: IssueManagement },
-        { id: 'complaints', label: 'Complaints', path: 'complaints', component: ComplaintManagement },
+        // { id: 'complaints', label: 'Complaints', path: 'complaints', component: ComplaintManagement },
       ],
     },
     access: {

@@ -320,7 +320,7 @@ async function generateTimeSlots() {
     const dayOfWeek = date.day(); // 0=Sunday, 1=Monday, ..., 6=Saturday
 
     // Skip weekends (Friday & Saturday as per user request)
-    if (dayOfWeek === 5 || dayOfWeek === 6) {
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
       // console.log(`Skipping weekend: ${date.format('YYYY-MM-DD')} (${dayOfWeek === 5 ? 'Friday' : 'Saturday'})`);
       continue;
     }
