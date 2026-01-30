@@ -51,6 +51,19 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Centralized Error Handling Middleware
+app.use((err, req, res, next) => {
+  // Log the error stack for debugging purposes
+  console.error(err.stack);
+
+  // Send a standardized, generic error response to the client
+  // Avoids leaking implementation details
+  res.status(500).json({
+    success: false,
+    message: 'An internal server error occurred. Please try again later.'
+  });
+});
+
 // Start server
 const port = process.env.PORT || 4000;
 app.listen(port, async () => {
