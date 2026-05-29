@@ -13,13 +13,13 @@ client/build/
 *.log
 iisnode/
 
-# Environment files
-# .env
-# .env.local
-# .env.development.local
-# .env.test.local
-# .env.production.local
-# server/.env
+# Environment files — never commit real credentials
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+server/.env
 
 # IIS logs
 *-stderr-*.txt
