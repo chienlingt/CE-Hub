@@ -211,7 +211,190 @@ async function sendTestEmail(to) {
   }
 }
 
+/**
+ * Send delivery failure notification to internal staff (admin / salesperson)
+ * FR-06-001, FR-06-002
+ */
+async function sendDeliveryFailureInternalEmail(to, recipientName, { orderRef, customerName, address, failureReason, failureDesc, driverName }) {
+  const transport = createTransporter();
+  if (!transport) return false;
+
+  const mailOptions = {
+    from: process.env.EMAIL_FROM || `"TBM Delivery" <${process.env.EMAIL_USER}>`,
+    to,
+    subject: `[Action Required] Delivery Failed — ${orderRef}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+      <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
+        <table width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4f4;">
+          <tr><td style="padding:40px 20px;">
+            <table width="600" cellspacing="0" cellpadding="0" style="margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+
+              <!-- Header -->
+              <tr>
+                <td style="padding:32px 40px 20px;background:#c0392b;border-radius:8px 8px 0 0;text-align:center;">
+                  <h1 style="margin:0;color:#fff;font-size:22px;">Delivery Failed</h1>
+                  <p style="margin:8px 0 0;color:#f8d7da;font-size:14px;">Immediate attention required</p>
+                </td>
+              </tr>
+
+              <!-- Body -->
+              <tr>
+                <td style="padding:32px 40px;">
+                  <p style="margin:0 0 16px;color:#333;font-size:15px;">Dear <strong>${recipientName}</strong>,</p>
+                  <p style="margin:0 0 24px;color:#555;font-size:14px;">
+                    A delivery has failed and requires your follow-up. Details are below.
+                  </p>
+
+                  <!-- Details table -->
+                  <table width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e0e0e0;border-radius:6px;margin-bottom:24px;">
+                    <tr style="background:#f8f9fa;">
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#555;width:40%;border-bottom:1px solid #e0e0e0;">Order Reference</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#222;border-bottom:1px solid #e0e0e0;">${orderRef}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#555;border-bottom:1px solid #e0e0e0;">Customer</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#222;border-bottom:1px solid #e0e0e0;">${customerName}</td>
+                    </tr>
+                    <tr style="background:#f8f9fa;">
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#555;border-bottom:1px solid #e0e0e0;">Delivery Address</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#222;border-bottom:1px solid #e0e0e0;">${address}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#555;border-bottom:1px solid #e0e0e0;">Driver</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#222;border-bottom:1px solid #e0e0e0;">${driverName || 'N/A'}</td>
+                    </tr>
+                    <tr style="background:#fff3f3;">
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#c0392b;border-bottom:1px solid #e0e0e0;">Failure Reason</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#c0392b;font-weight:bold;border-bottom:1px solid #e0e0e0;">${failureReason}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:10px 16px;font-size:13px;font-weight:bold;color:#555;">Additional Details</td>
+                      <td style="padding:10px 16px;font-size:13px;color:#222;">${failureDesc || 'None provided'}</td>
+                    </tr>
+                  </table>
+
+                  <p style="margin:0;color:#888;font-size:13px;">
+                    Please log in to CE Hub to review this order and take appropriate action.
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="padding:20px 40px;background:#f8f9fa;border-radius:0 0 8px 8px;border-top:1px solid #e9ecef;text-align:center;">
+                  <p style="margin:0;color:#999;font-size:12px;">TBM Delivery System — Automated Notification</p>
+                </td>
+              </tr>
+
+            </table>
+          </td></tr>
+        </table>
+      </body>
+      </html>
+    `
+  };
+
+  try {
+    const info = await transport.sendMail(mailOptions);
+    console.log(`[Email] Failure internal notification sent to ${to}:`, info.messageId);
+    return true;
+  } catch (err) {
+    console.error('[Email] Failed to send internal failure email:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Send delivery failure notification to the customer
+ * FR-06-004
+ */
+async function sendDeliveryFailureCustomerEmail(to, customerName, { orderRef, failureReason, nextSteps }) {
+  const transport = createTransporter();
+  if (!transport) return false;
+
+  const mailOptions = {
+    from: process.env.EMAIL_FROM || `"TBM Delivery" <${process.env.EMAIL_USER}>`,
+    to,
+    subject: `Update on Your Delivery — ${orderRef}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+      <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
+        <table width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4f4;">
+          <tr><td style="padding:40px 20px;">
+            <table width="600" cellspacing="0" cellpadding="0" style="margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+
+              <!-- Header -->
+              <tr>
+                <td style="padding:32px 40px 20px;background:#2c3e50;border-radius:8px 8px 0 0;text-align:center;">
+                  <h1 style="margin:0;color:#fff;font-size:22px;">Delivery Update</h1>
+                  <p style="margin:8px 0 0;color:#bdc3c7;font-size:14px;">Order ${orderRef}</p>
+                </td>
+              </tr>
+
+              <!-- Body -->
+              <tr>
+                <td style="padding:32px 40px;">
+                  <p style="margin:0 0 16px;color:#333;font-size:15px;">Dear <strong>${customerName}</strong>,</p>
+                  <p style="margin:0 0 20px;color:#555;font-size:14px;">
+                    We regret to inform you that your delivery was unable to be completed today.
+                  </p>
+
+                  <!-- Reason box -->
+                  <table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;">
+                    <tr>
+                      <td style="padding:16px;background:#fff3cd;border-left:4px solid #f39c12;border-radius:4px;">
+                        <p style="margin:0;font-size:14px;color:#856404;">
+                          <strong>Reason:</strong> ${failureReason}
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Next steps -->
+                  <p style="margin:0 0 8px;font-size:14px;font-weight:bold;color:#333;">What happens next:</p>
+                  <p style="margin:0 0 24px;color:#555;font-size:14px;line-height:1.7;">
+                    ${nextSteps || 'Our team will contact you shortly to arrange a new delivery appointment. We apologise for the inconvenience.'}
+                  </p>
+
+                  <p style="margin:0;color:#888;font-size:13px;">
+                    If you have any questions, please contact our customer service team.
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="padding:20px 40px;background:#f8f9fa;border-radius:0 0 8px 8px;border-top:1px solid #e9ecef;text-align:center;">
+                  <p style="margin:0;color:#999;font-size:12px;">© ${new Date().getFullYear()} TBM Delivery. All rights reserved.</p>
+                </td>
+              </tr>
+
+            </table>
+          </td></tr>
+        </table>
+      </body>
+      </html>
+    `
+  };
+
+  try {
+    const info = await transport.sendMail(mailOptions);
+    console.log(`[Email] Customer failure notification sent to ${to}:`, info.messageId);
+    return true;
+  } catch (err) {
+    console.error('[Email] Failed to send customer failure email:', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   sendPasswordResetEmail,
-  sendTestEmail
+  sendTestEmail,
+  sendDeliveryFailureInternalEmail,
+  sendDeliveryFailureCustomerEmail,
 };

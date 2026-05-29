@@ -1,331 +1,545 @@
-import React, { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle, Clock, User, FileText, Calendar } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import {
+  AlertTriangle, CheckCircle, Clock, User, FileText, Calendar,
+  MapPin, MessageSquare, MessageCircle, Package, RefreshCw,
+  CalendarPlus, X, ChevronRight
+} from 'lucide-react';
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
-const IssueManagement = () => {
-    const [issues, setIssues] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [selectedIssue, setSelectedIssue] = useState(null);
-    const [saving, setSaving] = useState(false);
-    const [filter, setFilter] = useState('all');
+const REASON_STYLES = {
+  'Customer Unreachable': 'bg-orange-100 text-orange-800',
+  'Access Blocked':       'bg-red-100 text-red-800',
+  'Customer Rejected':    'bg-purple-100 text-purple-800',
+  'Incorrect Address':    'bg-yellow-100 text-yellow-800',
+};
 
-    useEffect(() => {
-        fetchIssues();
-    }, []);
+const ITEM_STATUS = {
+  pending:   { label: 'Pending',   color: 'bg-gray-100 text-gray-600',   dot: 'bg-gray-400'   },
+  delivered: { label: 'Delivered', color: 'bg-green-100 text-green-700', dot: 'bg-green-500'  },
+  failed:    { label: 'Failed',    color: 'bg-red-100 text-red-700',     dot: 'bg-red-500'    },
+};
 
-    const fetchIssues = async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            const res = await fetch(`${API_BASE}/api/order-issues`);
-            if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
-            }
-            const data = await res.json();
-            setIssues(data);
-        } catch (err) {
-            console.error("Failed to fetch order issues:", err);
-            setError("Failed to load order issues.");
-        } finally {
-            setLoading(false);
-        }
-    };
+function formatDate(str) {
+  if (!str) return 'N/A';
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return String(str);
+  return d.toLocaleString('en-MY', {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
 
-    const handleResolveIssue = async (issueId) => {
-        setSaving(true);
-        setError(null);
-        try {
-            const res = await fetch(`${API_BASE}/api/order-issues/${issueId}/status`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ issue_status: 'resolved' }),
-            });
+function ReasonBadge({ reason }) {
+  const style = REASON_STYLES[reason] || 'bg-gray-100 text-gray-700';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style}`}>
+      {reason || 'Unknown'}
+    </span>
+  );
+}
 
-            if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
-            }
+// ── Case Detail Modal ─────────────────────────────────────────────────────────
+function CaseDetail({ order, onClose, onResolved }) {
+  const navigate    = useNavigate();
+  const [items,     setItems]     = useState(order.order_products || []);
+  const [resolving, setResolving] = useState(false);
+  const [sendingWA, setSendingWA] = useState(false);
+  const [waResult,  setWaResult]  = useState(null);
+  const [updatingItem, setUpdatingItem] = useState(null);
 
-            fetchIssues(); // Refresh the list
-            if (selectedIssue && selectedIssue.id === issueId) {
-                setSelectedIssue(prev => ({ ...prev, issue_status: 'resolved' }));
-            }
-        } catch (err) {
-            console.error("Failed to resolve issue:", err);
-            setError("Failed to resolve issue.");
-        } finally {
-            setSaving(false);
-        }
-    };
+  const isResolved = order.issue_status === 'resolved';
+  const customer   = order.customers;
+  const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+  const failedItems = items.filter(i => i.item_delivery_status === 'failed');
 
-    const getStatusIcon = (status) => {
-        switch ((status || '').toLowerCase()) {
-            case 'resolved': return <CheckCircle className="w-4 h-4 text-green-600" />;
-            case 'pending': return <Clock className="w-4 h-4 text-yellow-600" />;
-            default: return <AlertTriangle className="w-4 h-4 text-red-600" />;
-        }
-    };
-
-    const formatDate = (dateString) => {
-        if (!dateString) return 'N/A';
-        const d = new Date(dateString);
-        if (Number.isNaN(d.getTime())) return String(dateString);
-        return d.toLocaleString('en-US', {
-            year: 'numeric', month: 'short', day: 'numeric',
-            hour: '2-digit', minute: '2-digit', hour12: false
-        });
-    };
-
-    // Apply filter
-    const filteredIssues = issues.filter(i => {
-        if (filter === 'all') return true;
-        return (i.issue_status || '').toLowerCase() === filter;
-    });
-
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-                <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
-                    <p className="mt-4 text-gray-600">Loading issues...</p>
-                </div>
-            </div>
-        );
+  const updateItemStatus = async (itemId, status) => {
+    setUpdatingItem(itemId);
+    try {
+      const res = await fetch(`${API_BASE}/api/order-products/${itemId}/delivery-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_delivery_status: status }),
+      });
+      if (!res.ok) throw new Error('Failed');
+      setItems(prev => prev.map(i => i.id === itemId ? { ...i, item_delivery_status: status } : i));
+    } catch {
+      alert('Failed to update item status');
+    } finally {
+      setUpdatingItem(null);
     }
+  };
 
-    return (
-        <div className="bg-gray-50">
-            <div className="w-full px-4 sm:px-2 lg:px-2 py-2">
-                {error && (
-                    <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
-                        {error}
-                    </div>
-                )}
+  const handleResolve = async () => {
+    setResolving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issue_status: 'resolved' }),
+      });
+      if (!res.ok) throw new Error('Failed');
+      onResolved(order.id);
+    } catch {
+      alert('Failed to resolve case');
+    } finally {
+      setResolving(false);
+    }
+  };
 
-                {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-3">
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-red-100 rounded-lg">
-                                <AlertTriangle className="w-6 h-6 text-red-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Pending Issues</p>
-                                <p className="text-2xl font-bold text-gray-900">
-                                    {issues.filter(i => (i.issue_status || '').toLowerCase() === 'pending').length}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
+  const handleSendWhatsApp = async () => {
+    setSendingWA(true);
+    setWaResult(null);
+    try {
+      const res  = await fetch(`${API_BASE}/api/notifications/whatsapp/${order.id}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setWaResult({ success: true, msg: `WhatsApp sent to ${customer?.phone}` });
+    } catch (err) {
+      setWaResult({ success: false, msg: err.message });
+    } finally {
+      setSendingWA(false);
+    }
+  };
 
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-green-100 rounded-lg">
-                                <CheckCircle className="w-6 h-6 text-green-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Resolved Issues</p>
-                                <p className="text-2xl font-bold text-gray-900">
-                                    {issues.filter(i => (i.issue_status || '').toLowerCase() === 'resolved').length}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
+  const handleReschedule = () => {
+    navigate('/customer/', {
+      state: {
+        reschedule:    true,
+        customerId:    order.customer_id,
+        productIds:    failedItems.map(i => i.product_id),
+        sourceOrderId: order.id,
+      },
+    });
+  };
 
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-blue-100 rounded-lg">
-                                <FileText className="w-6 h-6 text-blue-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Total</p>
-                                <p className="text-2xl font-bold text-gray-900">{issues.length}</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mt-10 mb-10">
 
-                {/* Filters */}
-                <div className="bg-white rounded-lg shadow mb-6">
-                    <div className="border-b border-gray-200">
-                        <nav className="flex space-x-8 px-6">
-                            {[
-                                { key: 'all', label: 'All Issues' },
-                                { key: 'pending', label: 'Pending' },
-                                { key: 'resolved', label: 'Resolved' }
-                            ].map(tab => (
-                                <button
-                                    key={tab.key}
-                                    onClick={() => setFilter(tab.key)}
-                                    className={`py-4 px-1 border-b-2 font-medium text-sm ${filter === tab.key
-                                        ? 'border-blue-500 text-blue-600'
-                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                                >
-                                    {tab.label}
-                                </button>
-                            ))}
-                        </nav>
-                    </div>
-                </div>
+        {/* Header */}
+        <div className={`px-6 py-4 rounded-t-2xl flex items-center justify-between border-b ${
+          isResolved ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+        }`}>
+          <div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={18} className={isResolved ? 'text-green-600' : 'text-red-600'} />
+              <h2 className="text-base font-bold text-gray-900">Case — {orderRef}</h2>
+              {isResolved && (
+                <span className="flex items-center text-xs text-green-700 font-medium bg-green-100 px-2 py-0.5 rounded-full">
+                  <CheckCircle size={11} className="mr-1" /> Resolved
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5">{formatDate(order.updated_at || order.created_at)}</p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200">
+            <X size={18} />
+          </button>
+        </div>
 
-                {/* Table */}
-                <div className="bg-white rounded-lg shadow overflow-hidden">
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reason</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                </tr>
-                            </thead>
+        <div className="p-6 space-y-5">
+          {/* Customer */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Customer</p>
+            {customer?.full_name && (
+              <div className="flex items-center text-sm text-gray-700">
+                <User size={13} className="mr-2 text-gray-400" /> {customer.full_name}
+              </div>
+            )}
+            {customer?.email && (
+              <div className="flex items-center text-sm text-gray-700">
+                <MessageSquare size={13} className="mr-2 text-gray-400" /> {customer.email}
+              </div>
+            )}
+            {customer?.phone && (
+              <div className="flex items-center text-sm text-gray-700">
+                <MessageCircle size={13} className="mr-2 text-gray-400" /> {customer.phone}
+              </div>
+            )}
+            {order.delivery_address && (
+              <div className="flex items-start text-sm text-gray-700">
+                <MapPin size={13} className="mr-2 mt-0.5 text-gray-400 flex-shrink-0" />
+                {order.delivery_address}
+              </div>
+            )}
+          </div>
 
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {filteredIssues.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={6} className="text-center py-8 text-gray-500">No issues found.</td>
-                                    </tr>
-                                ) : (
-                                    filteredIssues.map((issue, idx) => (
-                                        <tr key={issue.id} className="hover:bg-gray-50">
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                                {issue.id.substring(0, 8)}...
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="flex items-center">
-                                                    <User className="w-4 h-4 text-gray-400 mr-2" />
-                                                    <span className="text-sm text-gray-900">{issue.customers?.full_name || 'Generic Customer'}</span>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className="text-sm text-gray-900 max-w-xs truncate">{issue.issue_reason}</div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="flex items-center">
-                                                    {getStatusIcon(issue.issue_status)}
-                                                    <span className="ml-2 text-sm text-gray-900 capitalize">{issue.issue_status}</span>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                <div className="flex items-center">
-                                                    <Calendar className="w-4 h-4 mr-1" />
-                                                    {formatDate(issue.created_at)}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                                                <button
-                                                    onClick={() => setSelectedIssue(issue)}
-                                                    className="text-blue-600 hover:text-blue-900"
-                                                >
-                                                    View
-                                                </button>
-                                                {(issue.issue_status || '').toLowerCase() === 'pending' && (
-                                                    <button
-                                                        onClick={() => handleResolveIssue(issue.id)}
-                                                        className="text-green-600 hover:text-green-900"
-                                                        disabled={saving}
-                                                    >
-                                                        Resolve
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+          {/* Failure reason */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Failure Details</p>
+            {order.issue_reason && (
+              <div className="mb-2"><ReasonBadge reason={order.issue_reason} /></div>
+            )}
+            {order.issue_desc && (
+              <p className="text-sm text-gray-600 italic bg-gray-50 px-3 py-2 rounded-lg">"{order.issue_desc}"</p>
+            )}
+          </div>
 
-                {filteredIssues.length === 0 && (
-                    <div className="text-center py-12">
-                        <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500">No issues found for the selected filter.</p>
-                    </div>
-                )}
+          {/* Items */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Order Items</p>
+              <div className="flex gap-3 text-xs">
+                <span className="text-green-600 font-medium">
+                  {items.filter(i => i.item_delivery_status === 'delivered').length} delivered
+                </span>
+                <span className="text-red-600 font-medium">
+                  {failedItems.length} failed
+                </span>
+              </div>
             </div>
 
-            {/* Detail modal */}
-            {selectedIssue && (
-                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-                    <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-                        <div className="mt-3">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-bold text-gray-900">Issue Details</h3>
-                                <button onClick={() => setSelectedIssue(null)} className="text-gray-400 hover:text-gray-600">
-                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                                    </svg>
-                                </button>
-                            </div>
+            {items.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">No items on record</p>
+            ) : (
+              <div className="space-y-2">
+                {items.map(item => {
+                  const name   = item.products?.product_name || `Item #${item.id}`;
+                  const status = item.item_delivery_status || 'pending';
+                  const cfg    = ITEM_STATUS[status] || ITEM_STATUS.pending;
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Order ID</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.id}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Customer</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.customers?.full_name || 'N/A'}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Reason</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.issue_reason}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Description</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedIssue.issue_desc}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Priority</label>
-                                    <p className="mt-1 text-sm text-gray-900 capitalize">{selectedIssue.issue_priority_level}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Status</label>
-                                    <div className="flex items-center mt-1">
-                                        {getStatusIcon(selectedIssue.issue_status)}
-                                        <span className="ml-2 text-sm text-gray-900 capitalize">{selectedIssue.issue_status}</span>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Date Reported</label>
-                                    <p className="mt-1 text-sm text-gray-900">{formatDate(selectedIssue.created_at)}</p>
-                                </div>
-                            </div>
-
-                            <div className="flex justify-end space-x-3 mt-6">
-                                <button onClick={() => setSelectedIssue(null)} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Close</button>
-                                {(selectedIssue.issue_status || '').toLowerCase() === 'pending' && (
-                                    <button
-                                        onClick={() => {
-                                            handleResolveIssue(selectedIssue.id);
-                                            setSelectedIssue(null);
-                                        }}
-                                        className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                                        disabled={saving}
-                                    >
-                                        Resolve
-                                    </button>
-                                )}
-                            </div>
+                  return (
+                    <div key={item.id} className={`flex items-center justify-between p-3 rounded-xl border ${
+                      status === 'failed'    ? 'border-red-200 bg-red-50' :
+                      status === 'delivered' ? 'border-green-200 bg-green-50' :
+                                              'border-gray-200 bg-white'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <Package size={13} className="text-gray-400" />
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{name}</p>
+                          <p className="text-xs text-gray-500">Qty: {item.quantity || 1}</p>
                         </div>
+                      </div>
+
+                      {!isResolved ? (
+                        <div className="flex gap-1.5">
+                          {['delivered', 'failed', 'pending'].map(s => (
+                            <button
+                              key={s}
+                              disabled={updatingItem === item.id || status === s}
+                              onClick={() => updateItemStatus(item.id, s)}
+                              className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
+                                status === s
+                                  ? s === 'delivered' ? 'bg-green-600 text-white'
+                                  : s === 'failed'    ? 'bg-red-600 text-white'
+                                  :                    'bg-gray-600 text-white'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {updatingItem === item.id ? '...' : s.charAt(0).toUpperCase() + s.slice(1)}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.color}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+                          {cfg.label}
+                        </span>
+                      )}
                     </div>
-                </div>
+                  );
+                })}
+              </div>
             )}
+          </div>
+
+          {/* WhatsApp feedback */}
+          {waResult && (
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+              waResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+            }`}>
+              {waResult.success ? <CheckCircle size={14} /> : <AlertTriangle size={14} />}
+              {waResult.msg}
+            </div>
+          )}
+
+          {/* Actions */}
+          {!isResolved ? (
+            <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-100">
+              <button
+                onClick={handleSendWhatsApp}
+                disabled={sendingWA}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+              >
+                <MessageCircle size={14} />
+                {sendingWA ? 'Sending...' : 'Send WhatsApp'}
+              </button>
+
+              {failedItems.length > 0 && (
+                <button
+                  onClick={handleReschedule}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors"
+                >
+                  <CalendarPlus size={14} />
+                  Reschedule ({failedItems.length} failed)
+                </button>
+              )}
+
+              <button
+                onClick={handleResolve}
+                disabled={resolving}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 ml-auto"
+              >
+                <CheckCircle size={14} />
+                {resolving ? 'Resolving...' : 'Mark Resolved'}
+              </button>
+            </div>
+          ) : (
+            <div className="pt-2 border-t border-gray-100 flex justify-end">
+              <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl text-sm hover:bg-gray-300">
+                Close
+              </button>
+            </div>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+const IssueManagement = () => {
+  const [searchParams]  = useSearchParams();
+  const highlightId     = searchParams.get('orderId');
+
+  const [issues,       setIssues]       = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [selectedIssue,setSelectedIssue]= useState(null);
+  const [filter,       setFilter]       = useState('all');
+
+  const fetchIssues = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/orders?issues_only=true&sort=created_desc&include_products=true`);
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+      setIssues(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError('Failed to load order issues.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchIssues();
+    const timer = setInterval(fetchIssues, 15000);
+    return () => clearInterval(timer);
+  }, [fetchIssues]);
+
+  // Auto-open case if navigated from notification bell
+  useEffect(() => {
+    if (highlightId && issues.length > 0) {
+      const found = issues.find(o => o.id === highlightId);
+      if (found) setSelectedIssue(found);
+    }
+  }, [highlightId, issues]);
+
+  const handleResolved = (orderId) => {
+    setIssues(prev => prev.map(o =>
+      o.id === orderId ? { ...o, issue_status: 'resolved' } : o
+    ));
+    setSelectedIssue(null);
+  };
+
+  const filteredIssues = issues.filter(i => {
+    if (filter === 'pending')  return i.issue_status !== 'resolved';
+    if (filter === 'resolved') return i.issue_status === 'resolved';
+    return true;
+  });
+
+  const pendingCount  = issues.filter(i => i.issue_status !== 'resolved').length;
+  const resolvedCount = issues.filter(i => i.issue_status === 'resolved').length;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
+          <p className="mt-4 text-gray-600">Loading issues...</p>
+        </div>
+      </div>
     );
+  }
+
+  return (
+    <div className="bg-gray-50 min-h-screen">
+      {selectedIssue && (
+        <CaseDetail
+          order={selectedIssue}
+          onClose={() => setSelectedIssue(null)}
+          onResolved={handleResolved}
+        />
+      )}
+
+      <div className="w-full px-4 sm:px-6 py-4">
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">{error}</div>
+        )}
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+            <AlertTriangle className="text-red-500" size={20} />
+            Order Issues
+          </h1>
+          <button
+            onClick={fetchIssues}
+            className="flex items-center px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
+          >
+            <RefreshCw size={13} className="mr-1.5" /> Refresh
+          </button>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+            <div className="p-2 bg-red-100 rounded-lg"><AlertTriangle className="w-5 h-5 text-red-600" /></div>
+            <div>
+              <p className="text-xs text-gray-500">Open</p>
+              <p className="text-xl font-bold text-gray-900">{pendingCount}</p>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+            <div className="p-2 bg-green-100 rounded-lg"><CheckCircle className="w-5 h-5 text-green-600" /></div>
+            <div>
+              <p className="text-xs text-gray-500">Resolved</p>
+              <p className="text-xl font-bold text-gray-900">{resolvedCount}</p>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg"><FileText className="w-5 h-5 text-blue-600" /></div>
+            <div>
+              <p className="text-xs text-gray-500">Total</p>
+              <p className="text-xl font-bold text-gray-900">{issues.length}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter tabs */}
+        <div className="bg-white rounded-lg shadow mb-4">
+          <nav className="flex space-x-8 px-6 border-b border-gray-200">
+            {[
+              { key: 'all',      label: 'All Issues',  count: issues.length   },
+              { key: 'pending',  label: 'Open',        count: pendingCount    },
+              { key: 'resolved', label: 'Resolved',    count: resolvedCount   },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setFilter(tab.key)}
+                className={`py-3 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 ${
+                  filter === tab.key
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                    filter === tab.key ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'
+                  }`}>{tab.count}</span>
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        {/* Table */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reason</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredIssues.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-10 text-gray-400">
+                      <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                      No issues found.
+                    </td>
+                  </tr>
+                ) : filteredIssues.map(issue => {
+                  const isResolved   = issue.issue_status === 'resolved';
+                  const items        = issue.order_products || [];
+                  const failedCount  = items.filter(i => i.item_delivery_status === 'failed').length;
+                  const isHighlighted = issue.id === highlightId;
+
+                  return (
+                    <tr
+                      key={issue.id}
+                      className={`hover:bg-gray-50 cursor-pointer ${isHighlighted ? 'bg-blue-50' : ''}`}
+                      onClick={() => setSelectedIssue(issue)}
+                    >
+                      <td className="px-4 py-3 text-sm font-mono text-gray-900">
+                        {issue.odoo_order_ref || issue.id.slice(0, 8).toUpperCase()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <User size={13} className="text-gray-400" />
+                          <span className="text-sm text-gray-900">{issue.customers?.full_name || 'Unknown'}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {issue.issue_reason
+                          ? <ReasonBadge reason={issue.issue_reason} />
+                          : <span className="text-sm text-gray-400">—</span>
+                        }
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-600">
+                        {items.length > 0 ? (
+                          <span>
+                            {items.length} item{items.length > 1 ? 's' : ''}
+                            {failedCount > 0 && (
+                              <span className="ml-1 text-red-500 font-medium">({failedCount} failed)</span>
+                            )}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          {isResolved
+                            ? <CheckCircle size={14} className="text-green-600" />
+                            : <AlertTriangle size={14} className="text-red-500" />
+                          }
+                          <span className={`text-sm capitalize ${isResolved ? 'text-green-700' : 'text-red-600'}`}>
+                            {isResolved ? 'Resolved' : issue.issue_status || 'Open'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        <div className="flex items-center gap-1">
+                          <Calendar size={12} />
+                          {formatDate(issue.updated_at || issue.created_at)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button className="flex items-center text-blue-600 hover:text-blue-800 text-sm font-medium">
+                          View <ChevronRight size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default IssueManagement;

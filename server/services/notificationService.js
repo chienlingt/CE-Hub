@@ -1,0 +1,168 @@
+const prisma = require('../prismaClient');
+const {
+  sendDeliveryFailureInternalEmail,
+  sendDeliveryFailureCustomerEmail,
+} = require('./emailService');
+const { sendDeliveryFailureWhatsApp } = require('./whatsappService');
+
+// ─── In-app notification helpers ────────────────────────────────────────────
+
+async function createInAppNotification(userId, message, type = 'warning', orderId = null) {
+  try {
+    return await prisma.notifications.create({
+      data: {
+        user_id:    userId,
+        message,
+        type,
+        is_read:    false,
+        order_id:   orderId,
+        created_at: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error('[NotificationService] Failed to create in-app notification:', err.message);
+  }
+}
+
+async function getAdminEmployees() {
+  return prisma.employees.findMany({
+    where: {
+      active_flag: true,
+      role: { name: { equals: 'admin', mode: 'insensitive' } },
+    },
+    include: { role: true },
+  });
+}
+
+// ─── Odoo chatter post (FR-06-003) ──────────────────────────────────────────
+
+async function postToOdooChatter(odooOrderRef, { customerName, address, failureReason, failureDesc, driverName }) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return;
+
+  try {
+    const { callModel } = require('./odooService');
+
+    const odooOrders = await callModel('sale.order', 'search_read',
+      [[['name', '=', odooOrderRef]]],
+      { fields: ['id'], limit: 1 }
+    );
+
+    if (!odooOrders?.length) {
+      console.warn(`[NotificationService] Odoo order not found for ref: ${odooOrderRef}`);
+      return;
+    }
+
+    const odooId = odooOrders[0].id;
+    const body = [
+      `<b>Delivery Failed</b>`,
+      `<b>Customer:</b> ${customerName}`,
+      `<b>Address:</b> ${address}`,
+      `<b>Driver:</b> ${driverName || 'N/A'}`,
+      `<b>Failure Reason:</b> ${failureReason}`,
+      `<b>Details:</b> ${failureDesc || 'None provided'}`,
+    ].join('<br/>');
+
+    await callModel('sale.order', 'message_post', [[odooId]], {
+      body,
+      message_type:    'comment',
+      subtype_xmlid:   'mail.mt_comment',
+    });
+
+    console.log(`[NotificationService] Posted failure to Odoo chatter for ${odooOrderRef}`);
+  } catch (err) {
+    // Odoo chatter failure must never crash the main flow
+    console.warn('[NotificationService] Odoo chatter post failed (non-fatal):', err.message);
+  }
+}
+
+// ─── Main A6 function ────────────────────────────────────────────────────────
+
+/**
+ * Fire all A6 notifications when a delivery fails.
+ * Call this after the order issue fields are written to DB.
+ *
+ * FR-06-001  Internal email + in-app notification to admins & assigned employee
+ * FR-06-002  In-app notification appears in CE Hub notification panel
+ * FR-06-003  Post failure details to Odoo chatter
+ * FR-06-004  Customer-facing failure email
+ *
+ * @param {string} orderId - local UUID of the order
+ */
+async function sendDeliveryFailureNotifications(orderId) {
+  // ── 1. Load order with all relations ──────────────────────────────────────
+  const order = await prisma.orders.findUnique({
+    where: { id: orderId },
+    include: {
+      customers:  true,
+      buildings:  true,
+      employees:  { include: { role: true } },
+    },
+  });
+
+  if (!order) {
+    console.warn(`[NotificationService] Order not found: ${orderId}`);
+    return;
+  }
+
+  const customerName  = order.customers?.full_name   || 'Unknown Customer';
+  const customerEmail = order.customers?.email        || null;
+  const address       = order.delivery_address
+    || order.buildings?.building_name
+    || 'Unknown Address';
+  const orderRef      = order.odoo_order_ref || order.id;
+  const failureReason = order.issue_reason   || 'Unspecified';
+  const failureDesc   = order.issue_desc     || '';
+  const driverName    = order.employees?.name || order.employees?.display_name || 'Unknown';
+
+  const emailData = { orderRef, customerName, address, failureReason, failureDesc, driverName };
+
+  // ── 2. Notify admins (in-app + email) ─────────────────────────────────────
+  const admins = await getAdminEmployees();
+  const notifiedEmails = new Set();
+
+  for (const admin of admins) {
+    const message = `Delivery failed — Order ${orderRef} | Customer: ${customerName} | Reason: ${failureReason}`;
+    await createInAppNotification(admin.id, message, 'error', orderId);
+
+    // Email temporarily disabled for DB admins — only admin_notification_email receives email
+    if (admin.email) notifiedEmails.add(admin.email.toLowerCase());
+  }
+
+  // Always notify the designated admin email from system settings (FR-06-001)
+  const adminEmailSetting = await prisma.system_settings.findUnique({
+    where: { setting_key: 'admin_notification_email' },
+  });
+  const extraEmail = adminEmailSetting?.setting_value?.trim();
+  if (extraEmail && !notifiedEmails.has(extraEmail.toLowerCase())) {
+    await sendDeliveryFailureInternalEmail(extraEmail, 'Admin', emailData);
+  }
+
+  // ── 3. Post to Odoo chatter (FR-06-003) ───────────────────────────────────
+  await postToOdooChatter(order.odoo_order_ref, emailData);
+
+  // ── 5. Send customer email (FR-06-004) ────────────────────────────────────
+  if (customerEmail) {
+    await sendDeliveryFailureCustomerEmail(customerEmail, customerName, {
+      orderRef,
+      failureReason,
+      nextSteps: 'Our logistics team will contact you shortly to arrange a new delivery appointment. We apologise for the inconvenience.',
+    });
+  }
+
+  // ── 6. Send customer WhatsApp (FR-06-004, optional) ───────────────────────
+  const customerPhone = order.customers?.phone || null;
+  if (customerPhone) {
+    await sendDeliveryFailureWhatsApp(customerPhone, {
+      customerName,
+      orderRef,
+      reason: failureReason,
+    });
+  }
+
+  console.log(`[NotificationService] A6 notifications sent for order ${orderRef}`);
+}
+
+module.exports = {
+  createInAppNotification,
+  sendDeliveryFailureNotifications,
+};

@@ -22,7 +22,8 @@
     "firebase-admin": "^13.5.0",
     "helmet": "^7.0.0",
     "node-cron": "^4.2.1",
-    "nodemailer": "^7.0.10"
+    "nodemailer": "^7.0.10",
+    "twilio": "^6.0.2"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",

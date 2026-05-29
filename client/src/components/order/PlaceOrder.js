@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ShoppingCart, Package, User, CheckCircle, AlertCircle, Plus, Minus, X, Edit2, Save, Search } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { ShoppingCart, Package, User, CheckCircle, AlertCircle, Plus, Minus, X, Edit2, Save, Search, RefreshCw } from 'lucide-react';
 import ResultModal from '../common/ResultModal';
 import { getAllProducts, getAllZones, addCustomer, addProduct, updateCustomer } from '../../services/informationService';
 
@@ -12,6 +13,9 @@ const SERVICE_TYPES = [
 ];
 
 export default function PlaceOrder() {
+  const location = useLocation();
+  const rescheduleState = location.state?.reschedule ? location.state : null;
+
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [zones, setZones] = useState([]);
@@ -104,6 +108,37 @@ export default function PlaceOrder() {
     }
     loadData();
   }, []);
+
+  // Pre-fill customer + failed products when arriving from the Reschedule button
+  useEffect(() => {
+    if (!rescheduleState || loading) return;
+    if (products.length === 0 || customers.length === 0) return;
+
+    // Select the customer
+    const { customerId, productIds = [] } = rescheduleState;
+    if (customerId) {
+      setCustomerMode('select');
+      setSelectedCustomerId(customerId);
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) setCustomerEditData({ ...customer });
+    }
+
+    // Pre-fill cart with only the failed products (quantity 1, delivery service type)
+    const prefillCart = productIds
+      .map(pid => products.find(p => p.id === pid))
+      .filter(Boolean)
+      .map(product => ({
+        product,
+        quantity:           1,
+        serviceType:        'delivery',
+        dismantleRequired:  false,
+        customInstallTime:  null,
+        customDismantleTime:null,
+      }));
+
+    if (prefillCart.length > 0) setCart(prefillCart);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, products, customers]);
 
   const validateAddress = async (address) => {
     if (!address) {
@@ -522,7 +557,6 @@ export default function PlaceOrder() {
         title: 'Order Placed Successfully!',
         message: 'Your order has been confirmed.'
       });
-      resetForm();
     } catch (err) {
       console.error('Order submission error:', err);
       setResultModal({
@@ -649,6 +683,20 @@ export default function PlaceOrder() {
         </div>
       )}
       <div className="w-full">
+        {/* Reschedule banner */}
+        {rescheduleState && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3">
+            <RefreshCw className="text-amber-600 flex-shrink-0 mt-0.5" size={18} />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">Rescheduling failed delivery</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Customer and failed items have been pre-filled from the previous order.
+                Review the details below, then press <strong>Place Order</strong> when ready.
+              </p>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 flex items-start">
             <AlertCircle className="h-5 w-5 text-red-500 mr-3 mt-0.5 flex-shrink-0" />

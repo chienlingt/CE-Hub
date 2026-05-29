@@ -155,6 +155,7 @@ model order_products {
   service_type                 String?  @db.VarChar(50)
   custom_installation_time_min Int?
   custom_installation_time_max Int?
+  item_delivery_status         String?  @default("pending") @db.VarChar(20)
   orders                       orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products                     products @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -196,6 +197,8 @@ model orders {
   delivery_postcode         String?
   delivery_state            String?
   issue_status              String?
+  odoo_order_ref            String?                 @unique @db.VarChar(100)
+  is_complaint_submitted    Boolean?                @default(false)
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
@@ -315,6 +318,7 @@ model complaint {
   date_reported              DateTime? @default(now()) @db.Timestamp(6)
   media_product_installation String[]
   media_serial_number        String[]
+  is_submitted               Boolean?  @default(false)
   customers                  customers @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_complaint_customer")
   orders                     orders?   @relation(fields: [order_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_complaint_order")
 }
@@ -377,5 +381,7 @@ model notifications {
   user_id    String    @db.Uuid
   message    String
   type       String?   @default("info") @db.VarChar(50)
+  is_read    Boolean   @default(false)
+  order_id   String?   @db.Uuid
   created_at DateTime? @default(now()) @db.Timestamp(6)
 }

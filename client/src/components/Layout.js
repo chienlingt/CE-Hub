@@ -5,6 +5,9 @@ import {
   Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle
 } from 'lucide-react';
 import ProfileModal from './common/ProfileModal';
+import NotificationBell from './common/NotificationBell';
+import FailureNotificationLog from './admin/FailureNotificationLog';
+import NotificationSettings from './admin/NotificationSettings';
 import {
   // admin pages
   default as Overview,
@@ -96,7 +99,7 @@ const Layout = () => {
       icon: Users,
       route: '/cases',
       topNavItems: [
-        { id: 'reports', label: 'Reports', path: '', component: Cases },
+        { id: 'reports',      label: 'Reports',      path: '',             component: Cases           },
         { id: 'order-issues', label: 'Order Issues', path: 'order-issues', component: IssueManagement },
         // { id: 'complaints', label: 'Complaints', path: 'complaints', component: ComplaintManagement },
       ],
@@ -138,8 +141,16 @@ const Layout = () => {
       icon: Users,
       route: '/customer',
       topNavItems: [
-        { id: 'place-order', label: 'Place Order', path: '', component: PlaceOrder },
-        { id: 'manage-orders', label: 'Manage Orders', path: 'manage-orders', component: ManageOrders },
+        { id: 'place-order',   label: 'Place Order',    path: '',               component: PlaceOrder },
+        { id: 'manage-orders', label: 'Manage Orders',  path: 'manage-orders',  component: ManageOrders },
+      ],
+    },
+    settings: {
+      title: 'Settings',
+      icon: AlertCircle,
+      route: '/settings',
+      topNavItems: [
+        { id: 'notifications', label: 'Notifications', path: '', component: NotificationSettings },
       ],
     }
   }
@@ -356,6 +367,7 @@ const Layout = () => {
                 <AlertCircle size={20} />
                 <span className="hidden md:block font-medium">Report Issue</span>
               </button>
+              <NotificationBell userId={employeeData?.id} />
               <button
                 type="button"
                 onClick={openProfileModal}

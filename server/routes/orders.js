@@ -6,6 +6,7 @@ const { extractBuildingName, normalizeBuildingName } = require('../utils/address
 const { scheduleOrders, updateTimeslotResources } = require('../services/scheduler');
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
+const { sendDeliveryFailureNotifications } = require('../services/notificationService');
 
 const TRAVEL_FALLBACK_MINUTES = 17;
 
@@ -1005,23 +1006,46 @@ router.delete('/:id', async (req, res) => {
 
 router.patch('/:id/issue', async (req, res) => {
   try {
-    const { issue_status, issue_priority_level, issue_reason, issue_desc } = req.body;
-    
-    // Construct update data with only provided fields
+    const {
+      issue_status,
+      issue_reason,
+      issue_desc,
+      order_products_status, // optional array: [{ id, item_delivery_status }]
+    } = req.body;
+
+    // Update order issue fields
     const data = {};
     if (issue_status !== undefined) data.issue_status = issue_status;
-    if (issue_priority_level !== undefined) data.issue_priority_level = issue_priority_level;
     if (issue_reason !== undefined) data.issue_reason = issue_reason;
-    if (issue_desc !== undefined) data.issue_desc = issue_desc;
-
+    if (issue_desc   !== undefined) data.issue_desc   = issue_desc;
     data.updated_at = new Date();
 
     const order = await prisma.orders.update({
       where: { id: req.params.id },
-      data
+      data,
     });
-    
-    res.json(order);
+
+    // Update individual item delivery statuses if provided
+    if (Array.isArray(order_products_status) && order_products_status.length > 0) {
+      const allowed = ['pending', 'delivered', 'failed'];
+      for (const item of order_products_status) {
+        if (!item.id || !allowed.includes(item.item_delivery_status)) continue;
+        await prisma.order_products.update({
+          where: { id: parseInt(item.id) },
+          data:  { item_delivery_status: item.item_delivery_status },
+        });
+      }
+    }
+
+    // A6 — fire failure notifications when a failure reason is first set
+    const isNewFailure = issue_reason && issue_reason.trim().length > 0;
+    if (isNewFailure) {
+      sendDeliveryFailureNotifications(req.params.id).catch(err =>
+        console.error('[A6] sendDeliveryFailureNotifications error:', err.message)
+      );
+    }
+
+    res.json({ success: true, order });
   } catch (err) {
     console.error('PATCH /api/orders/:id/issue error', err);
     res.status(500).json({ error: 'Failed to update order issue', details: err.message });

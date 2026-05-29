@@ -9,7 +9,7 @@ const prisma = require('./prismaClient');
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
 // CORS configuration - allows frontend to access API
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:3000',
@@ -40,6 +40,8 @@ app.use('/api/scheduler', require('./routes/scheduler'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/installers', require('./routes/installers'));
 app.use('/api/outlets', require('./routes/outlets'));
+app.use('/api/webhooks',      require('./routes/webhooks'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -87,6 +89,10 @@ app.listen(port, async () => {
   // console.log('  /api/reports');
   // console.log('  /api/scheduler');
   // console.log('  /api/health\n');
+
+  // Seed default WhatsApp notification settings
+  const { seedWhatsAppSettings } = require('./services/whatsappService');
+  await seedWhatsAppSettings();
 
   // Initialize scheduler cron job
   const { initializeSchedulerCron } = require('./schedulerCron');
