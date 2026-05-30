@@ -8,6 +8,8 @@ import ProfileModal from './common/ProfileModal';
 import NotificationBell from './common/NotificationBell';
 import FailureNotificationLog from './admin/FailureNotificationLog';
 import NotificationSettings from './admin/NotificationSettings';
+import DoAssignment from './admin/DoAssignment';
+import SyncMonitor from './admin/SyncMonitor';
 import {
   // admin pages
   default as Overview,
@@ -101,7 +103,7 @@ const Layout = () => {
       topNavItems: [
         { id: 'reports',      label: 'Reports',      path: '',             component: Cases           },
         { id: 'order-issues', label: 'Order Issues', path: 'order-issues', component: IssueManagement },
-        // { id: 'complaints', label: 'Complaints', path: 'complaints', component: ComplaintManagement },
+        { id: 'sync-monitor', label: 'Sync Monitor', path: 'sync-monitor', component: SyncMonitor     },
       ],
     },
     access: {
@@ -170,7 +172,11 @@ const Layout = () => {
 
   // Filter navigation based on permissions. Admin gets full access.
   const filteredNavigation = useMemo(() => {
-    const role = normalize(employeeData?.role || '');
+    // role can be a string or an object { name, id, permissions }
+    const rawRole = typeof employeeData?.role === 'object'
+      ? employeeData?.role?.name || ''
+      : employeeData?.role || '';
+    const role = normalize(rawRole);
     if (role === 'admin' || effectivePermissions.includes('admin')) {
       return Object.entries(navigationData);
     }

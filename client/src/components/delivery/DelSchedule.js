@@ -1,33 +1,32 @@
-import React, { useState, useEffect } from 'react';
 import {
+  Calendar,
+  Check,
   Clock,
+  ExternalLink,
   MapPin,
   Navigation,
   Package,
-  User,
-  Star,
-  Calendar,
-  Route,
   Phone,
-  Timer,
-  ExternalLink,
   Play,
-  Check
+  Route,
+  Star,
+  Timer,
+  User
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 import {
-  getAllOrders,
-  getAllOrderProducts,
-  getAllProducts,
-  getAllCustomers,
   getAllBuildings,
-  getAllEmployees,
+  getAllCustomers,
   getAllEmployeeTeamAssignments,
-  getAllTimeSlots,
+  getAllOrderProducts,
+  getAllOrders,
+  getAllProducts,
   getAllTeams,
+  getAllTimeSlots,
   getAllTrucks,
   updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
-import { useAuth } from '../../contexts/AuthContext';
 
 export default function DeliverySchedule() {
   const { currentUser } = useAuth();
@@ -505,14 +504,26 @@ export default function DeliverySchedule() {
                                 <div className="space-y-1 text-sm text-gray-600">
                                   {customer && (
                                     <>
-                                      <div className="flex items-center">
-                                        <User className="h-3 w-3 mr-1" />
-                                        {field.customerName(customer)}
+                                      <div className="flex items-center gap-1">
+                                        <User className="h-3 w-3 flex-shrink-0" />
+                                        <span>{field.customerName(customer)}</span>
                                       </div>
-                                      <div className="flex items-center">
-                                        <Phone className="h-3 w-3 mr-1" />
-                                        {field.customerPhone(customer)}
+                                      {/* Customer phone*/}
+                                      <div className="flex items-center gap-1">
+                                        <Phone className="h-3 w-3 flex-shrink-0" />
+                                        <span>{field.customerPhone(customer) || 'N/A'}</span>
                                       </div>
+                                      {/* Contact person at site from remarks */}
+                                      {order.remarks_contact_phone && (
+                                        <div className="flex items-center gap-1">
+                                          <Phone className="h-3 w-3 flex-shrink-0 text-blue-400" />
+                                          <span className="text-blue-700 font-medium">{order.remarks_contact_phone}</span>
+                                          {order.remarks_contact_name && (
+                                            <span className="text-blue-500 text-xs">({order.remarks_contact_name})</span>
+                                          )}
+                                          <span className="text-xs bg-blue-100 text-blue-600 px-1 rounded">site contact</span>
+                                        </div>
+                                      )}
                                     </>
                                   )}
                                   <div className="flex items-center">
@@ -525,10 +536,29 @@ export default function DeliverySchedule() {
                               {/* Address */}
                               <div className="lg:col-span-3">
                                 <div className="flex items-start">
-                                  <MapPin className="h-4 w-4 mr-2 mt-0.5 text-gray-400" />
-                                  <div>
-                                    <p className="text-sm text-gray-900 font-medium">{building ? field.buildingName(building) : 'No building'}</p>
-                                    <p className="text-xs text-gray-600">{field.buildingAddress(building, customer)}</p>
+                                  <MapPin className="h-4 w-4 mr-2 mt-0.5 text-gray-400 flex-shrink-0" />
+                                  <div className="space-y-1 min-w-0">
+                                    {/* Remarks address takes priority */}
+                                    {order.remarks_delivery_address ? (
+                                      <>
+                                        <p className="text-sm text-blue-800 font-semibold leading-tight">{order.remarks_delivery_address}</p>
+                                        <p className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded inline-block">from remarks</p>
+                                        {order.original_delivery_address && (
+                                          <p className="text-xs text-gray-400 line-through leading-tight">{order.original_delivery_address}</p>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <p className="text-sm text-gray-900 font-medium">{building ? field.buildingName(building) : 'No building'}</p>
+                                        <p className="text-xs text-gray-600">{field.buildingAddress(building, customer)}</p>
+                                      </>
+                                    )}
+                                    {/* Driver notes */}
+                                    {(order.delivery_notes || order.remarks_driver_notes) && (
+                                      <p className="text-xs text-amber-700 bg-amber-50 px-1.5 py-1 rounded border border-amber-200 leading-tight mt-1">
+                                        {order.delivery_notes || order.remarks_driver_notes}
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
                               </div>

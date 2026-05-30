@@ -20,6 +20,7 @@ iisnode/
 .env.test.local
 .env.production.local
 server/.env
+!server/.env.example
 
 # IIS logs
 *-stderr-*.txt

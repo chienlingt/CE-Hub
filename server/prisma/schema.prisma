@@ -199,6 +199,13 @@ model orders {
   issue_status              String?
   odoo_order_ref            String?                 @unique @db.VarChar(100)
   is_complaint_submitted    Boolean?                @default(false)
+  delivery_remarks          String?
+  assignment_status         String?                 @default("unassigned") @db.VarChar(30)
+  original_delivery_address String?
+  remarks_delivery_address  String?
+  remarks_contact_phone     String?
+  remarks_contact_name      String?
+  remarks_driver_notes      String?
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]

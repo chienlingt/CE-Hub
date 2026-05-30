@@ -97,6 +97,17 @@ app.listen(port, async () => {
   // Initialize scheduler cron job
   const { initializeSchedulerCron } = require('./schedulerCron');
   await initializeSchedulerCron();
+
+  // A1.4 — Odoo polling cron (fallback for missed webhooks, runs every 15 min)
+  if (process.env.ODOO_URL) {
+    const cron = require('node-cron');
+    const { syncOrdersFromOdoo } = require('./services/odooSyncService');
+    cron.schedule('*/15 * * * *', () => {
+      console.log('[OdooSync] Running scheduled sync...');
+      syncOrdersFromOdoo();
+    }, { timezone: 'Asia/Kuala_Lumpur' });
+    console.log('[OdooSync] Polling cron registered — every 15 minutes.');
+  }
 });
 
 process.on('SIGINT', async () => {

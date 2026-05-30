@@ -75,9 +75,6 @@ async function getMessageTemplate() {
 async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, reason }) {
   if (!toPhone) return;
 
-  const enabled = await isWhatsAppEnabled();
-  if (!enabled) return;
-
   const normalizedPhone = toPhone.startsWith('+')
     ? toPhone
     : `+60${toPhone.replace(/^0/, '')}`;
@@ -114,19 +111,24 @@ async function sendWhatsAppDirect(phone, message) {
 async function seedWhatsAppSettings() {
   const defaults = [
     {
-      setting_key:   'whatsapp_customer_notification_enabled',
-      setting_value: 'false',
-      description:   'Send WhatsApp message to customer on delivery failure (true/false)',
-    },
-    {
       setting_key:   'whatsapp_failure_message_template',
       setting_value: 'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you shortly to reschedule. We apologise for the inconvenience.',
       description:   'WhatsApp message template for delivery failure. Placeholders: {customerName} {orderRef} {reason}',
     },
     {
-      setting_key:   'admin_notification_email',
-      setting_value: 'chienlingtan@gmail.com',
-      description:   'Always send failure notification emails to this address regardless of DB admin accounts',
+      setting_key:   'internal_email_notification_enabled',
+      setting_value: 'true',
+      description:   'Send internal failure email to admin employees (true/false)',
+    },
+    {
+      setting_key:   'customer_email_notification_enabled',
+      setting_value: 'true',
+      description:   'Send failure email to customer (true/false)',
+    },
+    {
+      setting_key:   'admin_email_recipients',
+      setting_value: '[]',
+      description:   'JSON array of admin employee IDs enabled to receive failure emails. Empty = all admins.',
     },
   ];
 

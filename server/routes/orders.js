@@ -262,6 +262,18 @@ async function estimateTravelMinutes(fromAddress, toAddress) {
   }
 }
 
+// POST /api/orders/sync-odoo — manually trigger Odoo sync (A1.4)
+router.post('/sync-odoo', async (req, res) => {
+  try {
+    const { syncOrdersFromOdoo } = require('../services/odooSyncService');
+    const result = await syncOrdersFromOdoo();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('POST /api/orders/sync-odoo error', err);
+    res.status(500).json({ error: 'Sync failed', details: err.message });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const { status, search, date_from, date_to, sort = 'created_desc' } = req.query;
@@ -1001,6 +1013,142 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
     res.status(500).json({ error: 'Failed to delete order', details: err.message });
+  }
+});
+
+// POST /:id/parse-remarks — Parse delivery remarks using Gemini LLM (A1.3)
+router.post('/:id/parse-remarks', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where:   { id: req.params.id },
+      include: { customers: true },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (!order.delivery_remarks) {
+      return res.status(400).json({ error: 'This order has no delivery remarks to parse.' });
+    }
+
+    const { parseDeliveryRemarks } = require('../services/llmParserService');
+
+    const parsed = await parseDeliveryRemarks(
+      order.delivery_remarks,
+      order.delivery_address || '',
+      order.customers?.phone  || ''
+    );
+
+    res.json({ success: true, parsed });
+  } catch (err) {
+    console.error('POST /api/orders/:id/parse-remarks error:', err.message);
+    res.status(500).json({ error: 'Failed to parse remarks', details: err.message });
+  }
+});
+
+// POST /:id/apply-parsed — Admin confirms parsed result and applies to order (FR-01-008)
+router.post('/:id/apply-parsed', async (req, res) => {
+  try {
+    const { delivery_address, phone, contact_name, driver_notes } = req.body;
+
+    const order = await prisma.orders.findUnique({
+      where:   { id: req.params.id },
+      include: { customers: true },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // Snapshot original address if not already saved
+    const originalAddress = order.original_delivery_address || order.delivery_address;
+
+    // Update order:
+    //  - delivery_address → remarks address (active address used for delivery)
+    //  - original_delivery_address → SO address (preserved, never overwritten again)
+    //  - remarks_* → parsed values stored for reference
+    const orderUpdate = {
+      updated_at:                new Date(),
+      original_delivery_address: originalAddress,
+      remarks_delivery_address:  delivery_address  || null,
+      remarks_contact_phone:     phone             || null,
+      remarks_contact_name:      contact_name      || null,
+      remarks_driver_notes:      driver_notes      || null,
+    };
+
+    if (delivery_address) orderUpdate.delivery_address = delivery_address;
+    if (driver_notes)     orderUpdate.delivery_notes   = driver_notes;
+
+    await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  orderUpdate,
+    });
+
+    // NOTE: customers.phone is NOT updated here.
+    // remarks_contact_phone is stored separately on the order for the driver's reference.
+    // WhatsApp notifications always go to customers.phone (the customer who placed the order).
+
+    console.log(`[LLM Parser] Applied parsed remarks to order ${req.params.id}`);
+    res.json({ success: true, message: 'Parsed data applied to order.' });
+  } catch (err) {
+    console.error('POST /api/orders/:id/apply-parsed error:', err.message);
+    res.status(500).json({ error: 'Failed to apply parsed data', details: err.message });
+  }
+});
+
+// POST /:id/approve — Admin approves DO assignment and writes back to Odoo (A1.5)
+router.post('/:id/approve', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where:   { id: req.params.id },
+      include: { employees: true, time_slots: true },
+    });
+
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (!order.time_slot_id) {
+      return res.status(400).json({
+        error: 'Cannot approve — order has no timeslot assigned yet.'
+      });
+    }
+
+    // Mark assignment as approved
+    const updated = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  {
+        assignment_status: 'approved',
+        order_status:      order.order_status === 'Pending' ? 'Scheduled' : order.order_status,
+        updated_at:        new Date(),
+      },
+    });
+
+    // Write assignment details back to Odoo (A1.5)
+    if (order.odoo_order_ref && process.env.ODOO_URL) {
+      try {
+        const { callModel } = require('../services/odooService');
+
+        const odooOrders = await callModel('sale.order', 'search_read',
+          [[['name', '=', order.odoo_order_ref]]],
+          { fields: ['id'], limit: 1 }
+        );
+
+        if (odooOrders?.length) {
+          const scheduledTime = order.time_slots?.date && order.time_slots?.time_window_start
+            ? `${order.time_slots.date} ${order.time_slots.time_window_start}`
+            : null;
+
+          await callModel('sale.order', 'write', [[odooOrders[0].id], {
+            x_delivery_status:   'assigned',
+            x_scheduled_time:    scheduledTime || '',
+            x_assigned_driver:   order.employees?.name || order.employees?.display_name || '',
+          }]);
+
+          console.log(`[A1.5] Wrote assignment back to Odoo for ${order.odoo_order_ref}`);
+        }
+      } catch (odooErr) {
+        console.warn('[A1.5] Odoo write-back failed (non-fatal):', odooErr.message);
+      }
+    }
+
+    res.json({ success: true, order: updated });
+  } catch (err) {
+    console.error('POST /api/orders/:id/approve error', err);
+    res.status(500).json({ error: 'Failed to approve assignment', details: err.message });
   }
 });
 

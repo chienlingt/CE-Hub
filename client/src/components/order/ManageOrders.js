@@ -1,31 +1,29 @@
 // client/src/components/order/ManageOrders.js
-import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Search,
-  Filter,
-  Plus,
-  Edit2,
-  Eye,
-  X,
+  AlertCircle,
   Calendar,
-  User,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Edit2,
   MapPin,
   Package,
-  Clock,
-  AlertCircle,
-  ChevronDown,
-  ChevronUp
+  Plus,
+  Search,
+  User,
+  X
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  isOrderEditable,
-  getOrderStatusBadge,
-  formatDateTime,
-  formatDate,
-  getTotalProductCount,
-  getServiceTypeLabel,
-  searchOrders,
   filterOrdersByDateRange,
-  getRemainingEditTime
+  formatDate,
+  formatDateTime,
+  getOrderStatusBadge,
+  getRemainingEditTime,
+  getServiceTypeLabel,
+  getTotalProductCount,
+  isOrderEditable,
+  searchOrders
 } from '../../utils/orderHelpers';
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
@@ -571,21 +569,57 @@ function ExpandedOrderDetails({ order, editDeadlineHours }) {
             <div className="space-y-1 text-sm">
               <p><span className="font-medium">Name:</span> {order.customers?.full_name || 'N/A'}</p>
               <p><span className="font-medium">Email:</span> {order.customers?.email || 'N/A'}</p>
-              <p><span className="font-medium">Phone:</span> {order.customers?.phone || 'N/A'}</p>
-              <p><span className="font-medium">Address:</span> {order.customers?.address || 'N/A'}</p>
+              {/* Customer phone */}
+              <div className="flex items-center gap-2">
+                <span className="font-medium">Phone:</span>
+                <span>{order.customers?.phone || 'N/A'}</span>
+              </div>
+              {/* Contact person phone from remarks */}
+              {order.remarks_contact_phone && (
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Contact at Site:</span>
+                  <span className="text-blue-700 font-medium">{order.remarks_contact_phone}</span>
+                  {order.remarks_contact_name && (
+                    <span className="text-blue-600">({order.remarks_contact_name})</span>
+                  )}
+                  <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">from remarks</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Building Info */}
+          {/* Delivery Address */}
           <div>
             <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
               <MapPin className="w-4 h-4" />
-              Building Information
+              Delivery Address
             </h4>
-            <div className="space-y-1 text-sm">
-              <p><span className="font-medium">Building:</span> {order.buildings?.building_name || 'N/A'}</p>
-              <p><span className="font-medium">Type:</span> {order.buildings?.housing_type || 'N/A'}</p>
-              <p><span className="font-medium">Postal Code:</span> {order.buildings?.postal_code || 'N/A'}</p>
+            <div className="space-y-2 text-sm">
+              {/* Active address — remarks takes priority */}
+              {order.remarks_delivery_address ? (
+                <>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
+                    <p className="text-xs font-semibold text-blue-600 mb-0.5">From Remarks (active)</p>
+                    <p className="text-blue-800 font-medium">{order.remarks_delivery_address}</p>
+                  </div>
+                  {order.original_delivery_address && (
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                      <p className="text-xs font-semibold text-gray-400 mb-0.5">Original SO Address</p>
+                      <p className="text-gray-400 line-through text-xs">{order.original_delivery_address}</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                  <p className="text-xs font-semibold text-gray-500 mb-0.5">Delivery Address</p>
+                  <p className="text-gray-700">{order.delivery_address || order.customers?.address || 'N/A'}</p>
+                </div>
+              )}
+              {order.delivery_notes && (
+                <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                  <span className="font-medium">Driver notes:</span> {order.delivery_notes}
+                </p>
+              )}
             </div>
           </div>
 

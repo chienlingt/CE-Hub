@@ -51,6 +51,7 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       delivery_city,
       delivery_state_name,
       delivery_zip,
+      delivery_remarks,
       order_lines = [],
     } = req.body;
 
@@ -134,6 +135,9 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
         delivery_city:     delivery_city       || null,
         delivery_postcode: delivery_zip        || null,
         delivery_state:    delivery_state_name || null,
+        delivery_remarks:          delivery_remarks    || null,
+        original_delivery_address: delivery_address    || null,
+        assignment_status:         'unassigned',
         created_at:        new Date(),
         updated_at:        new Date(),
         ...(productLines.length > 0 && { order_products: { create: productLines } }),

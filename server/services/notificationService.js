@@ -116,32 +116,51 @@ async function sendDeliveryFailureNotifications(orderId) {
 
   const emailData = { orderRef, customerName, address, failureReason, failureDesc, driverName };
 
-  // ── 2. Notify admins (in-app + email) ─────────────────────────────────────
+  // ── 2. Load email settings ────────────────────────────────────────────────
+  const [internalSetting, recipientsSetting] = await Promise.all([
+    prisma.system_settings.findUnique({ where: { setting_key: 'internal_email_notification_enabled' } }),
+    prisma.system_settings.findUnique({ where: { setting_key: 'admin_email_recipients' } }),
+  ]);
+
+  const internalEmailEnabled = internalSetting?.setting_value !== 'false';
+
+  // Parse enabled admin IDs — empty array means ALL admins are enabled
+  let enabledAdminIds = [];
+  try {
+    enabledAdminIds = JSON.parse(recipientsSetting?.setting_value || '[]');
+  } catch { enabledAdminIds = []; }
+  const allEnabled = enabledAdminIds.length === 0;
+
+  // ── 3. Notify admins (in-app + email) ─────────────────────────────────────
   const admins = await getAdminEmployees();
-  const notifiedEmails = new Set();
 
   for (const admin of admins) {
     const message = `Delivery failed — Order ${orderRef} | Customer: ${customerName} | Reason: ${failureReason}`;
+
+    // In-app notification always fires for all admins
     await createInAppNotification(admin.id, message, 'error', orderId);
 
-    // Email temporarily disabled for DB admins — only admin_notification_email receives email
-    if (admin.email) notifiedEmails.add(admin.email.toLowerCase());
-  }
-
-  // Always notify the designated admin email from system settings (FR-06-001)
-  const adminEmailSetting = await prisma.system_settings.findUnique({
-    where: { setting_key: 'admin_notification_email' },
-  });
-  const extraEmail = adminEmailSetting?.setting_value?.trim();
-  if (extraEmail && !notifiedEmails.has(extraEmail.toLowerCase())) {
-    await sendDeliveryFailureInternalEmail(extraEmail, 'Admin', emailData);
+    // Email only if enabled globally AND this admin is in the recipient list
+    const isRecipient = allEnabled || enabledAdminIds.includes(admin.id);
+    if (internalEmailEnabled && isRecipient && admin.email) {
+      await sendDeliveryFailureInternalEmail(
+        admin.email,
+        admin.name || admin.display_name || 'Admin',
+        emailData
+      );
+    }
   }
 
   // ── 3. Post to Odoo chatter (FR-06-003) ───────────────────────────────────
   await postToOdooChatter(order.odoo_order_ref, emailData);
 
   // ── 5. Send customer email (FR-06-004) ────────────────────────────────────
-  if (customerEmail) {
+  const customerEmailSetting = await prisma.system_settings.findUnique({
+    where: { setting_key: 'customer_email_notification_enabled' },
+  });
+  const customerEmailEnabled = customerEmailSetting?.setting_value !== 'false';
+
+  if (customerEmailEnabled && customerEmail) {
     await sendDeliveryFailureCustomerEmail(customerEmail, customerName, {
       orderRef,
       failureReason,
