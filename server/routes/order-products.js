@@ -54,6 +54,93 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// PATCH /api/order-products/:id/picking-status — A2
+// stage: 'picking' (storekeeper) or 'loading' (driver)
+router.patch('/:id/picking-status', async (req, res) => {
+  try {
+    const { stage, employee_id, serial_number } = req.body;
+
+    if (!['picking', 'loading', 'unloading'].includes(stage)) {
+      return res.status(400).json({ error: 'stage must be picking, loading, or unloading' });
+    }
+
+    const item = await prisma.order_products.findUnique({
+      where:   { id: parseInt(req.params.id) },
+      include: { products: { select: { product_name: true } } },
+    });
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    // Stage prerequisite checks
+    if (stage === 'loading' && item.picking_status === 'pending') {
+      return res.status(400).json({ error: 'Item must be picked before it can be loaded.', code: 'NOT_PICKED' });
+    }
+    if (stage === 'unloading' && item.picking_status !== 'loaded') {
+      return res.status(400).json({ error: 'Item must be loaded before it can be unloaded.', code: 'NOT_LOADED' });
+    }
+
+    // ── Serial number validation ─────────────────────────────────────────────
+    if (serial_number) {
+      const productName = item.products?.product_name || 'item';
+
+      if (stage === 'picking' && item.assigned_serial) {
+        // Picking: validate against Odoo-assigned serial
+        if (item.assigned_serial.trim() !== serial_number.trim()) {
+          return res.status(400).json({
+            error:    `Serial mismatch for "${productName}". Expected: ${item.assigned_serial} — Scanned: ${serial_number}`,
+            code:     'SERIAL_MISMATCH',
+            expected: item.assigned_serial,
+            scanned:  serial_number,
+          });
+        }
+      }
+
+      if (stage === 'loading' && item.picked_serial) {
+        // Loading: serial must match what was picked
+        if (item.picked_serial.trim() !== serial_number.trim()) {
+          return res.status(400).json({
+            error:    `Serial mismatch for "${productName}". Picked serial: ${item.picked_serial} — Scanned: ${serial_number}. Load the correct item.`,
+            code:     'LOADING_SERIAL_MISMATCH',
+            expected: item.picked_serial,
+            scanned:  serial_number,
+          });
+        }
+      }
+
+      if (stage === 'unloading' && item.loaded_serial) {
+        // Unloading: serial must match what was loaded
+        if (item.loaded_serial.trim() !== serial_number.trim()) {
+          return res.status(400).json({
+            error:    `Serial mismatch for "${productName}". Loaded serial: ${item.loaded_serial} — Scanned: ${serial_number}. Unload the correct item.`,
+            code:     'UNLOADING_SERIAL_MISMATCH',
+            expected: item.loaded_serial,
+            scanned:  serial_number,
+          });
+        }
+      }
+
+      // If no serial recorded at previous stage → accept any serial scanned
+    }
+
+    const now  = new Date();
+    const data =
+      stage === 'picking'   ? { picking_status: 'picked',   picked_by:   employee_id || null, picked_at:   now, picked_serial:   serial_number || null } :
+      stage === 'loading'   ? { picking_status: 'loaded',   loaded_by:   employee_id || null, loaded_at:   now, loaded_serial:   serial_number || null } :
+      /* unloading */         { picking_status: 'unloaded', unloaded_by: employee_id || null, unloaded_at: now, unloaded_serial: serial_number || null };
+
+    const updated = await prisma.order_products.update({
+      where:   { id: parseInt(req.params.id) },
+      data,
+      include: { products: { select: { id: true, product_name: true } } },
+    });
+
+    res.json({ success: true, orderProduct: updated });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
+    console.error('PATCH /api/order-products/:id/picking-status error', err);
+    res.status(500).json({ error: 'Failed to update picking status', details: err.message });
+  }
+});
+
 // PATCH /api/order-products/:id/delivery-status
 // Update individual item delivery status: pending | delivered | failed
 router.patch('/:id/delivery-status', async (req, res) => {

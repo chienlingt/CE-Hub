@@ -37,6 +37,7 @@ async function apiFetch(path, options = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
   const headers = options.headers || {};
   headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  headers['ngrok-skip-browser-warning'] = '1'; // skip ngrok interstitial for API calls
   const token = localStorage.getItem('token') || sessionStorage.getItem('token');
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const opts = { credentials: 'same-origin', ...options, headers };

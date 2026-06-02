@@ -1016,6 +1016,201 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET /:id/loading-status — A2: per-item picking/loading status for an order
+router.get('/:id/loading-status', async (req, res) => {
+  try {
+    const items = await prisma.order_products.findMany({
+      where:   { order_id: req.params.id },
+      include: { products: { select: { id: true, product_name: true } } },
+      orderBy: { id: 'asc' },
+    });
+
+    if (!items.length) {
+      return res.json({
+        items: [], all_picked: true, all_loaded: true,
+        ready_to_dispatch: true, picked_count: 0, loaded_count: 0, total: 0,
+      });
+    }
+
+    // Resolve employee names for picked_by / loaded_by
+    const empIds = [...new Set([
+      ...items.filter(i => i.picked_by).map(i => i.picked_by),
+      ...items.filter(i => i.loaded_by).map(i => i.loaded_by),
+    ])];
+
+    const empMap = {};
+    if (empIds.length > 0) {
+      const emps = await prisma.employees.findMany({
+        where:  { id: { in: empIds } },
+        select: { id: true, name: true, display_name: true },
+      });
+      emps.forEach(e => { empMap[e.id] = e.name || e.display_name || 'Unknown'; });
+    }
+
+    const enriched = items.map(item => ({
+      ...item,
+      picked_by_name: item.picked_by ? (empMap[item.picked_by] || 'Unknown') : null,
+      loaded_by_name: item.loaded_by ? (empMap[item.loaded_by] || 'Unknown') : null,
+    }));
+
+    const all_picked   = enriched.every(i => ['picked','loaded','unloaded'].includes(i.picking_status));
+    const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.picking_status));
+    const all_unloaded = enriched.every(i => i.picking_status === 'unloaded');
+
+    // Resolve unloaded_by names
+    const unloadedEmpIds = [...new Set(enriched.filter(i => i.unloaded_by).map(i => i.unloaded_by))];
+    const unloadedEmpMap = {};
+    if (unloadedEmpIds.length > 0) {
+      const emps = await prisma.employees.findMany({
+        where:  { id: { in: unloadedEmpIds } },
+        select: { id: true, name: true, display_name: true },
+      });
+      emps.forEach(e => { unloadedEmpMap[e.id] = e.name || e.display_name || 'Unknown'; });
+    }
+    const enrichedWithUnload = enriched.map(item => ({
+      ...item,
+      unloaded_by_name: item.unloaded_by ? (unloadedEmpMap[item.unloaded_by] || 'Unknown') : null,
+    }));
+
+    // Also fetch order-level status + delivery info
+    const order = await prisma.orders.findUnique({
+      where:  { id: req.params.id },
+      select: { order_status: true, delivered_by: true, delivery_end_date_time: true },
+    });
+
+    let deliveredByName = null;
+    if (order?.delivered_by) {
+      const emp = await prisma.employees.findUnique({
+        where:  { id: order.delivered_by },
+        select: { name: true, display_name: true },
+      });
+      deliveredByName = emp?.name || emp?.display_name || null;
+    }
+
+    res.json({
+      items:             enrichedWithUnload,
+      all_picked,
+      all_loaded,
+      all_unloaded,
+      ready_to_dispatch: all_loaded,
+      ready_to_deliver:  all_unloaded,
+      picked_count:   enrichedWithUnload.filter(i => ['picked','loaded','unloaded'].includes(i.picking_status)).length,
+      loaded_count:   enrichedWithUnload.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
+      unloaded_count: enrichedWithUnload.filter(i => i.picking_status === 'unloaded').length,
+      total:          enrichedWithUnload.length,
+      order_status:   order?.order_status || null,
+      delivered_by_name: deliveredByName,
+      delivered_at:   order?.delivery_end_date_time || null,
+    });
+  } catch (err) {
+    console.error('GET /api/orders/:id/loading-status error', err);
+    res.status(500).json({ error: 'Failed to fetch loading status', details: err.message });
+  }
+});
+
+// POST /:id/dispatch — A2: dispatch gate — blocks if items not all loaded
+router.post('/:id/dispatch', async (req, res) => {
+  try {
+    const { employee_id } = req.body;
+
+    const items = await prisma.order_products.findMany({
+      where:   { order_id: req.params.id },
+      include: { products: { select: { product_name: true } } },
+    });
+
+    const unloaded = items.filter(i => i.picking_status !== 'loaded');
+    if (unloaded.length > 0) {
+      return res.status(400).json({
+        error:    'Cannot dispatch — not all items have been loaded onto the truck.',
+        code:     'ITEMS_NOT_LOADED',
+        unloaded: unloaded.map(i => ({
+          id:           i.id,
+          product_name: i.products?.product_name,
+          status:       i.picking_status,
+        })),
+      });
+    }
+
+    // All loaded — update order status to Delivering
+    const now = new Date();
+    const updated = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  {
+        order_status:            'Delivering',
+        dispatched_by:            employee_id || null,
+        delivery_start_date_time: now,
+        actual_start_date_time:   now,
+        updated_at:               now,
+      },
+    });
+
+    // Resolve dispatcher name
+    let dispatchedByName = null;
+    if (employee_id) {
+      const emp = await prisma.employees.findUnique({
+        where: { id: employee_id },
+        select: { name: true, display_name: true },
+      });
+      dispatchedByName = emp?.name || emp?.display_name || null;
+    }
+
+    console.log(`[A2] Order ${req.params.id} dispatched by ${dispatchedByName || 'unknown'}`);
+    res.json({ success: true, order: updated, dispatched_by_name: dispatchedByName, dispatched_at: now });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
+    console.error('POST /api/orders/:id/dispatch error', err);
+    res.status(500).json({ error: 'Failed to dispatch order', details: err.message });
+  }
+});
+
+// POST /:id/deliver — driver marks order as Delivered after unloading all items (A2)
+router.post('/:id/deliver', async (req, res) => {
+  try {
+    const { employee_id } = req.body;
+
+    const items = await prisma.order_products.findMany({
+      where:   { order_id: req.params.id },
+      include: { products: { select: { product_name: true } } },
+    });
+
+    const notUnloaded = items.filter(i => i.picking_status !== 'unloaded');
+    if (notUnloaded.length > 0) {
+      return res.status(400).json({
+        error:        'Cannot mark as delivered — not all items have been unloaded.',
+        code:         'ITEMS_NOT_UNLOADED',
+        not_unloaded: notUnloaded.map(i => ({ id: i.id, product_name: i.products?.product_name, status: i.picking_status })),
+      });
+    }
+
+    const now = new Date();
+    const updated = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  {
+        order_status:             'Delivered',
+        delivered_by:             employee_id || null,
+        delivery_end_date_time:   now,
+        actual_arrival_date_time: now,
+        updated_at:               now,
+      },
+    });
+
+    let deliveredByName = null;
+    if (employee_id) {
+      const emp = await prisma.employees.findUnique({
+        where: { id: employee_id }, select: { name: true, display_name: true },
+      });
+      deliveredByName = emp?.name || emp?.display_name || null;
+    }
+
+    console.log(`[A2] Order ${req.params.id} delivered by ${deliveredByName || 'unknown'}`);
+    res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
+    console.error('POST /api/orders/:id/deliver error', err);
+    res.status(500).json({ error: 'Failed to mark as delivered', details: err.message });
+  }
+});
+
 // POST /:id/parse-remarks — Parse delivery remarks using Gemini LLM (A1.3)
 router.post('/:id/parse-remarks', async (req, res) => {
   try {

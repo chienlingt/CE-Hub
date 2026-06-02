@@ -16,7 +16,7 @@ function ForgotPassword() {
       setMessage('');
       setLoading(true);
 
-      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
       const response = await fetch(`${API_BASE}/api/auth/reset-request`, {
         method: 'POST',
         headers: {

@@ -11,7 +11,7 @@ export function useAuth() {
 // Helper to normalize strings
 const normalize = (s) => (s || '').toString().toLowerCase().trim();
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
 
 /**
  * Fetch permissions for a given role from PostgreSQL API.
@@ -26,7 +26,9 @@ async function fetchPermissionsForRole(roleRaw) {
   
   try {
     // Fetch all roles from API
-    const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles`);
+    const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles`, {
+      headers: { 'ngrok-skip-browser-warning': '1' },
+    });
     if (!response.ok) {
       return [];
     }
@@ -93,7 +95,10 @@ export function AuthProvider({ children }) {
 
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '1',
+        },
         body: JSON.stringify({ email, password })
       });
 

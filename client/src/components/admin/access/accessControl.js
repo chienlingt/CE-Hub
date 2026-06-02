@@ -15,7 +15,7 @@ import {
   Edit3,
 } from 'lucide-react';
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
 
 /**
  * RoleAccessControl - Fetches from PostgreSQL via API
@@ -32,7 +32,9 @@ const mockNavItems = [
   { key: 'delivery', name: 'Delivery Schedule', description: 'Delivery schedule management', icon: '🚚' },
   { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
   { key: 'warehouse', name: 'Warehouse Schedule', description: 'Warehouse loading and operations', icon: '🏭' },
-  { key: 'customer', name: 'Place Order', description: 'Demo to place order', icon: '' },
+  { key: 'customer',  name: 'Place Order',   description: 'Demo to place order', icon: '' },
+  { key: 'scanning',  name: 'Scan Station',  description: 'Item picking and loading scan confirmation', icon: '📷' },
+  { key: 'settings',  name: 'Settings',      description: 'Notification and system settings', icon: '⚙️' },
 ];
 
 export default function RoleAccessControl() {

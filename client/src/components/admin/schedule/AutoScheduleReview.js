@@ -19,7 +19,7 @@ import {
   User
 } from "lucide-react";
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
 
 export default function AutoScheduleReview() {
   const navigate = useNavigate();

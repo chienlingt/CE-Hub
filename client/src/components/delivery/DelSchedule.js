@@ -14,6 +14,7 @@ import {
   User
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import LoadingChecklist from '../common/LoadingChecklist';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   getAllBuildings,
@@ -99,6 +100,9 @@ export default function DeliverySchedule() {
       }
     }
     loadData();
+    // Auto-refresh orders every 30s so status changes (dispatch, deliver) appear without manual reload
+    const refreshTimer = setInterval(() => getAllOrders().then(d => setOrders(Array.isArray(d) ? d : (d?.data ?? []))), 30000);
+    return () => clearInterval(refreshTimer);
   }, []);
 
   // Field accessor helpers
@@ -583,29 +587,8 @@ export default function DeliverySchedule() {
                                 </div>
                               </div>
 
-                              {/* Actions */}
+                              {/* Actions — only navigation button remains */}
                               <div className="lg:col-span-2 flex items-center space-x-2">
-                                {/* Status Update Buttons */}
-                                {['Scheduled', 'Loaded'].includes(status) && (
-                                  <button
-                                    onClick={() => updateOrderStatus(field.orderId(order), 'Delivering')}
-                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                    title="Start Delivery"
-                                  >
-                                    <Play className="h-4 w-4" />
-                                  </button>
-                                )}
-                                {['Delivering', 'Loaded', 'In Progress'].includes(status) && (
-                                  <button
-                                    onClick={() => updateOrderStatus(field.orderId(order), completionStatus)}
-                                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                    title={completionLabel}
-                                  >
-                                    <Check className="h-4 w-4" />
-                                  </button>
-                                )}
-
-                                {/* Navigation Button */}
                                 <a
                                   href={generateSingleLocationMap(field.buildingAddress(building, customer))}
                                   target="_blank"
@@ -617,6 +600,42 @@ export default function DeliverySchedule() {
                                 </a>
                               </div>
                             </div>
+
+                            {/* A2 — Loading Checklist (pre-dispatch) + Unloading Checklist (at customer) */}
+                            {field.orderId(order) && !['Completed'].includes(status) && (
+                              <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+                                {/* Loading stage — shown before dispatch */}
+                                {!['Delivering', 'Delivered'].includes(status) && (
+                                  <>
+                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                                      Loading Checklist
+                                    </p>
+                                    <LoadingChecklist
+                                      orderId={field.orderId(order)}
+                                      orderRef={order.odoo_order_ref || field.orderId(order)?.slice(0, 8).toUpperCase()}
+                                      customerName={customer ? field.customerName(customer) : ''}
+                                      stage="driver"
+                                      employeeId={currentUser?.employeeId || null}
+                                    />
+                                  </>
+                                )}
+                                {/* Unloading stage — shown when en route OR after delivered */}
+                                {['Delivering', 'Delivered'].includes(status) && (
+                                  <>
+                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                                      Unloading Checklist
+                                    </p>
+                                    <LoadingChecklist
+                                      orderId={field.orderId(order)}
+                                      orderRef={order.odoo_order_ref || field.orderId(order)?.slice(0, 8).toUpperCase()}
+                                      customerName={customer ? field.customerName(customer) : ''}
+                                      stage="unloading"
+                                      employeeId={currentUser?.employeeId || null}
+                                    />
+                                  </>
+                                )}
+                              </div>
+                            )}
 
                             {/* Additional Info for Completed Orders */}
                             {field.orderStatus(order) === 'Completed' && field.orderRating(order) && (

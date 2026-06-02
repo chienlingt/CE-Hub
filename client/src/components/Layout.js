@@ -10,6 +10,7 @@ import FailureNotificationLog from './admin/FailureNotificationLog';
 import NotificationSettings from './admin/NotificationSettings';
 import DoAssignment from './admin/DoAssignment';
 import SyncMonitor from './admin/SyncMonitor';
+import ScanStation from './common/ScanStation';
 import {
   // admin pages
   default as Overview,
@@ -35,6 +36,11 @@ import InstallationSchedule from './installer/InsSchedule';
 import WarehouseLoadingSchedule from './warehouse/truckSchedule';
 import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
+
+// Scan Station wrappers — stage locked by tab selection
+const ScanStationPicking   = () => <ScanStation forcedStage="warehouse" />;
+const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
+const ScanStationUnloading = () => <ScanStation forcedStage="unloading" />;
 
 /**
  * Layout
@@ -145,6 +151,16 @@ const Layout = () => {
       topNavItems: [
         { id: 'place-order',   label: 'Place Order',    path: '',               component: PlaceOrder },
         { id: 'manage-orders', label: 'Manage Orders',  path: 'manage-orders',  component: ManageOrders },
+      ],
+    },
+    scanning: {
+      title: 'Scan Station',
+      icon: Users,
+      route: '/scanning',
+      topNavItems: [
+        { id: 'picking',   label: 'Picking',   path: '',          component: ScanStationPicking   },
+        { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading   },
+        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading },
       ],
     },
     settings: {

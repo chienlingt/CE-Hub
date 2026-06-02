@@ -156,6 +156,17 @@ model order_products {
   custom_installation_time_min Int?
   custom_installation_time_max Int?
   item_delivery_status         String?  @default("pending") @db.VarChar(20)
+  picking_status               String?  @default("pending") @db.VarChar(20)
+  assigned_serial              String?
+  picked_by                    String?  @db.Uuid
+  picked_at                    DateTime?
+  picked_serial                String?
+  loaded_by                    String?  @db.Uuid
+  loaded_at                    DateTime?
+  loaded_serial                String?
+  unloaded_by                  String?  @db.Uuid
+  unloaded_at                  DateTime?
+  unloaded_serial              String?
   orders                       orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products                     products @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -201,6 +212,8 @@ model orders {
   is_complaint_submitted    Boolean?                @default(false)
   delivery_remarks          String?
   assignment_status         String?                 @default("unassigned") @db.VarChar(30)
+  dispatched_by             String?                 @db.Uuid
+  delivered_by              String?                 @db.Uuid
   original_delivery_address String?
   remarks_delivery_address  String?
   remarks_contact_phone     String?

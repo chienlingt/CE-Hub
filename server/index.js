@@ -12,8 +12,8 @@ const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 // CORS configuration - allows frontend to access API
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
-  credentials: true
+  origin:      process.env.CLIENT_URL || 'https://lab2.tbm2u.net',
+  credentials: true,
 }));
 app.use(express.json());
 

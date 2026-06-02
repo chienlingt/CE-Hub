@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check } from 'lucide-react';
+import LoadingChecklist from '../common/LoadingChecklist';
 import {
   getAllOrders,
   getAllOrderProducts,
@@ -14,6 +15,8 @@ import {
   updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
+
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
 
 const WarehouseLoadingSchedule = () => {
   const { currentUser } = useAuth();
@@ -696,29 +699,18 @@ const WarehouseLoadingSchedule = () => {
                                   Seq: {order.LoadingSequence} | {customer?.name} - {customer?.address}
                                 </div>
                               </div>
-                                                              <div className="flex items-center justify-between mb-3">
-                                                              <div className="text-sm text-gray-600">
-                                                                {status === 'Loaded' ? 'Loaded by warehouse' : status}
+                                                              <div className="flex items-center mb-3">
+                                                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                                                  status === 'Loaded' ? 'bg-green-100 text-green-700' :
+                                                                  status === 'Loading' ? 'bg-blue-100 text-blue-700' :
+                                                                  'bg-gray-100 text-gray-500'
+                                                                }`}>
+                                                                  {status === 'Loaded' ? '✓ Loaded' : status}
+                                                                </span>
+                                                                <span className="ml-2 text-xs text-gray-400">
+                                                                  Use Scan Station to confirm items
+                                                                </span>
                                                               </div>
-                                                              {status === 'Scheduled' && (
-                                                                <button
-                                                                  onClick={() => updateOrderStatus(order.OrderID, 'Loading')}
-                                                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                                                  title="Start Loading"
-                                                                >
-                                                                  <Play className="h-4 w-4" />
-                                                                </button>
-                                                              )}
-                                                              {status === 'Loading' && (
-                                                                <button
-                                                                  onClick={() => updateOrderStatus(order.OrderID, 'Loaded')}
-                                                                  className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                                                  title="Mark as Loaded"
-                                                                >
-                                                                  <Check className="h-4 w-4" />
-                                                                </button>
-                                                              )}
-                                                            </div>
                               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                                 {orderItems.map((item, index) => {
                                   const product = productsObj[item.ProductID];
@@ -741,6 +733,21 @@ const WarehouseLoadingSchedule = () => {
                                   );
                                 })}
                               </div>
+                              {/* A2.1 — Picking Checklist */}
+                              {(order.id || order.OrderID) && (
+                                <div className="mt-3 pt-3 border-t border-gray-100">
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                                    Picking Checklist
+                                  </p>
+                                  <LoadingChecklist
+                                    orderId={order.id || order.OrderID}
+                                    orderRef={order.odoo_order_ref || (order.id || order.OrderID)?.toString().slice(0, 8).toUpperCase()}
+                                    customerName={customer?.full_name || customer?.name || ''}
+                                    stage="warehouse"
+                                    employeeId={currentUser?.employeeId || null}
+                                  />
+                                </div>
+                              )}
                             </div>
                           );
                         })}

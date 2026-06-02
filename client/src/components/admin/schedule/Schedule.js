@@ -61,7 +61,7 @@ export default function Schedule() {
     let mounted = true;
     async function loadAll() {
       try {
-        const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+        const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
         const [
           slots, tks, tms, ords, ordProds, emps, empAssigns, custs, blds, prods, installationSchedulesResponse
         ] = await Promise.all([
@@ -460,7 +460,7 @@ export default function Schedule() {
     setOrderEditLoading(true);
     setOrderEditError('');
     try {
-      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
 
       // --- Validation Start ---
       if (!editingOrder.NewTimeSlotID) throw new Error('Please select a timeslot.');
@@ -584,7 +584,7 @@ export default function Schedule() {
     setOrderEditLoading(true);
     setOrderEditError('');
     try {
-      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+      const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
