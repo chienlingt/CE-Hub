@@ -1155,6 +1155,17 @@ router.post('/:id/dispatch', async (req, res) => {
     }
 
     console.log(`[A2] Order ${req.params.id} dispatched by ${dispatchedByName || 'unknown'}`);
+
+    if (updated.odoo_order_ref && process.env.ODOO_URL) {
+      try {
+        const { writeOdooDeliveryStatus } = require('../services/odooService');
+        await writeOdooDeliveryStatus(updated.odoo_order_ref, 'Delivering');
+        console.log(`[A1] in_transit written to Odoo for ${updated.odoo_order_ref}`);
+      } catch (odooErr) {
+        console.warn('[Dispatch] Odoo write-back failed (non-fatal):', odooErr.message);
+      }
+    }
+
     res.json({ success: true, order: updated, dispatched_by_name: dispatchedByName, dispatched_at: now });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
@@ -1203,6 +1214,17 @@ router.post('/:id/deliver', async (req, res) => {
     }
 
     console.log(`[A2] Order ${req.params.id} delivered by ${deliveredByName || 'unknown'}`);
+
+    if (updated.odoo_order_ref && process.env.ODOO_URL) {
+      try {
+        const { writeOdooDeliveryStatus } = require('../services/odooService');
+        await writeOdooDeliveryStatus(updated.odoo_order_ref, 'Delivered');
+        console.log(`[A1] delivered written to Odoo for ${updated.odoo_order_ref}`);
+      } catch (odooErr) {
+        console.warn('[Deliver] Odoo write-back failed (non-fatal):', odooErr.message);
+      }
+    }
+
     res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
@@ -1386,6 +1408,16 @@ router.patch('/:id/issue', async (req, res) => {
       sendDeliveryFailureNotifications(req.params.id).catch(err =>
         console.error('[A6] sendDeliveryFailureNotifications error:', err.message)
       );
+
+      if (order.odoo_order_ref && process.env.ODOO_URL) {
+        try {
+          const { writeOdooDeliveryStatus } = require('../services/odooService');
+          await writeOdooDeliveryStatus(order.odoo_order_ref, 'Failed');
+          console.log(`[A6] failed status written to Odoo for ${order.odoo_order_ref}`);
+        } catch (odooErr) {
+          console.warn('[Issue] Odoo write-back failed (non-fatal):', odooErr.message);
+        }
+      }
     }
 
     res.json({ success: true, order });

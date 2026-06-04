@@ -19,13 +19,22 @@ $gitRoot = $PSScriptRoot
 $clientPath = Join-Path $gitRoot "client"
 $serverPath = Join-Path $gitRoot "server"
 
+# Pre-flight: .env must exist before any step runs
+$envFile = Join-Path $serverPath ".env"
+if (-not (Test-Path $envFile)) {
+    Write-Host "ERROR: .env file not found at $envFile" -ForegroundColor Red
+    Write-Host "Copy .env.example to .env and fill in all values before deploying." -ForegroundColor Yellow
+    pause
+    exit 1
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Deploying from Git to IIS" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Step 0: Stop IIS App Pool (to unlock files)
-Write-Host "[0/4] Stopping IIS app pool..." -ForegroundColor Green
+Write-Host "[1/3] Stopping IIS app pool..." -ForegroundColor Green
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 if (Get-Command Stop-WebAppPool -ErrorAction SilentlyContinue) {
     Stop-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
@@ -37,7 +46,7 @@ if (Get-Command Stop-WebAppPool -ErrorAction SilentlyContinue) {
 Write-Host ""
 
 # Step 1: Build Client
-Write-Host "[1/4] Building React client..." -ForegroundColor Green
+Write-Host "[2/3] Building and installing..." -ForegroundColor Green
 Push-Location $clientPath
 npm install
 if ($LASTEXITCODE -ne 0) {
@@ -58,9 +67,9 @@ Write-Host "Client built successfully!" -ForegroundColor Gray
 Write-Host ""
 
 # Step 2: Install Server Dependencies
-Write-Host "[2/4] Installing server dependencies..." -ForegroundColor Green
+Write-Host "  Installing server dependencies..." -ForegroundColor Green
 Push-Location $serverPath
-npm install --production
+npm install
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Server npm install failed" -ForegroundColor Red
     Pop-Location
@@ -74,12 +83,19 @@ if ($LASTEXITCODE -ne 0) {
     pause
     exit 1
 }
+npx prisma migrate deploy
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Prisma migration failed" -ForegroundColor Red
+    Pop-Location
+    pause
+    exit 1
+}
 Pop-Location
 Write-Host "Server dependencies installed!" -ForegroundColor Gray
 Write-Host ""
 
 # Step 3: Start IIS App Pool
-Write-Host "[3/4] Starting IIS application pool..." -ForegroundColor Green
+Write-Host "[3/3] Starting IIS application pool..." -ForegroundColor Green
 if (Get-Command Start-WebAppPool -ErrorAction SilentlyContinue) {
     Start-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
     Write-Host "App pool '$AppPoolName' started" -ForegroundColor Gray
@@ -88,16 +104,6 @@ if (Get-Command Start-WebAppPool -ErrorAction SilentlyContinue) {
 }
 Write-Host ""
 
-# Step 4: Verify .env exists
-Write-Host "[4/4] Verifying configuration..." -ForegroundColor Green
-$envFile = Join-Path $serverPath ".env"
-if (Test-Path $envFile) {
-    Write-Host ".env file found" -ForegroundColor Gray
-} else {
-    Write-Host "WARNING: .env file not found at $envFile" -ForegroundColor Red
-    Write-Host "Copy .env.production to .env and configure it!" -ForegroundColor Yellow
-}
-Write-Host ""
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Deployment Complete!" -ForegroundColor Cyan

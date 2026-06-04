@@ -98,4 +98,35 @@ async function getConfirmedOrders(sinceDate = null) {
   });
 }
 
-module.exports = { authenticate, callModel, pushDeliveryStatus, getConfirmedOrders };
+/**
+ * Look up a sale.order by its name (e.g. "S00042") and write x_delivery_status.
+ * Accepts local CE Hub status strings — maps them to Odoo values.
+ * Safe to call from any route — returns null instead of throwing if Odoo is unreachable.
+ *
+ * @param {string} odooOrderRef - sale.order name, e.g. 'S00042'
+ * @param {'Delivering'|'Delivered'|'Completed'|'Failed'} localStatus
+ */
+async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+
+  const statusMap = {
+    Delivering: 'in_transit',
+    Delivered:  'delivered',
+    Completed:  'completed',
+    Failed:     'failed',
+  };
+
+  const odooStatus = statusMap[localStatus];
+  if (!odooStatus) return null;
+
+  const odooOrders = await callModel('sale.order', 'search_read',
+    [[['name', '=', odooOrderRef]]],
+    { fields: ['id'], limit: 1 }
+  );
+
+  if (!odooOrders?.length) return null;
+
+  return callModel('sale.order', 'write', [[odooOrders[0].id], { x_delivery_status: odooStatus }]);
+}
+
+module.exports = { authenticate, callModel, pushDeliveryStatus, writeOdooDeliveryStatus, getConfirmedOrders };
