@@ -135,13 +135,21 @@ model customers {
 }
 
 model lorry_trips {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   delivery_team_id  String?
   warehouse_team_id String?
-  truck_id          String?   @db.Uuid
-  created_at        DateTime  @default(now())
+  truck_id          String?     @db.Uuid
+  created_at        DateTime    @default(now())
   updated_at        DateTime?
-  trucks            trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // A.3.0: 1:1 mirror of time_slot trip state
+  time_slot_id      String?     @unique @db.Uuid
+  status            String?     @default("planned") @db.VarChar(20)
+  started_at        DateTime?   @db.Timestamp(6)
+  ended_at          DateTime?   @db.Timestamp(6)
+  started_by        String?     @db.Uuid
+  ended_by          String?     @db.Uuid
+  trucks            trucks?     @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  time_slot         time_slots? @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lorry_trip_time_slot")
 }
 
 model order_products {
@@ -192,6 +200,8 @@ model orders {
   truck_loading_sequence    Int?
   notified_pending          Boolean?                @default(false)
   notified_scheduled        Boolean?                @default(false)
+  notified_d1_at            DateTime?               @db.Timestamp(6)
+  notified_on_the_way_at    DateTime?               @db.Timestamp(6)
   special_equipment_needed  String?
   delivery_notes            String?
   delivery_evidence         String[]
@@ -257,21 +267,28 @@ model reports {
 }
 
 model time_slots {
-  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                      String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   date                    String?
   time_window_start       String?
   time_window_end         String?
   available_flag          Boolean?
   created_at              DateTime?
-  delivery_team_id        String?   @db.Uuid
-  warehouse_team_id       String?   @db.Uuid
-  truck_id                String?   @db.Uuid
-  loading_start_date_time DateTime? @db.Timestamp(6)
-  loading_end_date_time   DateTime? @db.Timestamp(6)
+  delivery_team_id        String?      @db.Uuid
+  warehouse_team_id       String?      @db.Uuid
+  truck_id                String?      @db.Uuid
+  loading_start_date_time DateTime?    @db.Timestamp(6)
+  loading_end_date_time   DateTime?    @db.Timestamp(6)
+  // A.3.0: authoritative slot/trip tracking fields
+  slot_status             String?      @default("scheduled") @db.VarChar(30)
+  departed_at             DateTime?    @db.Timestamp(6)
+  ended_at                DateTime?    @db.Timestamp(6)
+  started_by              String?      @db.Uuid
+  ended_by                String?      @db.Uuid
   orders                  orders[]
-  delivery_team           teams?    @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
-  truck                   trucks?   @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
-  warehouse_team          teams?    @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
+  lorry_trip              lorry_trips?
+  delivery_team           teams?       @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
+  truck                   trucks?      @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
+  warehouse_team          teams?       @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
 }
 
 model truck_zones {
@@ -404,4 +421,25 @@ model notifications {
   is_read    Boolean   @default(false)
   order_id   String?   @db.Uuid
   created_at DateTime? @default(now()) @db.Timestamp(6)
+}
+
+// A.3.0: Integration outbox for reliable async delivery to external systems.
+// Idempotency key convention:
+//   slot:{timeSlotId}:depart         — slot departure event
+//   slot:{timeSlotId}:end_trip       — trip completion event
+//   order:{orderId}:odoo:{status}    — per-order Odoo status sync
+//   order:{orderId}:on_the_way       — customer on-the-way notification
+//   order:{orderId}:d1_reminder      — D-1 customer reminder
+model integration_outbox {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event_type      String    @db.VarChar(60)
+  target          String    @db.VarChar(30)
+  payload         Json
+  idempotency_key String    @unique @db.VarChar(200)
+  status          String    @default("pending") @db.VarChar(20)
+  attempts        Int       @default(0)
+  next_retry_at   DateTime? @db.Timestamp(6)
+  last_error      String?
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  processed_at    DateTime? @db.Timestamp(6)
 }

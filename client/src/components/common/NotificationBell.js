@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, X, AlertTriangle, Info, CheckCircle, ExternalLink } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
 const POLL_INTERVAL = 5000; // 5 seconds — near real-time
 
 const TYPE_CONFIG = {

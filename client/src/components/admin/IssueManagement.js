@@ -6,7 +6,7 @@ import {
   CalendarPlus, X, ChevronRight
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
 
 const REASON_STYLES = {
   'Customer Unreachable': 'bg-orange-100 text-orange-800',

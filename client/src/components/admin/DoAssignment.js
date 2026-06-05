@@ -5,7 +5,7 @@ import {
   FileText, ExternalLink
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
 
 const STATUS_STYLES = {
   unassigned:      { label: 'Unassigned',      color: 'bg-gray-100 text-gray-700'    },
