@@ -15,7 +15,7 @@ import {
   Edit3,
 } from 'lucide-react';
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
 
 /**
  * RoleAccessControl - Fetches from PostgreSQL via API
