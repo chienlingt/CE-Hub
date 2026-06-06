@@ -141,6 +141,63 @@ router.patch('/:id/picking-status', async (req, res) => {
   }
 });
 
+// PATCH /api/order-products/:id/cancel-scan — UC-05 (admin only)
+// Cancels/resets a scanned stage, reverting the item to its previous status.
+//   stage: 'picking'   → resets to 'pending'  (clears picked_serial/by/at)
+//   stage: 'loading'   → resets to 'picked'   (clears loaded_serial/by/at)
+//   stage: 'unloading' → resets to 'loaded'   (clears unloaded_serial/by/at)
+router.patch('/:id/cancel-scan', async (req, res) => {
+  try {
+    const { stage } = req.body;
+
+    if (!['picking', 'loading', 'unloading'].includes(stage)) {
+      return res.status(400).json({ error: 'stage must be picking, loading, or unloading' });
+    }
+
+    const item = await prisma.order_products.findUnique({
+      where:   { id: parseInt(req.params.id) },
+      include: { products: { select: { product_name: true } } },
+    });
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    // Validate the item is actually in the stage being cancelled
+    const stageStatusMap = {
+      picking:   'picked',
+      loading:   'loaded',
+      unloading: 'unloaded',
+    };
+    const revertStatusMap = {
+      picking:   'pending',
+      loading:   'picked',
+      unloading: 'loaded',
+    };
+
+    if (item.picking_status !== stageStatusMap[stage]) {
+      return res.status(400).json({
+        error: `Cannot cancel ${stage} — item is currently '${item.picking_status}', not '${stageStatusMap[stage]}'`,
+      });
+    }
+
+    const clearData =
+      stage === 'picking'   ? { picking_status: 'pending', picked_serial:   null, picked_by:   null, picked_at:   null } :
+      stage === 'loading'   ? { picking_status: 'picked',  loaded_serial:   null, loaded_by:   null, loaded_at:   null } :
+      /* unloading */         { picking_status: 'loaded',  unloaded_serial: null, unloaded_by: null, unloaded_at: null };
+
+    const updated = await prisma.order_products.update({
+      where:   { id: parseInt(req.params.id) },
+      data:    clearData,
+      include: { products: { select: { id: true, product_name: true } } },
+    });
+
+    console.log(`[UC-05] ${stage} scan cancelled for item ${req.params.id} — reverted to '${revertStatusMap[stage]}'`);
+    res.json({ success: true, orderProduct: updated, reverted_to: revertStatusMap[stage] });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
+    console.error('PATCH /api/order-products/:id/cancel-scan error', err);
+    res.status(500).json({ error: 'Failed to cancel scan', details: err.message });
+  }
+});
+
 // PATCH /api/order-products/:id/delivery-status
 // Update individual item delivery status: pending | delivered | failed
 router.patch('/:id/delivery-status', async (req, res) => {

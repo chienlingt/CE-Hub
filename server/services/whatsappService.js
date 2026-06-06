@@ -54,15 +54,28 @@ async function isWhatsAppEnabled() {
   }
 }
 
-async function getMessageTemplate() {
+async function getTemplate(key, fallback) {
   try {
-    const setting = await prisma.system_settings.findUnique({
-      where: { setting_key: 'whatsapp_failure_message_template' },
-    });
-    return setting?.setting_value
-      || 'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you shortly to reschedule. We apologise for the inconvenience.';
+    const setting = await prisma.system_settings.findUnique({ where: { setting_key: key } });
+    return setting?.setting_value || fallback;
   } catch {
-    return 'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you shortly to reschedule.';
+    return fallback;
+  }
+}
+
+async function getMessageTemplate() {
+  return getTemplate(
+    'whatsapp_failure_message_template',
+    'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you shortly to reschedule. We apologise for the inconvenience.'
+  );
+}
+
+async function isSettingEnabled(key) {
+  try {
+    const setting = await prisma.system_settings.findUnique({ where: { setting_key: key } });
+    return setting?.setting_value !== 'false';
+  } catch {
+    return true;
   }
 }
 
@@ -72,23 +85,68 @@ async function getMessageTemplate() {
  * Automatic send — respects the admin toggle setting.
  * Used by notificationService when a delivery failure is reported.
  */
+function normalizePhone(phone) {
+  if (!phone) return null;
+  return phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
+}
+
 async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, reason }) {
   if (!toPhone) return;
-
-  const normalizedPhone = toPhone.startsWith('+')
-    ? toPhone
-    : `+60${toPhone.replace(/^0/, '')}`;
-
   const template = await getMessageTemplate();
   const body = template
-    .replace('{customerName}', customerName)
-    .replace('{orderRef}',     orderRef)
-    .replace('{reason}',       reason);
-
+    .replace('{customerName}', customerName || '')
+    .replace('{orderRef}',     orderRef     || '')
+    .replace('{reason}',       reason       || '');
   try {
-    return await sendViaGreenApi(normalizedPhone, body);
+    return await sendViaGreenApi(normalizePhone(toPhone), body);
   } catch (err) {
-    console.warn('[WhatsApp] Auto-send failed (non-fatal):', err.message);
+    console.warn('[WhatsApp] Customer send failed (non-fatal):', err.message);
+  }
+}
+
+async function sendDeliveryFailureSalespersonWhatsApp(toPhone, { customerName, customerPhone, orderRef, reason, driverName, address, recipientName }) {
+  if (!toPhone) return;
+  const enabled = await isSettingEnabled('whatsapp_salesperson_notification_enabled');
+  if (!enabled) return;
+
+  const template = await getTemplate(
+    'whatsapp_failure_salesperson_template',
+    'Hi {recipientName}, delivery failed for order {orderRef}. Customer: {customerName} ({customerPhone}), Address: {address}. Driver: {driverName}. Reason: {reason}.'
+  );
+  const body = template
+    .replace('{recipientName}',  recipientName  || 'Salesperson')
+    .replace('{customerName}',   customerName   || '')
+    .replace('{customerPhone}',  customerPhone  || 'N/A')
+    .replace('{orderRef}',       orderRef       || '')
+    .replace('{reason}',         reason         || '')
+    .replace('{driverName}',     driverName     || '')
+    .replace('{address}',        address        || '');
+  try {
+    return await sendViaGreenApi(normalizePhone(toPhone), body);
+  } catch (err) {
+    console.warn('[WhatsApp] Salesperson send failed (non-fatal):', err.message);
+  }
+}
+
+async function sendDeliveryFailureAdminWhatsApp(toPhone, { adminName, customerName, orderRef, reason, driverName, address, salespersonName, salespersonPhone }) {
+  if (!toPhone) return;
+  const template = await getTemplate(
+    'whatsapp_failure_admin_template',
+    'Hi {adminName}, delivery failed — Order {orderRef}. Customer: {customerName}, Address: {address}. Driver: {driverName}. Reason: {reason}. Salesperson: {salespersonName} ({salespersonPhone}).'
+  );
+  const body = template
+    .replace('{adminName}',       adminName       || 'Admin')
+    .replace('{customerName}',    customerName    || '')
+    .replace('{orderRef}',        orderRef        || '')
+    .replace('{reason}',          reason          || '')
+    .replace('{driverName}',      driverName      || '')
+    .replace('{address}',         address         || '')
+    .replace('{salespersonName}',  salespersonName  || 'N/A')
+    .replace('{salespersonPhone}', salespersonPhone || 'N/A');
+  try {
+    return await sendViaGreenApi(normalizePhone(toPhone), body);
+  } catch (err) {
+    console.warn('[WhatsApp] Admin send failed (non-fatal):', err.message);
   }
 }
 
@@ -121,22 +179,32 @@ async function seedWhatsAppSettings() {
     {
       setting_key:   'whatsapp_failure_message_template',
       setting_value: 'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you shortly to reschedule. We apologise for the inconvenience.',
-      description:   'WhatsApp message template for delivery failure. Placeholders: {customerName} {orderRef} {reason}',
+      description:   'WhatsApp template for customer on delivery failure. Placeholders: {customerName} {orderRef} {reason}',
     },
     {
-      setting_key:   'internal_email_notification_enabled',
+      setting_key:   'whatsapp_salesperson_notification_enabled',
       setting_value: 'true',
-      description:   'Send internal failure email to admin employees (true/false)',
+      description:   'Send failure WhatsApp to salesperson in charge (true/false)',
     },
     {
-      setting_key:   'customer_email_notification_enabled',
+      setting_key:   'whatsapp_failure_salesperson_template',
+      setting_value: 'Hi {recipientName}, delivery failed for order {orderRef}. Customer: {customerName} ({customerPhone}), Address: {address}. Driver: {driverName}. Reason: {reason}.',
+      description:   'WhatsApp template for salesperson on delivery failure. Placeholders: {recipientName} {customerName} {customerPhone} {orderRef} {reason} {driverName} {address}',
+    },
+    {
+      setting_key:   'whatsapp_admin_notification_enabled',
       setting_value: 'true',
-      description:   'Send failure email to customer (true/false)',
+      description:   'Send failure WhatsApp to admin employees (true/false)',
     },
     {
-      setting_key:   'admin_email_recipients',
+      setting_key:   'whatsapp_failure_admin_template',
+      setting_value: 'Hi {adminName}, delivery failed — Order {orderRef}. Customer: {customerName}, Address: {address}. Driver: {driverName}. Reason: {reason}. Salesperson: {salespersonName} ({salespersonPhone}).',
+      description:   'WhatsApp template for admin on delivery failure. Placeholders: {adminName} {customerName} {orderRef} {reason} {driverName} {address} {salespersonName} {salespersonPhone}',
+    },
+    {
+      setting_key:   'whatsapp_admin_recipients',
       setting_value: '[]',
-      description:   'JSON array of admin employee IDs enabled to receive failure emails. Empty = all admins.',
+      description:   'JSON array of admin employee IDs enabled for WhatsApp. Empty = all admins.',
     },
   ];
 
@@ -151,7 +219,10 @@ async function seedWhatsAppSettings() {
 
 module.exports = {
   sendDeliveryFailureWhatsApp,
+  sendDeliveryFailureSalespersonWhatsApp,
+  sendDeliveryFailureAdminWhatsApp,
   sendWhatsAppDirect,
   sendWhatsAppMessage,
   seedWhatsAppSettings,
+  isSettingEnabled,
 };

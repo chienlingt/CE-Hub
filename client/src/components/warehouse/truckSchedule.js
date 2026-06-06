@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check, Navigation } from 'lucide-react';
 import LoadingChecklist from '../common/LoadingChecklist';
+import { ScannerSection } from '../common/ScanStation';
 import {
   getAllOrders,
   getAllOrderProducts,
@@ -808,7 +809,7 @@ const WarehouseLoadingSchedule = () => {
                                   );
                                 })}
                               </div>
-                              {/* A2.1 — Picking Checklist */}
+                              {/* A2.1 — Picking Checklist (read-only status) */}
                               {(order.id || order.OrderID) && (
                                 <div className="mt-3 pt-3 border-t border-gray-100">
                                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
@@ -820,6 +821,27 @@ const WarehouseLoadingSchedule = () => {
                                     customerName={customer?.full_name || customer?.name || ''}
                                     stage="warehouse"
                                     employeeId={currentUser?.employeeId || null}
+                                  />
+                                </div>
+                              )}
+                              {/* A2.1 — Scan Station (picking) */}
+                              {(order.id || order.OrderID) && (
+                                <div className="mt-3 pt-3 border-t border-gray-100">
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                                    Scan Items
+                                  </p>
+                                  <ScannerSection
+                                    order={order}
+                                    stage="warehouse"
+                                    employeeId={currentUser?.employeeId || null}
+                                    items={orderProducts.filter(op =>
+                                      (op.order_id || op.OrderID) === (order.id || order.OrderID)
+                                    )}
+                                    onItemUpdated={(updatedItem) => {
+                                      setOrderProducts(prev =>
+                                        prev.map(op => op.id === updatedItem.id ? { ...op, ...updatedItem } : op)
+                                      );
+                                    }}
                                   />
                                 </div>
                               )}

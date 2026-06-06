@@ -301,9 +301,6 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
                       `${total - (data?.unloaded_count || 0)} item${total - (data?.unloaded_count || 0) > 1 ? 's' : ''} not yet unloaded`
                     )}
                   </button>
-                  {!allUnloaded && (
-                    <p className="text-xs text-center text-gray-400 mt-1.5">Scan all items in Unloading tab first</p>
-                  )}
                 </>
               )}
             </div>

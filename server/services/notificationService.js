@@ -1,6 +1,10 @@
 const prisma = require('../prismaClient');
-const { sendDeliveryFailureInternalEmail } = require('./emailService');
-const { sendDeliveryFailureWhatsApp } = require('./whatsappService');
+const {
+  sendDeliveryFailureWhatsApp,
+  sendDeliveryFailureSalespersonWhatsApp,
+  sendDeliveryFailureAdminWhatsApp,
+  isSettingEnabled,
+} = require('./whatsappService');
 
 // ─── In-app notification helpers ────────────────────────────────────────────
 
@@ -29,6 +33,19 @@ async function getAdminEmployees() {
     },
     include: { role: true },
   });
+}
+
+async function getWhatsAppAdminRecipients(allAdmins) {
+  try {
+    const setting = await prisma.system_settings.findUnique({
+      where: { setting_key: 'whatsapp_admin_recipients' },
+    });
+    const ids = JSON.parse(setting?.setting_value || '[]');
+    if (ids.length === 0) return allAdmins; // empty = all admins
+    return allAdmins.filter(a => ids.includes(a.id));
+  } catch {
+    return allAdmins;
+  }
 }
 
 // ─── Odoo chatter post (FR-06-003) ──────────────────────────────────────────
@@ -78,10 +95,10 @@ async function postToOdooChatter(odooOrderRef, { customerName, address, failureR
  * Fire all A6 notifications when a delivery fails.
  * Call this after the order issue fields are written to DB.
  *
- * FR-06-001  In-app notification to all admins
+ * FR-06-001  In-app + WhatsApp to admins, WhatsApp to salesperson
  * FR-06-002  In-app notification appears in CE Hub notification panel
  * FR-06-003  Post failure details to Odoo chatter
- * FR-06-004  WhatsApp to salesperson in charge + WhatsApp to customer
+ * FR-06-004  WhatsApp to customer
  *
  * @param {string} orderId - local UUID of the order
  */
@@ -101,21 +118,21 @@ async function sendDeliveryFailureNotifications(orderId) {
     return;
   }
 
-  const customerName    = order.customers?.full_name || 'Unknown Customer';
-  const customerPhone   = order.customers?.phone     || null;
-  const address         = order.delivery_address || order.buildings?.building_name || 'Unknown Address';
-  const orderRef        = order.odoo_order_ref   || order.id;
-  const failureReason   = order.issue_reason     || 'Unspecified';
-  const failureDesc     = order.issue_desc       || '';
-  const driverName      = order.employees?.name  || order.employees?.display_name || 'Unknown';
+  const customerName     = order.customers?.full_name || 'Unknown Customer';
+  const customerPhone    = order.customers?.phone     || null;
+  const address          = order.delivery_address || order.buildings?.building_name || 'Unknown Address';
+  const orderRef         = order.odoo_order_ref   || order.id;
+  const failureReason    = order.issue_reason     || 'Unspecified';
+  const failureDesc      = order.issue_desc       || '';
+  const driverName       = order.employees?.name  || order.employees?.display_name || 'Unknown';
   const salespersonName  = order.salesperson_name  || null;
   const salespersonPhone = order.salesperson_phone || null;
 
   const notifData = { orderRef, customerName, address, failureReason, failureDesc, driverName };
 
   // ── 2. Notify admins in-app (FR-06-001, FR-06-002) ───────────────────────
-  const admins = await getAdminEmployees();
-  for (const admin of admins) {
+  const allAdmins = await getAdminEmployees();
+  for (const admin of allAdmins) {
     const message = `Delivery failed — Order ${orderRef} | Customer: ${customerName} | Reason: ${failureReason}`;
     await createInAppNotification(admin.id, message, 'error', orderId);
   }
@@ -123,20 +140,47 @@ async function sendDeliveryFailureNotifications(orderId) {
   // ── 3. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
   await postToOdooChatter(order.odoo_order_ref, notifData);
 
-  // ── 4. WhatsApp to salesperson in charge (FR-06-001) ─────────────────────
+  // ── 4. WhatsApp to admins (FR-06-001) ────────────────────────────────────
+  const adminWhatsAppEnabled = await isSettingEnabled('whatsapp_admin_notification_enabled');
+  if (adminWhatsAppEnabled) {
+    const recipientAdmins = await getWhatsAppAdminRecipients(allAdmins);
+    for (const admin of recipientAdmins) {
+      const phone = admin.contact_number || null;
+      if (!phone) {
+        console.warn(`[NotificationService] Admin ${admin.name} has no contact_number — skipping WhatsApp`);
+        continue;
+      }
+      await sendDeliveryFailureAdminWhatsApp(phone, {
+        adminName:        admin.name || admin.display_name || 'Admin',
+        customerName,
+        orderRef,
+        reason:           failureReason,
+        driverName,
+        address,
+        salespersonName:  salespersonName  || 'N/A',
+        salespersonPhone: salespersonPhone || 'N/A',
+      });
+      console.log(`[NotificationService] WhatsApp sent to admin ${admin.name} (${phone})`);
+    }
+  }
+
+  // ── 5. WhatsApp to salesperson in charge (FR-06-001) ─────────────────────
   if (salespersonPhone) {
-    await sendDeliveryFailureWhatsApp(salespersonPhone, {
+    await sendDeliveryFailureSalespersonWhatsApp(salespersonPhone, {
+      recipientName: salespersonName  || 'Salesperson',
       customerName,
+      customerPhone,
       orderRef,
-      reason:      failureReason,
-      recipientName: salespersonName || 'Salesperson',
+      reason:        failureReason,
+      driverName,
+      address,
     });
     console.log(`[NotificationService] WhatsApp sent to salesperson ${salespersonName} (${salespersonPhone})`);
   } else {
     console.warn(`[NotificationService] No salesperson phone for order ${orderRef} — skipping salesperson WhatsApp`);
   }
 
-  // ── 5. WhatsApp to customer (FR-06-004) ──────────────────────────────────
+  // ── 6. WhatsApp to customer (FR-06-004) ──────────────────────────────────
   if (customerPhone) {
     await sendDeliveryFailureWhatsApp(customerPhone, {
       customerName,
