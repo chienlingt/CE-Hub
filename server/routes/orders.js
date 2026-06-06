@@ -7,6 +7,8 @@ const { scheduleOrders, updateTimeslotResources } = require('../services/schedul
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
 const { sendDeliveryFailureNotifications } = require('../services/notificationService');
+const { markOrderDelivering, markOrderDelivered } = require('../services/deliveryLifecycleService');
+const { enqueue } = require('../services/integrationOutboxService');
 
 const TRAVEL_FALLBACK_MINUTES = 17;
 
@@ -1131,18 +1133,9 @@ router.post('/:id/dispatch', async (req, res) => {
       });
     }
 
-    // All loaded — update order status to Delivering
-    const now = new Date();
-    const updated = await prisma.orders.update({
-      where: { id: req.params.id },
-      data:  {
-        order_status:            'Delivering',
-        dispatched_by:            employee_id || null,
-        delivery_start_date_time: now,
-        actual_start_date_time:   now,
-        updated_at:               now,
-      },
-    });
+    // All loaded — update order status to Delivering via lifecycle service
+    const now    = new Date();
+    const updated = await markOrderDelivering(req.params.id, { employeeId: employee_id, now });
 
     // Resolve dispatcher name
     let dispatchedByName = null;
@@ -1156,14 +1149,14 @@ router.post('/:id/dispatch', async (req, res) => {
 
     console.log(`[A2] Order ${req.params.id} dispatched by ${dispatchedByName || 'unknown'}`);
 
-    if (updated.odoo_order_ref && process.env.ODOO_URL) {
-      try {
-        const { writeOdooDeliveryStatus } = require('../services/odooService');
-        await writeOdooDeliveryStatus(updated.odoo_order_ref, 'Delivering');
-        console.log(`[A1] in_transit written to Odoo for ${updated.odoo_order_ref}`);
-      } catch (odooErr) {
-        console.warn('[Dispatch] Odoo write-back failed (non-fatal):', odooErr.message);
-      }
+    // Enqueue Odoo write-back via outbox — never inline (A.3.2)
+    if (updated.odoo_order_ref) {
+      enqueue({
+        eventType:      'SLOT_STATUS_CHANGED',
+        target:         'odoo',
+        payload:        { orderId: updated.id, odooRef: updated.odoo_order_ref, status: 'Delivering' },
+        idempotencyKey: `order:${updated.id}:odoo:Delivering`,
+      }).catch(e => console.error('[Dispatch] outbox enqueue failed:', e.message));
     }
 
     res.json({ success: true, order: updated, dispatched_by_name: dispatchedByName, dispatched_at: now });
@@ -1193,17 +1186,8 @@ router.post('/:id/deliver', async (req, res) => {
       });
     }
 
-    const now = new Date();
-    const updated = await prisma.orders.update({
-      where: { id: req.params.id },
-      data:  {
-        order_status:             'Delivered',
-        delivered_by:             employee_id || null,
-        delivery_end_date_time:   now,
-        actual_arrival_date_time: now,
-        updated_at:               now,
-      },
-    });
+    const now     = new Date();
+    const updated = await markOrderDelivered(req.params.id, { employeeId: employee_id, now });
 
     let deliveredByName = null;
     if (employee_id) {
@@ -1215,14 +1199,14 @@ router.post('/:id/deliver', async (req, res) => {
 
     console.log(`[A2] Order ${req.params.id} delivered by ${deliveredByName || 'unknown'}`);
 
-    if (updated.odoo_order_ref && process.env.ODOO_URL) {
-      try {
-        const { writeOdooDeliveryStatus } = require('../services/odooService');
-        await writeOdooDeliveryStatus(updated.odoo_order_ref, 'Delivered');
-        console.log(`[A1] delivered written to Odoo for ${updated.odoo_order_ref}`);
-      } catch (odooErr) {
-        console.warn('[Deliver] Odoo write-back failed (non-fatal):', odooErr.message);
-      }
+    // Enqueue Odoo write-back via outbox — never inline (A.3.2)
+    if (updated.odoo_order_ref) {
+      enqueue({
+        eventType:      'SLOT_STATUS_CHANGED',
+        target:         'odoo',
+        payload:        { orderId: updated.id, odooRef: updated.odoo_order_ref, status: 'Delivered' },
+        idempotencyKey: `order:${updated.id}:odoo:Delivered`,
+      }).catch(e => console.error('[Deliver] outbox enqueue failed:', e.message));
     }
 
     res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });

@@ -44,6 +44,9 @@ export default function DeliverySchedule() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
+  const [endingTrip, setEndingTrip] = useState(null); // timeSlotId being ended
+
+  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
 
 
   // Load all data
@@ -298,6 +301,55 @@ export default function DeliverySchedule() {
     });
   };
 
+  // A.3.6a: slot status helpers
+  const getSlotStatusStyle = (slotStatus) => {
+    switch (slotStatus) {
+      case 'out_for_delivery': return 'bg-orange-100 text-orange-800 border border-orange-200';
+      case 'completed':        return 'bg-green-100 text-green-800 border border-green-200';
+      default:                 return 'bg-blue-100 text-blue-800 border border-blue-200';
+    }
+  };
+
+  const getSlotStatusLabel = (slotStatus) => {
+    switch (slotStatus) {
+      case 'out_for_delivery': return 'Out for Delivery';
+      case 'completed':        return 'Completed';
+      default:                 return 'Scheduled';
+    }
+  };
+
+  // A.3.6a: End Trip — calls POST /api/time-slots/:id/end-trip
+  const endTrip = async (timeSlotId, slotOrders) => {
+    const nonTerminal = slotOrders.filter(o => !['Delivered','Completed','Cancelled','Failed'].includes(field.orderStatus(o)));
+    if (nonTerminal.length > 0) {
+      alert(`Cannot end trip — ${nonTerminal.length} order(s) are still in progress.`);
+      return;
+    }
+    if (!window.confirm('Confirm truck has returned and all orders are done?')) return;
+    setEndingTrip(timeSlotId);
+    try {
+      const employeeId = getEmployeeId();
+      const res = await fetch(`${API_BASE_URL}/api/time-slots/${timeSlotId}/end-trip`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ employee_id: employeeId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const { time_slot } = await res.json();
+      setTimeSlots(prev => prev.map(ts =>
+        ts.id === timeSlotId ? { ...ts, slot_status: time_slot.slot_status, ended_at: time_slot.ended_at } : ts
+      ));
+    } catch (err) {
+      console.error('[DelSchedule] End trip failed:', err.message);
+      alert(`Failed to end trip: ${err.message}`);
+    } finally {
+      setEndingTrip(null);
+    }
+  };
+
   const updateOrderStatus = async (orderId, newStatus) => {
     try {
       const result = await updateOrderStatusApi(orderId, newStatus);
@@ -398,14 +450,22 @@ export default function DeliverySchedule() {
               const deliveryTeam = timeSlot ? teams.find(t => field.teamId(t) === field.timeSlotDeliveryTeamId(timeSlot)) : null;
               const warehouseTeam = timeSlot ? teams.find(t => field.teamId(t) === field.timeSlotWarehouseTeamId(timeSlot)) : null;
               const truck = timeSlot ? trucks.find(tr => field.truckId(tr) === field.timeSlotTruckId(timeSlot)) : null;
+              const slotStatus = timeSlot?.slot_status || 'scheduled';
+              const isActive = slotStatus === 'out_for_delivery';
 
               return (
-                <div key={timeSlotId} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div key={timeSlotId} className={`bg-white rounded-xl shadow-sm overflow-hidden ${isActive ? 'border-2 border-orange-400' : 'border border-gray-100'}`}>
+                  {/* A.3.6a: Active indicator strip */}
+                  {isActive && (
+                    <div className="bg-orange-500 text-white text-xs font-semibold text-center py-1 tracking-wide">
+                      TRUCK IS OUT FOR DELIVERY
+                    </div>
+                  )}
                   {/* Time Slot Header */}
-                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 border-b border-gray-100">
+                  <div className={`p-6 border-b border-gray-100 ${isActive ? 'bg-gradient-to-r from-orange-50 to-amber-50' : 'bg-gradient-to-r from-blue-50 to-indigo-50'}`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center">
-                        <Clock className="h-6 w-6 text-blue-600 mr-3" />
+                        <Clock className={`h-6 w-6 mr-3 ${isActive ? 'text-orange-600' : 'text-blue-600'}`} />
                         <div>
                           <h3 className="text-lg font-semibold text-gray-900">
                             {timeSlot ? `${field.timeSlotStart(timeSlot)} - ${field.timeSlotEnd(timeSlot)}` : 'Time Slot'}
@@ -413,26 +473,33 @@ export default function DeliverySchedule() {
                           <p className="text-sm text-gray-600">
                             {timeSlot ? field.timeSlotDate(timeSlot) : 'Unassigned Time Slot'}
                           </p>
-                          {/* Team and Truck Info */}
-                          {(deliveryTeam || warehouseTeam || truck) && (
-                            <div className="flex items-center gap-3 mt-2 text-xs">
-                              {deliveryTeam && (
-                                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded">
-                                  Delivery: {field.teamType(deliveryTeam)}
-                                </span>
-                              )}
-                              {warehouseTeam && (
-                                <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
-                                  Warehouse: {field.teamType(warehouseTeam)}
-                                </span>
-                              )}
-                              {truck && (
-                                <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded">
-                                  Truck: {field.truckPlate(truck)}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          {/* Team, Truck and Slot Status */}
+                          <div className="flex items-center gap-2 mt-2 flex-wrap text-xs">
+                            {/* A.3.6a: slot status badge */}
+                            <span className={`px-2 py-1 rounded font-medium ${getSlotStatusStyle(slotStatus)}`}>
+                              {getSlotStatusLabel(slotStatus)}
+                            </span>
+                            {timeSlot?.departed_at && (
+                              <span className="text-gray-500">
+                                Departed: {new Date(timeSlot.departed_at).toLocaleTimeString()}
+                              </span>
+                            )}
+                            {deliveryTeam && (
+                              <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded">
+                                Delivery: {field.teamType(deliveryTeam)}
+                              </span>
+                            )}
+                            {warehouseTeam && (
+                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
+                                Warehouse: {field.teamType(warehouseTeam)}
+                              </span>
+                            )}
+                            {truck && (
+                              <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded">
+                                Truck: {field.truckPlate(truck)}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center space-x-6">
@@ -458,6 +525,17 @@ export default function DeliverySchedule() {
                           Optimal Route
                           <ExternalLink className="h-3 w-3 ml-1" />
                         </a>
+                        {/* A.3.6a: End Trip button — visible when slot is active */}
+                        {isActive && (
+                          <button
+                            onClick={() => endTrip(timeSlotId, timeSlotOrders)}
+                            disabled={endingTrip === timeSlotId}
+                            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                          >
+                            <Check className="h-4 w-4 mr-2" />
+                            {endingTrip === timeSlotId ? 'Ending…' : 'End Trip'}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

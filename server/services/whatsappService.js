@@ -93,6 +93,14 @@ async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, re
 }
 
 /**
+ * Generic send for A.3 outbox worker (on-the-way / D-1 notifications).
+ * Always sends when Green API is configured — no admin toggle check.
+ */
+async function sendWhatsAppMessage(phone, message) {
+  return sendWhatsAppDirect(phone, message);
+}
+
+/**
  * Direct send — bypasses the toggle. Used for manual admin-triggered sends.
  */
 async function sendWhatsAppDirect(phone, message) {
@@ -144,5 +152,6 @@ async function seedWhatsAppSettings() {
 module.exports = {
   sendDeliveryFailureWhatsApp,
   sendWhatsAppDirect,
+  sendWhatsAppMessage,
   seedWhatsAppSettings,
 };

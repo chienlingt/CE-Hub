@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check } from 'lucide-react';
+import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check, Navigation } from 'lucide-react';
 import LoadingChecklist from '../common/LoadingChecklist';
 import {
   getAllOrders,
@@ -16,7 +16,7 @@ import {
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
 
 const WarehouseLoadingSchedule = () => {
   const { currentUser } = useAuth();
@@ -36,7 +36,8 @@ const WarehouseLoadingSchedule = () => {
   const [teams, setTeams] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [trucks, setTrucks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]       = useState(true);
+  const [departingSlot, setDepartingSlot] = useState(null); // id of slot being departed
 
   // Load all data
   useEffect(() => {
@@ -202,17 +203,20 @@ const WarehouseLoadingSchedule = () => {
                      slotOrders.some(o => field.orderStatus(o) === 'In Progress') ? 'Loading' : 'Scheduled';
 
       return {
-        LorryTripID: field.timeSlotId(ts),
-        TruckID: field.timeSlotTruckId(ts),
-        DeliveryTeamID: field.timeSlotDeliveryTeamId(ts),
-        WarehouseTeamID: field.timeSlotWarehouseTeamId(ts),
-        Date: field.timeSlotDate(ts),
-        LoadingStartTime: field.timeSlotStart(ts),
-        LoadingEndTime: field.timeSlotEnd(ts),
-        DepartureTime: field.timeSlotEnd(ts),
-        Status: status,
+        LorryTripID:          field.timeSlotId(ts),
+        TruckID:              field.timeSlotTruckId(ts),
+        DeliveryTeamID:       field.timeSlotDeliveryTeamId(ts),
+        WarehouseTeamID:      field.timeSlotWarehouseTeamId(ts),
+        Date:                 field.timeSlotDate(ts),
+        LoadingStartTime:     field.timeSlotStart(ts),
+        LoadingEndTime:       field.timeSlotEnd(ts),
+        DepartureTime:        field.timeSlotEnd(ts),
+        Status:               status,
         LoadingStartDateTime: field.timeSlotLoadingStart(ts),
-        LoadingEndDateTime: field.timeSlotLoadingEnd(ts)
+        LoadingEndDateTime:   field.timeSlotLoadingEnd(ts),
+        // A.3.1a: authoritative slot trip state
+        slot_status:          ts.slot_status || 'scheduled',
+        departed_at:          ts.departed_at || null,
       };
     });
 
@@ -385,6 +389,25 @@ const WarehouseLoadingSchedule = () => {
     });
   };
 
+  // A.3.1a: slot status badge colours
+  const getSlotStatusStyle = (slotStatus) => {
+    switch (slotStatus) {
+      case 'out_for_delivery': return 'bg-orange-100 text-orange-800 border border-orange-200';
+      case 'completed':        return 'bg-green-100 text-green-800 border border-green-200';
+      case 'scheduled':
+      default:                 return 'bg-blue-100 text-blue-800 border border-blue-200';
+    }
+  };
+
+  const getSlotStatusLabel = (slotStatus) => {
+    switch (slotStatus) {
+      case 'out_for_delivery': return 'Out for Delivery';
+      case 'completed':        return 'Completed';
+      case 'scheduled':
+      default:                 return 'Scheduled';
+    }
+  };
+
   const getStatusColor = (status) => {
     switch (status) {
       case 'Delivered':
@@ -439,6 +462,37 @@ const WarehouseLoadingSchedule = () => {
     } catch (error) {
       console.error('Failed to update order status:', error);
       alert('Failed to update order status. Please try again.');
+    }
+  };
+
+  // A.3.1a: Depart slot — calls POST /api/time-slots/:id/depart
+  const departSlot = async (timeSlotId) => {
+    if (!window.confirm('Confirm the truck has departed with all items loaded?')) return;
+    setDepartingSlot(timeSlotId);
+    try {
+      const employeeId = getEmployeeId();
+      const res = await fetch(`${API_BASE_URL}/api/time-slots/${timeSlotId}/depart`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ employee_id: employeeId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const { time_slot } = await res.json();
+      // Update local slot_status so the badge refreshes immediately
+      setTimeSlots(prev => prev.map(ts =>
+        ts.id === timeSlotId ? { ...ts, slot_status: time_slot.slot_status, departed_at: time_slot.departed_at } : ts
+      ));
+      // Refresh orders so statuses update
+      const fresh = await getAllOrders();
+      setOrders(Array.isArray(fresh) ? fresh : (fresh?.data ?? []));
+    } catch (err) {
+      console.error('[TruckSchedule] Depart slot failed:', err.message);
+      alert(`Failed to depart: ${err.message}`);
+    } finally {
+      setDepartingSlot(null);
     }
   };
 
@@ -590,10 +644,19 @@ const WarehouseLoadingSchedule = () => {
                           </div>
                         </div>
                       </div>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium border flex items-center space-x-1 ${getStatusColor(trip.Status)}`}>
-                        {getStatusIcon(trip.Status)}
-                        <span>{trip.Status}</span>
-                      </span>
+                      {/* A.3.1a: slot status badge */}
+                      <div className="flex items-center gap-2">
+                        <span className={`px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1 ${getSlotStatusStyle(trip.slot_status)}`}>
+                          {trip.slot_status === 'out_for_delivery' && <Navigation className="w-3 h-3" />}
+                          {trip.slot_status === 'completed'        && <CheckCircle className="w-3 h-3" />}
+                          {getSlotStatusLabel(trip.slot_status)}
+                        </span>
+                        {trip.departed_at && (
+                          <span className="text-xs text-gray-500">
+                            Departed: {new Date(trip.departed_at).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 mb-4">
                       {!trip.LoadingStartDateTime && (
@@ -612,6 +675,18 @@ const WarehouseLoadingSchedule = () => {
                           title="End Loading"
                         >
                           End Loading
+                        </button>
+                      )}
+                      {/* A.3.1a: Depart button — shown when loading complete and slot not yet departed */}
+                      {trip.LoadingEndDateTime && trip.slot_status === 'scheduled' && (
+                        <button
+                          onClick={() => departSlot(trip.LorryTripID)}
+                          disabled={departingSlot === trip.LorryTripID}
+                          className="px-3 py-1 rounded-md bg-orange-600 text-white text-xs hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1"
+                          title="Mark truck as departed"
+                        >
+                          <Navigation className="w-3 h-3" />
+                          {departingSlot === trip.LorryTripID ? 'Departing…' : 'Depart'}
                         </button>
                       )}
                     </div>
@@ -895,9 +970,15 @@ const WarehouseLoadingSchedule = () => {
               <div className="text-2xl font-bold text-blue-600">{filteredTrips.length}</div>
               <div className="text-sm text-gray-600">Total Trips</div>
             </div>
+            <div className="bg-orange-50 rounded-lg p-4 text-center">
+              <div className="text-2xl font-bold text-orange-600">
+                {filteredTrips.filter(t => t.slot_status === 'out_for_delivery').length}
+              </div>
+              <div className="text-sm text-gray-600">Out for Delivery</div>
+            </div>
             <div className="bg-green-50 rounded-lg p-4 text-center">
               <div className="text-2xl font-bold text-green-600">
-                {filteredTrips.filter(t => t.Status === 'Completed').length}
+                {filteredTrips.filter(t => t.slot_status === 'completed').length}
               </div>
               <div className="text-sm text-gray-600">Completed</div>
             </div>

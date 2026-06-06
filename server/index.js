@@ -94,6 +94,10 @@ app.listen(port, async () => {
   const { seedWhatsAppSettings } = require('./services/whatsappService');
   await seedWhatsAppSettings();
 
+  // Seed notification message templates (idempotent — never overwrites existing)
+  const { seedA3Templates } = require('./seedNotificationTemplates');
+  await seedA3Templates();
+
   // Initialize scheduler cron job
   const { initializeSchedulerCron } = require('./schedulerCron');
   await initializeSchedulerCron();
@@ -107,6 +111,23 @@ app.listen(port, async () => {
       syncOrdersFromOdoo();
     }, { timezone: 'Asia/Kuala_Lumpur' });
     console.log('[OdooSync] Polling cron registered — daily at 5PM MYT.');
+  }
+
+  // A.3.2a: Integration outbox worker — flushes pending outbox rows every minute
+  {
+    const cron = require('node-cron');
+    const { runOutboxWorker } = require('./integrationOutboxCron');
+    cron.schedule('* * * * *', () => { runOutboxWorker(); }, { timezone: 'Asia/Kuala_Lumpur' });
+    console.log('[OutboxWorker] Cron registered — every minute.');
+  }
+
+  // A.3.3: D-1 delivery reminder — nightly at 09:00 MYT (configurable via D1_REMINDER_CRON)
+  {
+    const cron = require('node-cron');
+    const { runD1ReminderCron } = require('./d1ReminderCron');
+    const reminderSchedule = process.env.D1_REMINDER_CRON || '0 7 * * *';
+    cron.schedule(reminderSchedule, () => { runD1ReminderCron(); }, { timezone: 'Asia/Kuala_Lumpur' });
+    console.log(`[D1Reminder] Cron registered — ${reminderSchedule} MYT.`);
   }
 });
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import ScopeMonthSelector from '../../common/ScopeMonthSelector';
+import ActiveTripsPanel from './ActiveTripsPanel';
 import {
   getAllEmployees, getAllOrdersSummary, getAllCases
 } from '../../../services/informationService';
@@ -537,6 +538,9 @@ export default function Overview() {
 
       {/* Dashboard content wrapped in ref to capture for PDF */}
       <div className="space-y-6" ref={containerRef}>
+        {/* A.3.7a: Live active trips panel */}
+        <ActiveTripsPanel />
+
         {/* Key Metrics (all based on selected month) */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <StatCard

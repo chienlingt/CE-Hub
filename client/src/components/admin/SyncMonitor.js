@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import ParseRemarksModal from './ParseRemarksModal';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
 
 function formatDateTime(str) {
   if (!str) return 'N/A';
