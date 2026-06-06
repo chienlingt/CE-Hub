@@ -219,6 +219,8 @@ model orders {
   remarks_contact_phone     String?
   remarks_contact_name      String?
   remarks_driver_notes      String?
+  salesperson_name          String?  @db.VarChar(255)
+  salesperson_phone         String?  @db.VarChar(50)
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
