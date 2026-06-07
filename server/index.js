@@ -133,15 +133,15 @@ app.listen(port, async () => {
   const { initializeSchedulerCron } = require('./schedulerCron');
   await initializeSchedulerCron();
 
-  // A1.4 — Odoo polling cron (fallback for missed webhooks, runs every 15 min)
+  // A1.4 — Odoo polling fallback (daily at 5PM MYT — catches any orders missed by manual push)
   if (process.env.ODOO_URL) {
     const cron = require('node-cron');
     const { syncOrdersFromOdoo } = require('./services/odooSyncService');
-    cron.schedule('*/15 * * * *', () => {
-      console.log('[OdooSync] Running scheduled sync...');
+    cron.schedule('0 17 * * *', () => {
+      console.log('[OdooSync] Running daily 5PM sync check...');
       syncOrdersFromOdoo();
     }, { timezone: 'Asia/Kuala_Lumpur' });
-    console.log('[OdooSync] Polling cron registered — every 15 minutes.');
+    console.log('[OdooSync] Polling cron registered — daily at 5PM MYT.');
   }
 
   // A.3.2a: Integration outbox worker — flushes pending outbox rows every minute

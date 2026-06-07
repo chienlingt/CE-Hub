@@ -1,9 +1,10 @@
 const prisma = require('../prismaClient');
 const {
-  sendDeliveryFailureInternalEmail,
-  sendDeliveryFailureCustomerEmail,
-} = require('./emailService');
-const { sendDeliveryFailureWhatsApp } = require('./whatsappService');
+  sendDeliveryFailureWhatsApp,
+  sendDeliveryFailureSalespersonWhatsApp,
+  sendDeliveryFailureAdminWhatsApp,
+  isSettingEnabled,
+} = require('./whatsappService');
 
 // ─── In-app notification helpers ────────────────────────────────────────────
 
@@ -32,6 +33,19 @@ async function getAdminEmployees() {
     },
     include: { role: true },
   });
+}
+
+async function getWhatsAppAdminRecipients(allAdmins) {
+  try {
+    const setting = await prisma.system_settings.findUnique({
+      where: { setting_key: 'whatsapp_admin_recipients' },
+    });
+    const ids = JSON.parse(setting?.setting_value || '[]');
+    if (ids.length === 0) return allAdmins; // empty = all admins
+    return allAdmins.filter(a => ids.includes(a.id));
+  } catch {
+    return allAdmins;
+  }
 }
 
 // ─── Odoo chatter post (FR-06-003) ──────────────────────────────────────────
@@ -81,10 +95,10 @@ async function postToOdooChatter(odooOrderRef, { customerName, address, failureR
  * Fire all A6 notifications when a delivery fails.
  * Call this after the order issue fields are written to DB.
  *
- * FR-06-001  Internal email + in-app notification to admins & assigned employee
+ * FR-06-001  In-app + WhatsApp to admins, WhatsApp to salesperson
  * FR-06-002  In-app notification appears in CE Hub notification panel
  * FR-06-003  Post failure details to Odoo chatter
- * FR-06-004  Customer-facing failure email
+ * FR-06-004  WhatsApp to customer
  *
  * @param {string} orderId - local UUID of the order
  */
@@ -93,9 +107,9 @@ async function sendDeliveryFailureNotifications(orderId) {
   const order = await prisma.orders.findUnique({
     where: { id: orderId },
     include: {
-      customers:  true,
-      buildings:  true,
-      employees:  { include: { role: true } },
+      customers: true,
+      buildings: true,
+      employees: { include: { role: true } },
     },
   });
 
@@ -104,78 +118,76 @@ async function sendDeliveryFailureNotifications(orderId) {
     return;
   }
 
-  const customerName  = order.customers?.full_name   || 'Unknown Customer';
-  const customerEmail = order.customers?.email        || null;
-  const address       = order.delivery_address
-    || order.buildings?.building_name
-    || 'Unknown Address';
-  const orderRef      = order.odoo_order_ref || order.id;
-  const failureReason = order.issue_reason   || 'Unspecified';
-  const failureDesc   = order.issue_desc     || '';
-  const driverName    = order.employees?.name || order.employees?.display_name || 'Unknown';
+  const customerName     = order.customers?.full_name || 'Unknown Customer';
+  const customerPhone    = order.customers?.phone     || null;
+  const address          = order.delivery_address || order.buildings?.building_name || 'Unknown Address';
+  const orderRef         = order.odoo_order_ref   || order.id;
+  const failureReason    = order.issue_reason     || 'Unspecified';
+  const failureDesc      = order.issue_desc       || '';
+  const driverName       = order.employees?.name  || order.employees?.display_name || 'Unknown';
+  const salespersonName  = order.salesperson_name  || null;
+  const salespersonPhone = order.salesperson_phone || null;
 
-  const emailData = { orderRef, customerName, address, failureReason, failureDesc, driverName };
+  const notifData = { orderRef, customerName, address, failureReason, failureDesc, driverName };
 
-  // ── 2. Load email settings ────────────────────────────────────────────────
-  const [internalSetting, recipientsSetting] = await Promise.all([
-    prisma.system_settings.findUnique({ where: { setting_key: 'internal_email_notification_enabled' } }),
-    prisma.system_settings.findUnique({ where: { setting_key: 'admin_email_recipients' } }),
-  ]);
-
-  const internalEmailEnabled = internalSetting?.setting_value !== 'false';
-
-  // Parse enabled admin IDs — empty array means ALL admins are enabled
-  let enabledAdminIds = [];
-  try {
-    enabledAdminIds = JSON.parse(recipientsSetting?.setting_value || '[]');
-  } catch { enabledAdminIds = []; }
-  const allEnabled = enabledAdminIds.length === 0;
-
-  // ── 3. Notify admins (in-app + email) ─────────────────────────────────────
-  const admins = await getAdminEmployees();
-
-  for (const admin of admins) {
+  // ── 2. Notify admins in-app (FR-06-001, FR-06-002) ───────────────────────
+  const allAdmins = await getAdminEmployees();
+  for (const admin of allAdmins) {
     const message = `Delivery failed — Order ${orderRef} | Customer: ${customerName} | Reason: ${failureReason}`;
-
-    // In-app notification always fires for all admins
     await createInAppNotification(admin.id, message, 'error', orderId);
+  }
 
-    // Email only if enabled globally AND this admin is in the recipient list
-    const isRecipient = allEnabled || enabledAdminIds.includes(admin.id);
-    if (internalEmailEnabled && isRecipient && admin.email) {
-      await sendDeliveryFailureInternalEmail(
-        admin.email,
-        admin.name || admin.display_name || 'Admin',
-        emailData
-      );
+  // ── 3. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
+  await postToOdooChatter(order.odoo_order_ref, notifData);
+
+  // ── 4. WhatsApp to admins (FR-06-001) ────────────────────────────────────
+  const adminWhatsAppEnabled = await isSettingEnabled('whatsapp_admin_notification_enabled');
+  if (adminWhatsAppEnabled) {
+    const recipientAdmins = await getWhatsAppAdminRecipients(allAdmins);
+    for (const admin of recipientAdmins) {
+      const phone = admin.contact_number || null;
+      if (!phone) {
+        console.warn(`[NotificationService] Admin ${admin.name} has no contact_number — skipping WhatsApp`);
+        continue;
+      }
+      await sendDeliveryFailureAdminWhatsApp(phone, {
+        adminName:        admin.name || admin.display_name || 'Admin',
+        customerName,
+        orderRef,
+        reason:           failureReason,
+        driverName,
+        address,
+        salespersonName:  salespersonName  || 'N/A',
+        salespersonPhone: salespersonPhone || 'N/A',
+      });
+      console.log(`[NotificationService] WhatsApp sent to admin ${admin.name} (${phone})`);
     }
   }
 
-  // ── 3. Post to Odoo chatter (FR-06-003) ───────────────────────────────────
-  await postToOdooChatter(order.odoo_order_ref, emailData);
-
-  // ── 5. Send customer email (FR-06-004) ────────────────────────────────────
-  const customerEmailSetting = await prisma.system_settings.findUnique({
-    where: { setting_key: 'customer_email_notification_enabled' },
-  });
-  const customerEmailEnabled = customerEmailSetting?.setting_value !== 'false';
-
-  if (customerEmailEnabled && customerEmail) {
-    await sendDeliveryFailureCustomerEmail(customerEmail, customerName, {
+  // ── 5. WhatsApp to salesperson in charge (FR-06-001) ─────────────────────
+  if (salespersonPhone) {
+    await sendDeliveryFailureSalespersonWhatsApp(salespersonPhone, {
+      recipientName: salespersonName  || 'Salesperson',
+      customerName,
+      customerPhone,
       orderRef,
-      failureReason,
-      nextSteps: 'Our logistics team will contact you shortly to arrange a new delivery appointment. We apologise for the inconvenience.',
+      reason:        failureReason,
+      driverName,
+      address,
     });
+    console.log(`[NotificationService] WhatsApp sent to salesperson ${salespersonName} (${salespersonPhone})`);
+  } else {
+    console.warn(`[NotificationService] No salesperson phone for order ${orderRef} — skipping salesperson WhatsApp`);
   }
 
-  // ── 6. Send customer WhatsApp (FR-06-004, optional) ───────────────────────
-  const customerPhone = order.customers?.phone || null;
+  // ── 6. WhatsApp to customer (FR-06-004) ──────────────────────────────────
   if (customerPhone) {
     await sendDeliveryFailureWhatsApp(customerPhone, {
       customerName,
       orderRef,
       reason: failureReason,
     });
+    console.log(`[NotificationService] WhatsApp sent to customer ${customerName} (${customerPhone})`);
   }
 
   console.log(`[NotificationService] A6 notifications sent for order ${orderRef}`);

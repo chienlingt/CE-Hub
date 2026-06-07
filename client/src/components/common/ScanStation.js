@@ -14,7 +14,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Camera, Package, CheckCircle, Clock, Truck,
   RefreshCw, User, MapPin, Search, AlertTriangle,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, XCircle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import ScannerModal from './ScannerModal';
@@ -70,7 +70,7 @@ function StatusPill({ status }) {
 }
 
 // ── Scanner section for one order ─────────────────────────────────────────────
-function ScannerSection({ order, stage, employeeId, items, onItemUpdated }) {
+export function ScannerSection({ order, stage, employeeId, items, onItemUpdated }) {
   const [serial,      setSerial]      = useState('');
   const [showCamera,  setShowCamera]  = useState(false);
   const [feedback,    setFeedback]    = useState(null); // { msg, ok, item }
@@ -261,8 +261,41 @@ function ScannerSection({ order, stage, employeeId, items, onItemUpdated }) {
   );
 }
 
-// ── Item status list (read-only display) ──────────────────────────────────────
-function ItemStatusList({ items, loading }) {
+// ── Item status list (read-only display + admin cancel) ──────────────────────
+function ItemStatusList({ items, loading, isAdmin = false, onCancelScan }) {
+  const [cancelling, setCancelling] = useState(null); // item id being cancelled
+
+  const stageToCancel = {
+    picked:   'picking',
+    loaded:   'loading',
+    unloaded: 'unloading',
+  };
+
+  const handleCancel = async (item) => {
+    const stage = stageToCancel[item.picking_status];
+    if (!stage) return;
+    if (!window.confirm(`Cancel ${stage} scan for "${item.products?.product_name || 'this item'}"?`)) return;
+
+    setCancelling(item.id);
+    try {
+      const res  = await fetch(`${API_BASE}/api/order-products/${item.id}/cancel-scan`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ stage }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to cancel scan');
+        return;
+      }
+      onCancelScan?.(data.orderProduct);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setCancelling(null);
+    }
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
@@ -283,23 +316,28 @@ function ItemStatusList({ items, loading }) {
           {items.map((item, idx) => {
             const status  = item.picking_status || 'pending';
             const name    = item.products?.product_name || `Item #${item.id}`;
-            const serial  = status === 'loaded' ? item.loaded_serial
-                          : status === 'picked' ? item.picked_serial
+            const serial  = status === 'unloaded' ? item.unloaded_serial
+                          : status === 'loaded'   ? item.loaded_serial
+                          : status === 'picked'   ? item.picked_serial
                           : null;
-            const byName  = status === 'loaded' ? item.loaded_by_name
-                          : status === 'picked' ? item.picked_by_name
+            const byName  = status === 'unloaded' ? item.unloaded_by_name
+                          : status === 'loaded'   ? item.loaded_by_name
+                          : status === 'picked'   ? item.picked_by_name
                           : null;
-            const at      = status === 'loaded' ? item.loaded_at
-                          : status === 'picked' ? item.picked_at
+            const at      = status === 'unloaded' ? item.unloaded_at
+                          : status === 'loaded'   ? item.loaded_at
+                          : status === 'picked'   ? item.picked_at
                           : null;
+            const canCancel = isAdmin && status !== 'pending';
 
             return (
               <div key={item.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
                 {/* Number */}
                 <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold ${
-                  status === 'loaded' ? 'bg-green-100 text-green-700' :
-                  status === 'picked' ? 'bg-blue-100 text-blue-700'   :
-                                        'bg-gray-100 text-gray-400'
+                  status === 'unloaded' ? 'bg-purple-100 text-purple-700' :
+                  status === 'loaded'   ? 'bg-green-100 text-green-700'  :
+                  status === 'picked'   ? 'bg-blue-100 text-blue-700'    :
+                                          'bg-gray-100 text-gray-400'
                 }`}>
                   {idx + 1}
                 </div>
@@ -326,7 +364,9 @@ function ItemStatusList({ items, loading }) {
                     )}
                     {serial && (
                       <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                        status === 'loaded' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'
+                        status === 'unloaded' ? 'bg-purple-50 text-purple-700' :
+                        status === 'loaded'   ? 'bg-green-50 text-green-700'  :
+                                                'bg-blue-50 text-blue-700'
                       }`}>
                         {serial}
                       </span>
@@ -334,8 +374,24 @@ function ItemStatusList({ items, loading }) {
                   </div>
                 </div>
 
-                {/* Status */}
-                <StatusPill status={status} />
+                {/* Status + Cancel button */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <StatusPill status={status} />
+                  {canCancel && (
+                    <button
+                      onClick={() => handleCancel(item)}
+                      disabled={cancelling === item.id}
+                      title={`Cancel ${stageToCancel[status]} scan`}
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {cancelling === item.id
+                        ? <RefreshCw size={11} className="animate-spin" />
+                        : <XCircle size={11} />
+                      }
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -346,7 +402,7 @@ function ItemStatusList({ items, loading }) {
 }
 
 // ── Order card wrapper ────────────────────────────────────────────────────────
-function OrderCard({ order, stage, employeeId }) {
+function OrderCard({ order, stage, employeeId, isAdmin }) {
   const [data,     setData]     = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [expanded, setExpanded] = useState(true);
@@ -455,8 +511,13 @@ function OrderCard({ order, stage, employeeId }) {
             items={items}
             onItemUpdated={handleUpdated}
           />
-          {/* Status display */}
-          <ItemStatusList items={items} loading={loading} />
+          {/* Status display (admin sees cancel buttons) */}
+          <ItemStatusList
+            items={items}
+            loading={loading}
+            isAdmin={isAdmin}
+            onCancelScan={handleUpdated}
+          />
         </div>
       )}
     </div>
@@ -553,6 +614,7 @@ export default function ScanStation({ forcedStage }) {
                 order={order}
                 stage={stage}
                 employeeId={employeeData?.id || null}
+                isAdmin={isAdmin}
               />
             ))}
           </>

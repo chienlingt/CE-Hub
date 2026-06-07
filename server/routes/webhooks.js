@@ -32,9 +32,12 @@ function verifySecret(req, res, next) {
  *     "delivery_city":       "{{ object.partner_shipping_id.city }}",
  *     "delivery_state_name": "{{ object.partner_shipping_id.state_id.name }}",
  *     "delivery_zip":        "{{ object.partner_shipping_id.zip }}",
+ *     "delivery_remarks":    "{{ object.note }}",
+ *     "salesperson_name":    "{{ object.user_id.name }}",
+ *     "salesperson_phone":   "{{ object.user_id.partner_id.phone }}",
  *     "order_lines": [
  *       {% for line in object.order_line %}
- *       { "product_name": "{{ line.product_id.name }}", "product_uom_qty": {{ line.product_uom_qty }} }
+ *       { "product_name": "{{ line.product_id.name }}", "product_uom_qty": {{ line.product_uom_qty }}, "serial_number": "{{ line.lot_id.name }}" }
  *       {% endfor %}
  *     ]
  *   }
@@ -52,6 +55,8 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       delivery_state_name,
       delivery_zip,
       delivery_remarks,
+      salesperson_name,
+      salesperson_phone,
       order_lines = [],
     } = req.body;
 
@@ -59,13 +64,112 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       return res.status(400).json({ error: 'Payload must include id and name' });
     }
 
-    // Idempotency — skip already-imported orders
-    const existing = await prisma.orders.findFirst({ where: { odoo_order_ref } });
-    if (existing) {
-      return res.json({ success: true, skipped: true, order_id: existing.id });
+    // ── Helper: resolve product lines from order_lines payload ───────────────
+    async function resolveProductLines(lines, orderId = null) {
+      const resolved = [];
+      for (const line of lines) {
+        if (!line.product_name) continue;
+        const product = await prisma.products.findFirst({
+          where: {
+            product_name:   { contains: line.product_name, mode: 'insensitive' },
+            available_flag: true,
+          },
+        });
+        if (product) {
+          resolved.push({
+            ...(orderId ? { order_id: orderId } : {}),
+            product_id:         product.id,
+            quantity:           Number(line.product_uom_qty) || 1,
+            service_type:       'delivery',
+            dismantle_required: false,
+            assigned_serial:    line.serial_number || null,
+          });
+        } else {
+          console.warn(`[Odoo Webhook] No local product matched: "${line.product_name}"`);
+        }
+      }
+      return resolved;
     }
 
-    // Upsert customer by email; create if not found
+    // ── Check if order already exists (create-or-update logic) ───────────────
+    const existing = await prisma.orders.findFirst({ where: { odoo_order_ref } });
+
+    if (existing) {
+      // Block update if order is already in motion
+      const blocked = ['Scheduled', 'Delivering', 'Delivered', 'Completed', 'Cancelled'];
+      if (blocked.includes(existing.order_status)) {
+        return res.status(409).json({
+          error:        `Cannot update — order is already ${existing.order_status}. Admin must intervene manually.`,
+          order_status: existing.order_status,
+          order_id:     existing.id,
+        });
+      }
+
+      // Pending — safe to apply updates
+      const changes = { updated_at: new Date() };
+      const addressChanged = delivery_address && delivery_address !== existing.delivery_address;
+
+      if (delivery_address)    changes.delivery_address  = delivery_address;
+      if (delivery_city)       changes.delivery_city     = delivery_city;
+      if (delivery_state_name) changes.delivery_state    = delivery_state_name;
+      if (delivery_zip)        changes.delivery_postcode = delivery_zip;
+      if (delivery_remarks)    changes.delivery_remarks  = delivery_remarks;
+      if (salesperson_name)    changes.salesperson_name  = salesperson_name;
+      if (salesperson_phone)   changes.salesperson_phone = salesperson_phone;
+
+      // Clear LLM-parsed fields if address changed — admin must re-review
+      if (addressChanged) {
+        changes.remarks_delivery_address = null;
+        changes.remarks_contact_phone    = null;
+        changes.remarks_contact_name     = null;
+        changes.remarks_driver_notes     = null;
+
+        const newBuildingName = extractBuildingName(delivery_address) || 'Unknown';
+        let building = await prisma.buildings.findFirst({
+          where: { building_name: { equals: newBuildingName, mode: 'insensitive' } },
+        });
+        if (!building) {
+          building = await prisma.buildings.create({
+            data: {
+              building_name:            newBuildingName,
+              housing_type:             'Residential',
+              postal_code:              delivery_zip || null,
+              access_time_window_start: '08:00',
+              access_time_window_end:   '20:00',
+              created_at:               new Date(),
+            },
+          });
+        }
+        changes.building_id = building.id;
+      }
+
+      await prisma.orders.update({ where: { id: existing.id }, data: changes });
+
+      // Update customer details if changed
+      if (existing.customer_id && (partner_name || partner_phone || partner_email)) {
+        const customerUpdate = {};
+        if (partner_name)  customerUpdate.full_name = partner_name;
+        if (partner_phone) customerUpdate.phone     = partner_phone;
+        if (partner_email) customerUpdate.email     = partner_email;
+        await prisma.customers.update({ where: { id: existing.customer_id }, data: customerUpdate });
+      }
+
+      // Replace order lines if provided
+      let updatedLines = 0;
+      if (order_lines.length > 0) {
+        await prisma.order_products.deleteMany({ where: { order_id: existing.id } });
+        const productLines = await resolveProductLines(order_lines, existing.id);
+        if (productLines.length > 0) {
+          await prisma.order_products.createMany({ data: productLines });
+        }
+        updatedLines = productLines.length;
+      }
+
+      console.log(`[Odoo Webhook] Updated ${odoo_order_ref} (id: ${existing.id}) — lines: ${updatedLines}, addressChanged: ${!!addressChanged}`);
+      return res.json({ success: true, action: 'updated', order_id: existing.id, updated_lines: updatedLines, address_changed: !!addressChanged });
+    }
+
+    // ── New order — create ────────────────────────────────────────────────────
     let customer = partner_email
       ? await prisma.customers.findFirst({ where: { email: partner_email } })
       : null;
@@ -85,7 +189,6 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       });
     }
 
-    // Resolve or create building from delivery address
     const buildingName = extractBuildingName(delivery_address || '') || 'Unknown';
     let building = await prisma.buildings.findFirst({
       where: { building_name: { equals: buildingName, mode: 'insensitive' } },
@@ -103,49 +206,31 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       });
     }
 
-    // Match order lines to local products by name
-    const productLines = [];
-    for (const line of order_lines) {
-      if (!line.product_name) continue;
-      const product = await prisma.products.findFirst({
-        where: {
-          product_name:   { contains: line.product_name, mode: 'insensitive' },
-          available_flag: true,
-        },
-      });
-      if (product) {
-        productLines.push({
-          product_id:         product.id,
-          quantity:           Number(line.product_uom_qty) || 1,
-          service_type:       'delivery',
-          dismantle_required: false,
-        });
-      } else {
-        console.warn(`[Odoo Webhook] No local product matched: "${line.product_name}"`);
-      }
-    }
+    const productLines = await resolveProductLines(order_lines);
 
     const order = await prisma.orders.create({
       data: {
-        customer_id:       customer.id,
-        building_id:       building.id,
-        order_status:      'Pending',
+        customer_id:               customer.id,
+        building_id:               building.id,
+        order_status:              'Pending',
         odoo_order_ref,
-        delivery_address:  delivery_address    || null,
-        delivery_city:     delivery_city       || null,
-        delivery_postcode: delivery_zip        || null,
-        delivery_state:    delivery_state_name || null,
+        delivery_address:          delivery_address    || null,
+        delivery_city:             delivery_city       || null,
+        delivery_postcode:         delivery_zip        || null,
+        delivery_state:            delivery_state_name || null,
         delivery_remarks:          delivery_remarks    || null,
         original_delivery_address: delivery_address    || null,
+        salesperson_name:          salesperson_name    || null,
+        salesperson_phone:         salesperson_phone   || null,
         assignment_status:         'unassigned',
-        created_at:        new Date(),
-        updated_at:        new Date(),
+        created_at:                new Date(),
+        updated_at:                new Date(),
         ...(productLines.length > 0 && { order_products: { create: productLines } }),
       },
     });
 
-    console.log(`[Odoo Webhook] Imported ${odoo_order_ref} → local id ${order.id}`);
-    return res.status(201).json({ success: true, order_id: order.id });
+    console.log(`[Odoo Webhook] Created ${odoo_order_ref} → local id ${order.id}`);
+    return res.status(201).json({ success: true, action: 'created', order_id: order.id });
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order error:', err);
     return res.status(500).json({ error: 'Failed to process webhook', details: err.message });
@@ -234,6 +319,8 @@ router.post('/odoo/order-update', verifySecret, async (req, res) => {
     if (delivery_state_name) changes.delivery_state    = delivery_state_name;
     if (delivery_zip)        changes.delivery_postcode = delivery_zip;
     if (delivery_remarks)    changes.delivery_remarks  = delivery_remarks;
+    if (salesperson_name)    changes.salesperson_name  = salesperson_name;
+    if (salesperson_phone)   changes.salesperson_phone = salesperson_phone;
 
     // If address changed, clear LLM-parsed fields so admin reviews from scratch
     if (addressChanged) {

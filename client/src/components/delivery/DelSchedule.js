@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import LoadingChecklist from '../common/LoadingChecklist';
+import { ScannerSection } from '../common/ScanStation';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   getAllBuildings,
@@ -695,6 +696,25 @@ export default function DeliverySchedule() {
                                       stage="driver"
                                       employeeId={currentUser?.employeeId || null}
                                     />
+                                    {/* A2 — Scan Station (loading) */}
+                                    <div className="mt-3">
+                                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                                        Scan Items to Load
+                                      </p>
+                                      <ScannerSection
+                                        order={order}
+                                        stage="driver"
+                                        employeeId={currentUser?.employeeId || null}
+                                        items={orderProducts.filter(op =>
+                                          field.orderProductOrderId(op) === field.orderId(order)
+                                        )}
+                                        onItemUpdated={(updatedItem) => {
+                                          setOrderProducts(prev =>
+                                            prev.map(op => op.id === updatedItem.id ? { ...op, ...updatedItem } : op)
+                                          );
+                                        }}
+                                      />
+                                    </div>
                                   </>
                                 )}
                                 {/* Unloading stage — shown when en route OR after delivered */}
@@ -710,6 +730,25 @@ export default function DeliverySchedule() {
                                       stage="unloading"
                                       employeeId={currentUser?.employeeId || null}
                                     />
+                                    {/* A2 — Scan Station (unloading at customer) */}
+                                    <div className="mt-3">
+                                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                                        Scan Items to Unload
+                                      </p>
+                                      <ScannerSection
+                                        order={order}
+                                        stage="unloading"
+                                        employeeId={currentUser?.employeeId || null}
+                                        items={orderProducts.filter(op =>
+                                          field.orderProductOrderId(op) === field.orderId(order)
+                                        )}
+                                        onItemUpdated={(updatedItem) => {
+                                          setOrderProducts(prev =>
+                                            prev.map(op => op.id === updatedItem.id ? { ...op, ...updatedItem } : op)
+                                          );
+                                        }}
+                                      />
+                                    </div>
                                   </>
                                 )}
                               </div>
