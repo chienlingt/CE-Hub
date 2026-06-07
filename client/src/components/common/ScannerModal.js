@@ -1,50 +1,44 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Camera, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 
-/**
- * Demo barcode / QR scanner modal.
- * Uses html5-qrcode to access the device camera.
- * Calls onScan(scannedValue) when a code is successfully read.
- *
- * For demo purposes: any barcode or QR code will be accepted.
- * In production this would validate against Odoo serial numbers.
- */
 export default function ScannerModal({ itemName, productId, onScan, onClose }) {
   const scannerRef   = useRef(null);
-  const isRunningRef = useRef(false); // tracks if scanner.start() has been called
+  const isRunningRef = useRef(false);
   const [status,   setStatus]   = useState('starting');
   const [scanned,  setScanned]  = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [cameras,  setCameras]  = useState([]);
   const [camIndex, setCamIndex] = useState(0);
-  const [scanKey,  setScanKey]  = useState(0); // increment to restart scanner
+  const [scanKey,  setScanKey]  = useState(0);
+  const [boxSize,  setBoxSize]  = useState(240);
 
   const safeStop = async () => {
     if (scannerRef.current && isRunningRef.current) {
-      try {
-        await scannerRef.current.stop();
-      } catch { /* already stopped */ }
+      try { await scannerRef.current.stop(); } catch { /* already stopped */ }
       isRunningRef.current = false;
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    let localScanner = null; // tracks THIS mount's scanner so cleanup always stops the right one
 
-    // Clear container first to prevent duplicate video elements (React StrictMode / rescan)
     const container = document.getElementById('qr-scanner-container');
     if (container) container.innerHTML = '';
 
     const startScanner = async () => {
       try {
         const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
+        if (cancelled) return; // StrictMode may have already unmounted
 
         const devices = await Html5Qrcode.getCameras();
+        if (cancelled) return; // unmounted while waiting for camera list
         if (!devices?.length) {
-          if (!cancelled) { setStatus('error'); setErrorMsg('No camera found on this device.'); }
+          setStatus('error');
+          setErrorMsg('No camera found on this device.');
           return;
         }
-        if (!cancelled) setCameras(devices);
+        setCameras(devices);
 
         const backCam = devices.find(d =>
           d.label.toLowerCase().includes('back') ||
@@ -65,16 +59,17 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
         ];
 
         const scanner = new Html5Qrcode('qr-scanner-container', { formatsToSupport, verbose: false });
+        localScanner = scanner;
         scannerRef.current = scanner;
 
-        // Responsive qrbox: narrow height for barcode, width fits screen
         const vw = window.innerWidth;
-        const boxW = Math.min(vw - 48, vw < 640 ? 260 : vw < 1024 ? 300 : 320);
-        const boxH = 110; // narrow for 1D barcodes; QR also reads in this window
+        const size = Math.min(vw - 48, vw < 640 ? 240 : vw < 1024 ? 260 : 280);
+        setBoxSize(size);
 
         await scanner.start(
           camId,
-          { fps: 10, qrbox: { width: boxW, height: boxH }, aspectRatio: vw < 640 ? 1.5 : 1.7 },
+          // Square qrbox for QR codes; aspectRatio keeps the video sized correctly
+          { fps: 10, qrbox: { width: size, height: size }, aspectRatio: vw < 640 ? 1.5 : 1.7 },
           (decodedText) => {
             if (cancelled) return;
             isRunningRef.current = false;
@@ -85,8 +80,14 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
           () => { /* per-frame failure — keep trying */ }
         );
 
+        if (cancelled) {
+          // Unmounted while scanner.start() was still in flight
+          scanner.stop().catch(() => {});
+          return;
+        }
+
         isRunningRef.current = true;
-        if (!cancelled) setStatus('scanning');
+        setStatus('scanning');
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
@@ -99,8 +100,11 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
 
     return () => {
       cancelled = true;
-      safeStop();
-      // Clear container so next mount starts fresh
+      if (localScanner && isRunningRef.current) {
+        localScanner.stop().catch(() => {});
+        isRunningRef.current = false;
+      }
+      scannerRef.current = null;
       const el = document.getElementById('qr-scanner-container');
       if (el) el.innerHTML = '';
     };
@@ -113,7 +117,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
     await safeStop();
     setScanned(null);
     setStatus('starting');
-    setScanKey(k => k + 1); // triggers useEffect restart
+    setScanKey(k => k + 1);
   };
 
   const switchCamera = async () => {
@@ -145,15 +149,9 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
         </div>
 
         {/* Scanner area */}
-        <div className="bg-black relative" style={{ minHeight: '280px' }}>
-          {/* The scanner renders into this div */}
-          <div
-            id="qr-scanner-container"
-            className="w-full"
-            style={{ minHeight: '280px' }}
-          />
+        <div className="bg-black relative" style={{ minHeight: '320px' }}>
+          <div id="qr-scanner-container" className="w-full" style={{ minHeight: '320px' }} />
 
-          {/* Overlay states */}
           {status === 'starting' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70">
               <RefreshCw size={28} className="text-white animate-spin mb-2" />
@@ -178,32 +176,28 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
             </div>
           )}
 
-          {/* Scanning guide overlay */}
+          {/* Scanning guide — width & height match the actual qrbox passed to the library */}
           {status === 'scanning' && (
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="border-2 border-blue-400 rounded-lg"
-                   style={{ width: 240, height: 240, boxShadow: '0 0 0 9999px rgba(0,0,0,0.4)' }}
+              <div className="relative border-2 border-blue-400 rounded-lg"
+                   style={{ width: boxSize, height: boxSize, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)' }}
               >
-                {/* Corner indicators */}
                 <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-400 rounded-tl-lg" />
                 <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-400 rounded-tr-lg" />
                 <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-400 rounded-bl-lg" />
                 <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-400 rounded-br-lg" />
-                {/* Scan line animation */}
                 <div className="absolute left-0 right-0 h-0.5 bg-blue-400 opacity-70 scan-line" />
               </div>
             </div>
           )}
         </div>
 
-        {/* Instruction */}
         {status === 'scanning' && (
           <div className="bg-gray-900 px-4 py-2 text-center">
             <p className="text-gray-300 text-xs">Point camera at item barcode or QR code</p>
           </div>
         )}
 
-        {/* Bottom actions */}
         <div className="p-4 space-y-2">
           {status === 'success' && (
             <>
@@ -219,7 +213,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
                 Confirm & Mark Item
               </button>
               <button
-                onClick={() => { setScanned(null); setStatus('starting'); setCamIndex(i => i); }}
+                onClick={handleRescan}
                 className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-xl transition-colors"
               >
                 Scan Again
@@ -247,14 +241,13 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
         </div>
       </div>
 
-      {/* Scan line CSS */}
       <style>{`
         @keyframes scanLine {
-          0%   { top: 0; }
-          50%  { top: 230px; }
-          100% { top: 0; }
+          from { top: 2px; }
+          to   { top: calc(100% - 4px); }
         }
-        .scan-line { animation: scanLine 2s linear infinite; }
+        .scan-line { animation: scanLine 1.5s linear infinite; }
+        #qr-shaded-region { display: none !important; }
       `}</style>
     </div>
   );
