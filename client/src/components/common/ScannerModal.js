@@ -1,130 +1,72 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { X, Camera, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 
+// Resize large phone photos so the QR/barcode fills more of the image —
+// a 12MP photo where the QR is tiny will fail; 1024px max fixes this.
+function preprocessImage(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 1024;
+      let w = img.naturalWidth;
+      let h = img.naturalHeight;
+      if (w > MAX || h > MAX) {
+        const ratio = Math.min(MAX / w, MAX / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width  = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.filter = 'contrast(1.4) brightness(1.1)'; // helps with dark/glare photos
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        blob => resolve(new File([blob], 'scan.jpg', { type: 'image/jpeg' })),
+        'image/jpeg', 0.92
+      );
+    };
+    img.src = url;
+  });
+}
+
 export default function ScannerModal({ itemName, productId, onScan, onClose }) {
-  const scannerRef   = useRef(null);
-  const isRunningRef = useRef(false);
-  const [status,   setStatus]   = useState('starting');
+  const galleryInputRef = useRef(null);
+  const [status,   setStatus]   = useState('idle'); // idle | processing | success | error
   const [scanned,  setScanned]  = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const [cameras,  setCameras]  = useState([]);
-  const [camIndex, setCamIndex] = useState(0);
-  const [scanKey,  setScanKey]  = useState(0);
-  const [boxSize,  setBoxSize]  = useState(240);
+  const [preview,  setPreview]  = useState(null);
 
-  const safeStop = async () => {
-    if (scannerRef.current && isRunningRef.current) {
-      try { await scannerRef.current.stop(); } catch { /* already stopped */ }
-      isRunningRef.current = false;
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setPreview(URL.createObjectURL(file));
+    setStatus('processing');
+    setErrorMsg('');
+
+    try {
+      const { Html5Qrcode } = await import('html5-qrcode');
+      const processed = await preprocessImage(file);
+      const scanner   = new Html5Qrcode('qr-file-container');
+      const result    = await scanner.scanFile(processed, false);
+      scanner.clear();
+      setScanned(result);
+      setStatus('success');
+    } catch {
+      setStatus('error');
+      setErrorMsg('No QR code or barcode detected. Make sure the QR code fills most of the frame and try again.');
     }
+
+    if (galleryInputRef.current) galleryInputRef.current.value = '';
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    let localScanner = null; // tracks THIS mount's scanner so cleanup always stops the right one
-
-    const container = document.getElementById('qr-scanner-container');
-    if (container) container.innerHTML = '';
-
-    const startScanner = async () => {
-      try {
-        const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
-        if (cancelled) return; // StrictMode may have already unmounted
-
-        const devices = await Html5Qrcode.getCameras();
-        if (cancelled) return; // unmounted while waiting for camera list
-        if (!devices?.length) {
-          setStatus('error');
-          setErrorMsg('No camera found on this device.');
-          return;
-        }
-        setCameras(devices);
-
-        const backCam = devices.find(d =>
-          d.label.toLowerCase().includes('back') ||
-          d.label.toLowerCase().includes('rear') ||
-          d.label.toLowerCase().includes('environment')
-        );
-        const camId = backCam ? backCam.id : devices[camIndex % devices.length]?.id;
-
-        const formatsToSupport = [
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-          Html5QrcodeSupportedFormats.ITF,
-        ];
-
-        const scanner = new Html5Qrcode('qr-scanner-container', { formatsToSupport, verbose: false });
-        localScanner = scanner;
-        scannerRef.current = scanner;
-
-        const vw = window.innerWidth;
-        const size = Math.min(vw - 48, vw < 640 ? 240 : vw < 1024 ? 260 : 280);
-        setBoxSize(size);
-
-        await scanner.start(
-          camId,
-          // Square qrbox for QR codes; aspectRatio keeps the video sized correctly
-          { fps: 10, qrbox: { width: size, height: size }, aspectRatio: vw < 640 ? 1.5 : 1.7 },
-          (decodedText) => {
-            if (cancelled) return;
-            isRunningRef.current = false;
-            scanner.stop().catch(() => {});
-            setScanned(decodedText);
-            setStatus('success');
-          },
-          () => { /* per-frame failure — keep trying */ }
-        );
-
-        if (cancelled) {
-          // Unmounted while scanner.start() was still in flight
-          scanner.stop().catch(() => {});
-          return;
-        }
-
-        isRunningRef.current = true;
-        setStatus('scanning');
-      } catch (err) {
-        if (!cancelled) {
-          setStatus('error');
-          setErrorMsg(err.message || 'Camera access denied. Please allow camera permission.');
-        }
-      }
-    };
-
-    startScanner();
-
-    return () => {
-      cancelled = true;
-      if (localScanner && isRunningRef.current) {
-        localScanner.stop().catch(() => {});
-        isRunningRef.current = false;
-      }
-      scannerRef.current = null;
-      const el = document.getElementById('qr-scanner-container');
-      if (el) el.innerHTML = '';
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camIndex, scanKey]);
-
-  const handleConfirm = () => onScan(scanned);
-
-  const handleRescan = async () => {
-    await safeStop();
+  const handleRetry = () => {
+    setStatus('idle');
     setScanned(null);
-    setStatus('starting');
-    setScanKey(k => k + 1);
-  };
-
-  const switchCamera = async () => {
-    await safeStop();
-    setStatus('starting');
-    setScanned(null);
-    setCamIndex(i => (i + 1) % Math.max(cameras.length, 1));
+    setPreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
   };
 
   return (
@@ -140,27 +82,34 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
             </div>
             <p className="text-gray-400 text-xs mt-0.5 truncate max-w-[220px]">{itemName}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white"
-          >
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white">
             <X size={18} />
           </button>
         </div>
 
-        {/* Scanner area */}
-        <div className="bg-black relative" style={{ minHeight: '320px' }}>
-          <div id="qr-scanner-container" className="w-full" style={{ minHeight: '320px' }} />
+        {/* Image / state area */}
+        <div className="bg-black relative" style={{ minHeight: '280px' }}>
+          {/* Hidden container required by html5-qrcode scanFile */}
+          <div id="qr-file-container" style={{ display: 'none' }} />
 
-          {status === 'starting' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70">
+          {preview ? (
+            <img src={preview} alt="captured" className="w-full object-contain" style={{ maxHeight: '300px' }} />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <Camera size={44} className="text-gray-500" />
+              <p className="text-gray-400 text-sm">Tap the button below to open your camera and photograph the barcode or QR code</p>
+            </div>
+          )}
+
+          {status === 'processing' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60">
               <RefreshCw size={28} className="text-white animate-spin mb-2" />
-              <p className="text-white text-sm">Starting camera...</p>
+              <p className="text-white text-sm">Reading barcode...</p>
             </div>
           )}
 
           {status === 'success' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70">
               <CheckCircle size={48} className="text-green-400 mb-3" />
               <p className="text-white font-semibold text-sm mb-1">Barcode Scanned!</p>
               <div className="bg-white/10 rounded-lg px-4 py-2 text-center max-w-[240px]">
@@ -169,51 +118,43 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
             </div>
           )}
 
-          {status === 'error' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 px-4">
+          {status === 'error' && preview && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 px-6 text-center">
               <AlertTriangle size={36} className="text-red-400 mb-2" />
-              <p className="text-white text-sm text-center">{errorMsg}</p>
-            </div>
-          )}
-
-          {/* Scanning guide — width & height match the actual qrbox passed to the library */}
-          {status === 'scanning' && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="relative border-2 border-blue-400 rounded-lg"
-                   style={{ width: boxSize, height: boxSize, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)' }}
-              >
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-400 rounded-tl-lg" />
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-400 rounded-tr-lg" />
-                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-400 rounded-bl-lg" />
-                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-400 rounded-br-lg" />
-                <div className="absolute left-0 right-0 h-0.5 bg-blue-400 opacity-70 scan-line" />
-              </div>
+              <p className="text-white text-sm">{errorMsg}</p>
             </div>
           )}
         </div>
 
-        {status === 'scanning' && (
-          <div className="bg-gray-900 px-4 py-2 text-center">
-            <p className="text-gray-300 text-xs">Point camera at item barcode or QR code</p>
-          </div>
-        )}
-
+        {/* Bottom actions */}
         <div className="p-4 space-y-2">
+          {/* no capture — lets user pick from camera or photo library */}
+          <input ref={galleryInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+
+          {status === 'idle' && (
+            <button
+              onClick={() => galleryInputRef.current?.click()}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <Camera size={16} /> Open Camera
+            </button>
+          )}
+
           {status === 'success' && (
             <>
               <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-600">
-                <span className="font-medium">Scanned serial: </span>
+                <span className="font-medium">Scanned: </span>
                 <span className="font-mono text-blue-700">{scanned}</span>
               </div>
               <button
-                onClick={handleConfirm}
+                onClick={() => onScan(scanned)}
                 className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm rounded-xl transition-colors"
               >
                 <CheckCircle size={15} className="inline mr-2" />
                 Confirm & Mark Item
               </button>
               <button
-                onClick={handleRescan}
+                onClick={handleRetry}
                 className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-xl transition-colors"
               >
                 Scan Again
@@ -221,34 +162,16 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
             </>
           )}
 
-          {status === 'scanning' && cameras.length > 1 && (
-            <button
-              onClick={switchCamera}
-              className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              <RefreshCw size={13} /> Switch Camera
-            </button>
-          )}
-
           {status === 'error' && (
             <button
-              onClick={onClose}
-              className="w-full py-2.5 bg-gray-800 text-white text-sm rounded-xl"
+              onClick={handleRetry}
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
             >
-              Close
+              <Camera size={16} /> Try Again
             </button>
           )}
         </div>
       </div>
-
-      <style>{`
-        @keyframes scanLine {
-          from { top: 2px; }
-          to   { top: calc(100% - 4px); }
-        }
-        .scan-line { animation: scanLine 1.5s linear infinite; }
-        #qr-shaded-region { display: none !important; }
-      `}</style>
     </div>
   );
 }
