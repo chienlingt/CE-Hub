@@ -1,21 +1,51 @@
 // server/index.js
 // Main Express server - mounts all route modules
 const path = require('path');
+const fs   = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const prisma = require('./prismaClient');
 
+const uploadsRoot = path.join(__dirname, 'uploads');
+
 const app = express();
 
 app.use(helmet({ contentSecurityPolicy: false }));
 // CORS configuration - allows frontend to access API
+const defaultOrigin = process.env.CLIENT_URL || 'https://lab2.tbm2u.net';
+const localOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$/;
+
 app.use(cors({
-  origin:      process.env.CLIENT_URL || 'https://lab2.tbm2u.net',
+  origin(origin, callback) {
+    if (!origin || origin === defaultOrigin || localOriginPattern.test(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true,
 }));
 app.use(express.json());
+
+// Serve uploaded POD / issue evidence files
+app.use('/uploads', (req, res, next) => {
+  const rel = req.path.replace(/^\/+/, '');
+  const primary = path.join(uploadsRoot, rel);
+  if (fs.existsSync(primary)) {
+    return res.sendFile(primary);
+  }
+  // Back-compat: issue photos saved under status/ before upload path fix
+  const legacy = rel.match(/^orders\/del\/report\/([^/]+)\/(.+)$/);
+  if (legacy) {
+    const alt = path.join(uploadsRoot, 'orders', 'del', 'status', legacy[1], legacy[2]);
+    if (fs.existsSync(alt)) {
+      return res.sendFile(alt);
+    }
+  }
+  next();
+});
 
 // Mount route modules
 app.use('/api/auth', require('./routes/auth'));
@@ -42,6 +72,7 @@ app.use('/api/installers', require('./routes/installers'));
 app.use('/api/outlets', require('./routes/outlets'));
 app.use('/api/webhooks',      require('./routes/webhooks'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/driver',        require('./routes/driver'));
 
 // Health check
 app.get('/api/health', async (req, res) => {

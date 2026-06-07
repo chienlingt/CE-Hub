@@ -220,6 +220,7 @@ model orders {
   issue_status              String?
   odoo_order_ref            String?                 @unique @db.VarChar(100)
   is_complaint_submitted    Boolean?                @default(false)
+  is_escalation_acknowledged Boolean?               @default(false)
   delivery_remarks          String?
   assignment_status         String?                 @default("unassigned") @db.VarChar(30)
   dispatched_by             String?                 @db.Uuid

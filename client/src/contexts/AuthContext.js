@@ -1,4 +1,5 @@
 import React, { useContext, useState, useEffect, createContext } from 'react';
+import { getApiBaseUrl } from '../utils/apiBaseUrl';
 
 // Create context
 const AuthContext = createContext();
@@ -11,7 +12,7 @@ export function useAuth() {
 // Helper to normalize strings
 const normalize = (s) => (s || '').toString().toLowerCase().trim();
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
+const REACT_APP_API_BASE_URL = getApiBaseUrl();
 
 /**
  * Fetch permissions for a given role from PostgreSQL API.

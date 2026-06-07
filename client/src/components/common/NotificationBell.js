@@ -83,15 +83,35 @@ export default function NotificationBell({ userId }) {
 
   const handleOpen = () => setIsOpen(prev => !prev);
 
+  const isDriverOrderReport = (order) =>
+    order?.issue_reason === 'Driver Escalation'
+    || (
+      order?.issue_reason
+      && order?.issue_desc
+      && (order?.is_complaint_submitted === true || order?.order_status === 'Issue')
+    );
+
   const handleNotificationClick = async (n) => {
     if (!n.is_read) await markAsRead(n.id);
     setIsOpen(false);
-    // Navigate to failure log, passing order_id so it can highlight the case
-    if (n.order_id) {
-      navigate(`/cases/order-issues?orderId=${n.order_id}`);
-    } else {
+
+    if (!n.order_id) {
       navigate('/cases/order-issues');
+      return;
     }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${n.order_id}`);
+      if (res.ok) {
+        const order = await res.json();
+        if (isDriverOrderReport(order)) {
+          navigate(`/cases/delivery-issues?orderId=${n.order_id}`);
+          return;
+        }
+      }
+    } catch { /* fallback below */ }
+
+    navigate(`/cases/order-issues?orderId=${n.order_id}`);
   };
 
   return (
