@@ -1,6 +1,6 @@
 // client/src/components/driver/OrderTaskCard.js
-import { Phone, MessageCircle, RefreshCw, Flag, MapPin, User, Clock, Image } from 'lucide-react';
-import { statusBadge, isTerminal, isCompletedEvidenceMode } from '../../utils/driverStatusMap';
+import { Phone, MessageCircle, RefreshCw, Flag, MapPin, User, Clock, Image, Package } from 'lucide-react';
+import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus } from '../../utils/driverStatusMap';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
 import { onTheWayTemplate } from '../../utils/templateMessages';
 
@@ -20,6 +20,10 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
   // Report is always enabled for escalations (driver can add follow-ups).
   // For non-escalation cases, disable once complaint submitted.
   const reportDisabled = job.is_complaint_submitted && !isEscalation;
+
+  // Option A: loading badge — only shown on Scheduled-tab orders
+  const showLoadingBadge = isScheduledStatus(job.status) && job.loading_total > 0;
+  const loadingReady     = job.all_loaded;
 
   // const shortId   = job.id?.slice(0, 8).toUpperCase();
   const shortId = job.id?.toUpperCase();
@@ -47,9 +51,24 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
           <p className="text-xs text-gray-400 font-mono truncate">Odoo Order ref: {job.odoo_order_ref}</p>
           <p className="font-semibold text-gray-900 truncate">{job.product || 'Unknown Product'}</p>
         </div>
-        <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-semibold ${badge.color}`}>
-          {badge.label}
-        </span>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${badge.color}`}>
+            {badge.label}
+          </span>
+          {showLoadingBadge && (
+            loadingReady ? (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                <Package className="w-3 h-3" />
+                Ready
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                <Package className="w-3 h-3" />
+                {job.loaded_count}/{job.loading_total} loaded
+              </span>
+            )
+          )}
+        </div>
       </div>
 
       {/* Customer */}

@@ -12,6 +12,7 @@ import UpdateOrderModal from './UpdateOrderModal';
 import DeliveryEvidenceModal from './DeliveryEvidenceModal';
 import ContactReportModal from './ContactReportModal';
 import DateCalendarModal from './DateCalendarModal';
+import SlotDepartBanner from './SlotDepartBanner';
 
 /** Build a 7-day strip centred around today (or selectedDate if given). */
 function buildDateStrip(selectedDate) {
@@ -50,7 +51,7 @@ export default function DriverDashboard() {
   const [reportTarget, setReportTarget] = useState(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
 
-  const { jobs, loading, error, refresh } = useDriverJobs(employeeId);
+  const { jobs, slots, loading, error, refresh } = useDriverJobs(employeeId);
 
   // Jobs for the selected date
   const dateJobs = useMemo(() => jobs.filter(j => j.assigned_date === date), [jobs, date]);
@@ -161,6 +162,14 @@ export default function DriverDashboard() {
           ))}
         </div>
       </div>
+
+      {/* ── Leave Warehouse Banner ─────────────────────────────────── */}
+      <SlotDepartBanner
+        slots={slots}
+        employeeId={employeeId}
+        selectedDate={date}
+        onDeparted={refresh}
+      />
 
       {/* ── Job List ───────────────────────────────────────────────── */}
       <div className="px-4 space-y-3">

@@ -1311,8 +1311,18 @@ router.get('/:id/loading-status', async (req, res) => {
   }
 });
 
-// POST /:id/dispatch — A2: dispatch gate — blocks if items not all loaded
+// POST /:id/dispatch — Option A: soft-deprecated in favour of POST /api/time-slots/:id/depart.
+// Per-order dispatch bypassed the full A3 trip lifecycle (no slot depart, no on-the-way
+// notifications, no lorry_trips update). Use slot depart from the driver "Leave warehouse" banner.
+//
+// Kept here commented out for easy rollback. Returns 410 Gone.
 router.post('/:id/dispatch', async (req, res) => {
+  return res.status(410).json({
+    error: 'Per-order dispatch is no longer supported. Use POST /api/time-slots/:id/depart (driver Leave warehouse) to move orders to Delivering.',
+    code:  'USE_SLOT_DEPART',
+  });
+
+  /* Original implementation preserved for rollback:
   try {
     const { employee_id } = req.body;
 
@@ -1334,11 +1344,9 @@ router.post('/:id/dispatch', async (req, res) => {
       });
     }
 
-    // All loaded — update order status to Delivering via lifecycle service
-    const now    = new Date();
+    const now     = new Date();
     const updated = await markOrderDelivering(req.params.id, { employeeId: employee_id, now });
 
-    // Resolve dispatcher name
     let dispatchedByName = null;
     if (employee_id) {
       const emp = await prisma.employees.findUnique({
@@ -1348,9 +1356,6 @@ router.post('/:id/dispatch', async (req, res) => {
       dispatchedByName = emp?.name || emp?.display_name || null;
     }
 
-    console.log(`[A2] Order ${req.params.id} dispatched by ${dispatchedByName || 'unknown'}`);
-
-    // Enqueue Odoo write-back via outbox — never inline (A.3.2)
     if (updated.odoo_order_ref) {
       enqueue({
         eventType:      'SLOT_STATUS_CHANGED',
@@ -1366,6 +1371,7 @@ router.post('/:id/dispatch', async (req, res) => {
     console.error('POST /api/orders/:id/dispatch error', err);
     res.status(500).json({ error: 'Failed to dispatch order', details: err.message });
   }
+  */
 });
 
 // POST /:id/deliver — driver marks order as Delivered after unloading all items (A2 / A4)

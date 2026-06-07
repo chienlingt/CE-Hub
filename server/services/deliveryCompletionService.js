@@ -11,10 +11,13 @@ const {
   markOrderDelivered,
   isEndTripTerminal,
   ordersBlockingEndTrip,
+  departTimeSlot,
 } = require('./deliveryLifecycleService');
 const {
   enqueue,
   enqueueSlotEndTripSideEffects,
+  enqueueSlotDepartureSideEffects,
+  enqueueOnTheWayNotifications,
 } = require('./integrationOutboxService');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -28,8 +31,11 @@ function buildFilePath(orderId, subDir, filename) {
 }
 
 /**
- * Auto-depart a slot that was never manually departed, then attempt to close it.
- * Marks the lorry_trip with an auto_departed flag in started_by (uses null + logs).
+ * Auto-depart a slot that was never manually departed (via full A3 lifecycle), then close it.
+ *
+ * Routes auto-depart through departTimeSlot() so on-the-way notifications, lorry_trips,
+ * and Odoo outbox side effects are always triggered — even when driver completes a delivery
+ * without having tapped "Leave warehouse" first.
  *
  * Returns { autoDeparted, autoEnded }.
  */
@@ -44,38 +50,43 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
   if (!slot) return { autoDeparted: false, autoEnded: false };
   if (slot.slot_status === 'completed') return { autoDeparted: false, autoEnded: false };
 
-  const now = new Date();
   let autoDeparted = false;
 
-  // If slot was never departed, auto-depart it first
+  // If slot was never departed, run full A3 lifecycle so notifications + trip mirror are correct
   if (slot.slot_status === 'scheduled') {
-    await prisma.time_slots.update({
-      where: { id: timeSlotId },
-      data:  { slot_status: 'out_for_delivery', departed_at: now, started_by: employeeId || null },
-    });
+    try {
+      const { timeSlot, ordersUpdated, lorryTrip, activeOrders } = await departTimeSlot(
+        timeSlotId,
+        { employeeId }
+      );
 
-    // Upsert lorry_trips mirror
-    await prisma.lorry_trips.upsert({
-      where:  { time_slot_id: timeSlotId },
-      create: {
-        time_slot_id:     timeSlotId,
-        truck_id:         slot.truck_id || null,
-        delivery_team_id: slot.delivery_team_id || null,
-        status:           'active',
-        started_at:       now,
-        started_by:       employeeId || null,
-        updated_at:       now,
-      },
-      update: {
-        status:     'active',
-        started_at: now,
-        started_by: employeeId || null,
-        updated_at: now,
-      },
-    });
+      // Enqueue Odoo sync + on-the-way notifications (non-blocking — same as slot depart route)
+      enqueueSlotDepartureSideEffects(timeSlot.id, activeOrders).catch(e =>
+        console.error('[A4] enqueueSlotDepartureSideEffects failed:', e.message)
+      );
+      enqueueOnTheWayNotifications(timeSlot.id, activeOrders, {
+        date:              timeSlot.date,
+        time_window_start: timeSlot.time_window_start,
+        time_window_end:   timeSlot.time_window_end,
+      }).catch(e =>
+        console.error('[A4] enqueueOnTheWayNotifications failed:', e.message)
+      );
 
-    autoDeparted = true;
-    console.log(`[A4] Auto-departed slot ${timeSlotId} [auto] by driver ${employeeId || 'unknown'}`);
+      autoDeparted = true;
+      console.log(`[A4] Auto-departed slot ${timeSlotId} via departTimeSlot() — ${ordersUpdated.length} orders → Delivering`);
+    } catch (err) {
+      if (err.code === 'ALREADY_DEPARTED') {
+        // Concurrent depart — treat as departed, continue
+        console.log(`[A4] Slot ${timeSlotId} already departed (concurrent) — continuing`);
+      } else if (err.code === 'ITEMS_NOT_LOADED') {
+        // Some items not loaded; cannot depart — skip auto-close
+        console.warn(`[A4] Slot ${timeSlotId} has unloaded items — skipping auto-depart`);
+        return { autoDeparted: false, autoEnded: false };
+      } else {
+        console.error(`[A4] departTimeSlot failed for slot ${timeSlotId}:`, err.message);
+        return { autoDeparted: false, autoEnded: false };
+      }
+    }
   }
 
   // Re-fetch orders with fresh statuses
@@ -89,6 +100,8 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
     console.log(`[A4] Slot ${timeSlotId}: ${blocking.length} orders still active — not closing yet.`);
     return { autoDeparted, autoEnded: false };
   }
+
+  const now = new Date();
 
   // All orders terminal — close the slot
   await prisma.time_slots.update({

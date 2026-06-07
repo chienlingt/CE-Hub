@@ -26,8 +26,7 @@ import {
   searchOrders
 } from '../../utils/orderHelpers';
 
-// const API_BASE = process.env.REACT_APP_API_BASE_URL || window.location.origin.replace(/:\d+$/, ':4000');
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 
 export default function ManageOrders() {

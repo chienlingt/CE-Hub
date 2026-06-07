@@ -4,7 +4,7 @@ import {
   CheckCircle, AlertTriangle, RefreshCw, Save
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function FieldRow({ icon: Icon, label, originalValue, value, onChange, highlight }) {
   return (

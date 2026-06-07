@@ -6,8 +6,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, Clock, Navigation, RefreshCw, Truck } from 'lucide-react';
-
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL } from '../../../utils/apiBaseUrl';
 const POLL_INTERVAL_MS = 30_000;
 
 export default function ActiveTripsPanel() {
