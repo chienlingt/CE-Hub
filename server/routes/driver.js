@@ -13,6 +13,12 @@ const {
   createInAppNotification,
 } = require('../services/notificationService');
 const { computeOrderLoadingStats, buildSlotSummaries } = require('../services/orderLoadingStats');
+const { healStrandedOrdersOnDepartedSlots } = require('../services/deliveryLifecycleService');
+const { toAppDateKey } = require('../utils/dateKey');
+
+function isDeliveryTeamType(team) {
+  return (team?.team_type || '').toLowerCase().includes('delivery');
+}
 
 // ─── GET /api/driver/jobs ────────────────────────────────────────────────────
 // Returns orders scoped to the logged-in driver:
@@ -27,21 +33,27 @@ router.get('/jobs', async (req, res) => {
       return res.status(400).json({ error: 'employee_id query param required' });
     }
 
-    // Find driver's delivery team assignment
-    const assignment = await prisma.employee_team_assignments.findFirst({
+    const allAssignments = await prisma.employee_team_assignments.findMany({
       where: { employee_id },
       include: { team: { select: { id: true, team_type: true } } },
     });
 
-    const deliveryTeamId = assignment?.team?.team_type?.toLowerCase().includes('delivery')
-      ? assignment.team.id
-      : null;
+    const deliveryTeamIds = [...new Set(
+      allAssignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id)
+    )];
 
-    // Build where: employee_id match OR slot delivery_team match
+    // Sync orders assigned to already-departed slots (e.g. rescheduled after depart)
+    await healStrandedOrdersOnDepartedSlots({ employeeId: employee_id, deliveryTeamIds });
+
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:teamLookup',message:'Driver team lookup',data:{employee_id,deliveryTeamIds,allAssignments:allAssignments.map(a=>({teamId:a.team?.id,teamType:a.team?.team_type}))},timestamp:Date.now(),hypothesisId:'B,C',runId:'post-fix'})}).catch(()=>{});
+    // #endregion
+
+    // Build where: employee_id match OR slot delivery_team match (any assigned delivery team)
     const whereConditions = [{ employee_id }];
-    if (deliveryTeamId) {
+    if (deliveryTeamIds.length > 0) {
       whereConditions.push({
-        time_slots: { delivery_team_id: deliveryTeamId },
+        time_slots: { delivery_team_id: { in: deliveryTeamIds } },
       });
     }
 
@@ -68,6 +80,10 @@ router.get('/jobs', async (req, res) => {
       orderBy: { scheduled_start_date_time: 'asc' },
     });
 
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:queryResult',message:'Driver jobs query result',data:{employee_id,deliveryTeamIds,orderCount:orders.length,orders:orders.map(o=>({id:o.id,status:o.order_status,employee_id:o.employee_id,time_slot_id:o.time_slot_id,slotDeliveryTeamId:o.time_slots?.delivery_team_id,scheduledStart:o.scheduled_start_date_time?.toISOString?.()??null}))},timestamp:Date.now(),hypothesisId:'A,B',runId:'post-fix'})}).catch(()=>{});
+    // #endregion
+
     // Augment each order with computed loading stats
     const ordersWithLoading = orders.map(o => ({
       ...o,
@@ -91,6 +107,10 @@ router.get('/jobs', async (req, res) => {
       const warehouseAssignment = o.time_slots?.warehouse_team?.assignments?.[0];
       const warehouseEmployee   = warehouseAssignment?.employee;
 
+      const slotDateKey = o.time_slots?.date ? toAppDateKey(o.time_slots.date) : null;
+      const assignedDate = slotDateKey
+        || (o.scheduled_start_date_time ? toAppDateKey(o.scheduled_start_date_time) : toAppDateKey(new Date()));
+
       return {
         id:                       o.id,
         product:                  productNames,
@@ -99,9 +119,8 @@ router.get('/jobs', async (req, res) => {
         customer_phone:           o.customers?.phone || '',
         address,
         status:                   o.order_status || 'Pending',
-        assigned_date:            o.scheduled_start_date_time
-          ? o.scheduled_start_date_time.toISOString().split('T')[0]
-          : new Date().toISOString().split('T')[0],
+        assigned_date:            assignedDate,
+        slot_date:                slotDateKey,
         time:                     o.scheduled_start_date_time
           ? o.scheduled_start_date_time.toISOString()
           : '',
@@ -138,6 +157,10 @@ router.get('/jobs', async (req, res) => {
       all_loaded:   o.all_loaded,
       time_slots:   o.time_slots,
     })));
+
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:slots',message:'Slots returned to client',data:{slots:slots.map(s=>({id:s.id,date:s.date,ready_to_depart:s.ready_to_depart,slot_status:s.slot_status,all_orders_loaded:s.all_orders_loaded}))},timestamp:Date.now(),hypothesisId:'A,B,F'})}).catch(()=>{});
+    // #endregion
 
     res.json({ jobs, slots });
   } catch (err) {

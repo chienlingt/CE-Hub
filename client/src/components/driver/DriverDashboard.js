@@ -11,6 +11,7 @@ import {
   buildAppointmentWindowOptions,
   enrichJobsWithAppointmentWindow,
 } from '../../utils/driverOrderFilters';
+import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 import { DRIVER_TABS } from '../../utils/driverStatusMap';
 import OrderTaskCard from './OrderTaskCard';
 import UpdateOrderModal from './UpdateOrderModal';
@@ -27,7 +28,7 @@ function buildDateStrip(selectedDate) {
     const d = new Date(base);
     d.setDate(base.getDate() + i);
     strip.push({
-      key:   d.toISOString().split('T')[0],
+      key:   toLocalDateKey(d),
       day:   d.toLocaleDateString('en-MY', { weekday: 'short' }),
       date:  d.getDate(),
     });
@@ -47,7 +48,7 @@ export default function DriverDashboard() {
   const { currentUser } = useAuth();
   const employeeId = currentUser?.employeeId || '';
 
-  const today       = new Date().toISOString().split('T')[0];
+  const today       = todayLocalDateKey();
   const [date, setDate]         = useState(today);
   const [tab, setTab]           = useState('all');
   const [windowFilter, setWindowFilter] = useState('all');
@@ -64,7 +65,13 @@ export default function DriverDashboard() {
   }, [date]);
 
   const dateJobsRaw = useMemo(
-    () => jobs.filter(j => j.assigned_date === date),
+    () => {
+      const filtered = jobs.filter(j => j.assigned_date === date);
+      // #region agent log
+      fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'DriverDashboard.js:dateFilter',message:'Date filter applied',data:{selectedDate:date,totalJobs:jobs.length,dateJobCount:filtered.length,allAssignedDates:[...new Set(jobs.map(j=>j.assigned_date))],slotDates:[...new Set(jobs.map(j=>j.slot_date).filter(Boolean))],filteredIds:filtered.map(j=>({id:j.id,assigned:j.assigned_date,slot:j.slot_date}))},timestamp:Date.now(),hypothesisId:'A,B,D',runId:'date-fix'})}).catch(()=>{});
+      // #endregion
+      return filtered;
+    },
     [jobs, date]
   );
 

@@ -574,7 +574,9 @@ async function fetchTeams() {
     include: { assignments: { include: { employee: { include: { role: true } } } } }
   });
 
-  const deliveryTeams = allTeams.filter(team => teamHasSomeRoles(team, 'delivery'));
+  const deliveryTeams = allTeams.filter(team =>
+    (team.team_type || '').toLowerCase().includes('delivery') && teamHasSomeRoles(team, 'delivery')
+  );
   const warehouseTeams = allTeams.filter(team => teamHasSomeRoles(team, 'storekeeper'));
   const installationTeams = allTeams.filter(team => teamHasSomeRoles(team, 'installation'));
 

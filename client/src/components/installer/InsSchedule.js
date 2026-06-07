@@ -13,13 +13,11 @@ import {
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../utils/apiBaseUrl';
+import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 
 const InstallationSchedule = () => {
   const { currentUser } = useAuth();
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
-  });
+  const [selectedDate, setSelectedDate] = useState(todayLocalDateKey);
   const [selectedTeam, setSelectedTeam] = useState('all');
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
 
@@ -267,7 +265,7 @@ const InstallationSchedule = () => {
     if (order.installationSchedule) {
       const estArrival = field.installScheduleEstArrival(order.installationSchedule);
       if (!estArrival) return false;
-      const arrivalDate = new Date(estArrival).toISOString().split('T')[0];
+      const arrivalDate = toLocalDateKey(estArrival);
       const dateMatch = arrivalDate === selectedDate;
 
       // Filter by team if selected
@@ -281,7 +279,7 @@ const InstallationSchedule = () => {
       // Fall back to scheduled start time for unscheduled orders
       const scheduledStart = field.orderScheduledStart(order);
       if (!scheduledStart) return false;
-      const orderDate = new Date(scheduledStart).toISOString().split('T')[0];
+      const orderDate = toLocalDateKey(scheduledStart);
       if (orderDate !== selectedDate) return false;
       return selectedTeam === 'all';
     }

@@ -16,6 +16,9 @@ const prisma = require('../prismaClient');
 
 const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Completed', 'Cancelled', 'Failed'];
 
+// Orders that must be fully loaded before Leave warehouse
+const PRE_DEPART_ORDER_STATUSES = ['Pending', 'Scheduled', 'Loaded'];
+
 // Orders that participate in load/dispatch on a slot (exclude already-terminal ones)
 const ACTIVE_ORDER_STATUSES = ['Pending', 'Scheduled', 'Delivering', 'Installing'];
 
@@ -158,13 +161,24 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
   // Identify active orders — exclude already-terminal (Cancelled/Failed/Delivered/Completed)
   const activeOrders = slot.orders.filter(o => !isEndTripTerminal(o.order_status));
 
-  // Check that every item of every active order is loaded
+  // Only pre-depart orders must have every item loaded; Delivering orders are already en route
+  const preDepartOrders = activeOrders.filter(o =>
+    PRE_DEPART_ORDER_STATUSES.includes(o.order_status)
+  );
+
   const unloadedItems = [];
-  for (const order of activeOrders) {
+  for (const order of preDepartOrders) {
     const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
     for (const item of notLoaded) {
       unloadedItems.push({ order_id: order.id, order_products_id: item.id, picking_status: item.picking_status });
     }
+  }
+
+  if (preDepartOrders.length === 0) {
+    const err = new Error('Cannot depart — no scheduled orders on this slot');
+    err.code = 'NO_PRE_DEPART_ORDERS';
+    err.statusCode = 400;
+    throw err;
   }
 
   if (unloadedItems.length > 0) {
@@ -188,9 +202,29 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
     include: { truck: { select: { plate_no: true } } },
   });
 
-  // Move all active orders → Delivering
+  // Move pre-depart orders → Delivering (already-Delivering orders are left unchanged)
   const updatedOrders = [];
-  for (const order of activeOrders) {
+  for (const order of preDepartOrders) {
+    const updated = await markOrderDelivering(order.id, { employeeId, now });
+    updatedOrders.push(updated);
+  }
+
+  // #region agent log
+  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'deliveryLifecycleService.js:departTimeSlot',message:'Depart order transition',data:{timeSlotId,preDepartCount:preDepartOrders.length,transitioned:updatedOrders.map(o=>o.id),activeOrders:activeOrders.map(o=>({id:o.id,status:o.order_status})),skippedDelivering:activeOrders.filter(o=>o.order_status==='Delivering').map(o=>o.id)},timestamp:Date.now(),hypothesisId:'A,B',runId:'depart-fix'})}).catch(()=>{});
+  // #endregion
+
+  // Safety net: re-query slot for any pre-depart orders missed in the initial snapshot
+  const remainingPreDepart = await prisma.orders.findMany({
+    where: {
+      time_slot_id: timeSlotId,
+      order_status: { in: PRE_DEPART_ORDER_STATUSES },
+    },
+    include: { order_products: true },
+  });
+  for (const order of remainingPreDepart) {
+    if (updatedOrders.some(u => u.id === order.id)) continue;
+    const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
+    if (notLoaded.length > 0) continue;
     const updated = await markOrderDelivering(order.id, { employeeId, now });
     updatedOrders.push(updated);
   }
@@ -298,12 +332,59 @@ async function endTimeSlotTrip(timeSlotId, { employeeId } = {}) {
   return { timeSlot: updatedSlot, lorryTrip };
 }
 
+// ─── Heal stranded orders on already-departed slots ─────────────────────────
+
+/**
+ * Orders can remain Scheduled/Loaded/Pending on a slot that is already
+ * out_for_delivery when they are assigned or rescheduled after depart.
+ * Sync them to Delivering once fully loaded.
+ */
+async function healStrandedOrdersOnDepartedSlots({ employeeId, deliveryTeamIds } = {}) {
+  const slotFilter = { slot_status: 'out_for_delivery' };
+  if (deliveryTeamIds?.length) {
+    slotFilter.delivery_team_id = { in: deliveryTeamIds };
+  }
+
+  const stranded = await prisma.orders.findMany({
+    where: {
+      order_status: { in: PRE_DEPART_ORDER_STATUSES },
+      time_slots: slotFilter,
+    },
+    include: { order_products: true },
+  });
+
+  const now = new Date();
+  const healed = [];
+  const skipped = [];
+
+  for (const order of stranded) {
+    const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
+    if (notLoaded.length > 0) {
+      skipped.push({ id: order.id, reason: 'not_loaded', unloadedCount: notLoaded.length });
+      continue;
+    }
+    const updated = await markOrderDelivering(order.id, { employeeId, now });
+    healed.push(updated);
+  }
+
+  // #region agent log
+  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'deliveryLifecycleService.js:healStrandedOrders',message:'Heal stranded on departed slots',data:{strandedCount:stranded.length,healed:healed.map(o=>({id:o.id,slot:o.time_slot_id})),skipped},timestamp:Date.now(),hypothesisId:'A,C,D',runId:'depart-fix'})}).catch(()=>{});
+  // #endregion
+
+  if (healed.length > 0) {
+    console.log(`[Lifecycle] Healed ${healed.length} stranded order(s) on departed slot(s)`);
+  }
+
+  return healed;
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
   // Constants
   END_TRIP_TERMINAL_STATUSES,
   ACTIVE_ORDER_STATUSES,
+  PRE_DEPART_ORDER_STATUSES,
   // Helpers
   isEndTripTerminal,
   ordersBlockingEndTrip,
@@ -313,4 +394,5 @@ module.exports = {
   markOrderDelivered,
   departTimeSlot,
   endTimeSlotTrip,
+  healStrandedOrdersOnDepartedSlots,
 };

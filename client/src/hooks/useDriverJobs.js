@@ -29,6 +29,9 @@ export function useDriverJobs(employeeId, refreshInterval = 30000) {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      // #region agent log
+      fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'useDriverJobs.js:fetchJobs',message:'Client received driver jobs',data:{employeeId,jobCount:(data.jobs||[]).length,jobs:(data.jobs||[]).map(j=>({id:j.id,status:j.status,assigned_date:j.assigned_date}))},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       setJobs(data.jobs || []);
       setSlots(data.slots || []);
       setError(null);

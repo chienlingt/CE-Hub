@@ -7,6 +7,7 @@ import {
 } from '../../../services/informationService';
 import { Calendar, Truck, Package, Users, MapPin, Edit, Save, X, Plus, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
+import { toLocalDateKey } from '../../../utils/dateKey';
 
 // Helper for generating days in a given month
 function getMonthDates(year, month) {
@@ -201,7 +202,7 @@ export default function Schedule() {
     return dates;
   };
 
-  const formatDate = (date) => (date instanceof Date ? date.toISOString().split('T')[0] : String(date));
+  const formatDate = (date) => toLocalDateKey(date);
   const formatTimeRange = (start, end) => {
     if (!start || !end) return 'Not scheduled';
     const startDate = new Date(start);
@@ -216,7 +217,7 @@ export default function Schedule() {
       const slotDate = field.timeSlotDate(slot);
       // slotDate might be already in ISO or Date or string; normalize
       if (!slotDate) return false;
-      if (typeof slotDate === 'string') return slotDate.startsWith(dateStr);
+      if (typeof slotDate === 'string') return toLocalDateKey(slotDate) === dateStr;
       if (slotDate instanceof Date) return formatDate(slotDate) === dateStr;
       return String(slotDate) === dateStr;
     }).sort((a, b) => {
@@ -397,6 +398,10 @@ export default function Schedule() {
       } else {
         await addTimeSlot(slotData);
       }
+
+      // #region agent log
+      fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'Schedule.js:handleSaveEdit',message:'Time slot saved',data:{savedDate:slotData.date,selectedDateLocal:formatDate(selectedDate),selectedDateRaw:selectedDate?.toString?.()},timestamp:Date.now(),hypothesisId:'A',runId:'date-fix'})}).catch(()=>{});
+      // #endregion
 
       // Refresh time slots to get latest data
       const refreshedSlots = await getAllTimeSlots();

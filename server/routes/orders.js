@@ -67,6 +67,10 @@ function teamHasSomeRoles(team, keyword) {
   });
 }
 
+function isDeliveryTeamType(team) {
+  return (team?.team_type || '').toLowerCase().includes('delivery');
+}
+
 async function getTeamAssignmentCounts(teamIds, fieldName) {
   if (!teamIds.length) return new Map();
   const rows = await prisma.time_slots.groupBy({
@@ -145,7 +149,7 @@ async function ensureTimeslotAssignments(timeslotId, totalVolumeCm3) {
 
   if (!timeslot) return;
 
-  const deliveryCandidates = teams.filter(t => teamHasSomeRoles(t, 'delivery'));
+  const deliveryCandidates = teams.filter(t => isDeliveryTeamType(t) && teamHasSomeRoles(t, 'delivery'));
   const warehouseCandidates = teams.filter(t => teamHasAllRoles(t, 'storekeeper'));
 
   const deliveryCounts = await getTeamAssignmentCounts(deliveryCandidates.map(t => t.id), 'delivery_team_id');
@@ -1176,6 +1180,11 @@ router.patch('/:id', async (req, res) => {
     if (previousTimeSlotId && previousTimeSlotId !== time_slot_id) {
       await updateTimeslotResources(previousTimeSlotId);
     }
+
+    const slotAfterUpdate = await prisma.time_slots.findUnique({ where: { id: time_slot_id }, select: { delivery_team_id: true, date: true } });
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'orders.js:PATCH:scheduled',message:'Order scheduled via admin PATCH',data:{orderId:req.params.id,orderStatus:updatedOrder.order_status,employee_id:updatedOrder.employee_id,time_slot_id:updatedOrder.time_slot_id,slotDeliveryTeamId:slotAfterUpdate?.delivery_team_id,slotDate:slotAfterUpdate?.date,scheduledStart:updatedOrder.scheduled_start_date_time?.toISOString?.()??null},timestamp:Date.now(),hypothesisId:'A,B,D',runId:'post-fix'})}).catch(()=>{});
+    // #endregion
 
     console.log(`Order ${req.params.id} reassigned to timeslot ${time_slot_id}`);
     return res.json({ success: true, order: updatedOrder });

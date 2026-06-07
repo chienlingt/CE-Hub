@@ -1,15 +1,9 @@
 // client/src/components/driver/DateCalendarModal.js
 import { useState } from 'react';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-function toDateKey(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 /**
  * @param {{
@@ -24,7 +18,7 @@ export default function DateCalendarModal({ value, onChange, onClose }) {
     () => new Date(initial.getFullYear(), initial.getMonth(), 1)
   );
 
-  const today = toDateKey(new Date());
+  const today = todayLocalDateKey();
   const year = viewMonth.getFullYear();
   const month = viewMonth.getMonth();
   const monthLabel = viewMonth.toLocaleDateString('en-MY', { month: 'long', year: 'numeric' });
@@ -37,7 +31,7 @@ export default function DateCalendarModal({ value, onChange, onClose }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
   function selectDay(day) {
-    onChange(toDateKey(new Date(year, month, day)));
+    onChange(toLocalDateKey(new Date(year, month, day)));
     onClose();
   }
 
@@ -87,7 +81,7 @@ export default function DateCalendarModal({ value, onChange, onClose }) {
                 return <div key={`empty-${idx}`} />;
               }
 
-              const key = toDateKey(new Date(year, month, day));
+              const key = toLocalDateKey(new Date(year, month, day));
               const isSelected = key === value;
               const isToday = key === today;
 

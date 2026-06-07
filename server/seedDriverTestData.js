@@ -40,6 +40,110 @@ const ORIGINAL_DELIVERY_TEAM_PERMISSIONS = ['delivery', 'scanning'];
 const DELIVERY_TEAM_ROLE_NAME = 'Delivery Team';
 const FALLBACK_TEAM_TYPE      = 'Delivery Team Alpha';
 
+/** Demo product catalog — clean names, upserted by product_name (no TEST-DRV prefix). */
+const PRODUCT_CATALOG = {
+  washer: {
+    name:            'MIDEA MD7388 7kg Front Load Washer',
+    installRequired: false,
+    length: 60, width: 65, height: 85,
+  },
+  dryer: {
+    name:            'Electrolux EDV805JQSA 8kg Dryer',
+    installRequired: false,
+    length: 60, width: 65, height: 85,
+  },
+  tv: {
+    name:            'Samsung 55" CU7000 Crystal UHD TV',
+    installRequired: false,
+    fragile:         true,
+    length: 140, width: 20, height: 90,
+  },
+  fridge: {
+    name:            'LG GT-B372SLCN 372L Top Freezer Fridge',
+    installRequired: false,
+    length: 70, width: 70, height: 170,
+  },
+  microwave: {
+    name:            'Panasonic NN-ST25JWMPQ Microwave',
+    installRequired: false,
+    length: 50, width: 40, height: 30,
+  },
+  soundbar: {
+    name:            'Sony HT-S100F Soundbar',
+    installRequired: false,
+    length: 90, width: 10, height: 10,
+  },
+  riceCooker: {
+    name:            'Toshiba RC-18DRNK Rice Cooker',
+    installRequired: false,
+    length: 30, width: 30, height: 25,
+  },
+  sofa: {
+    name:            'IKEA EKTORP 3-Seat Sofa',
+    installRequired: false,
+    length: 220, width: 95, height: 85,
+  },
+  wardrobe: {
+    name:            'IKEA PAX Wardrobe 150cm (Install)',
+    installRequired: true,
+    length: 150, width: 60, height: 200,
+  },
+  oven: {
+    name:            'Electrolux EOB2400AOX Built-in Oven (Install)',
+    installRequired: true,
+    length: 60, width: 60, height: 60,
+  },
+};
+
+/** Short realistic customer names — unique phones for distinct records. */
+const CUSTOMER_ROSTER = [
+  {
+    key:      'ben',
+    name:     'Ben Tan',
+    phone:    '60101234001',
+    address:  '12 Jalan SS2/24, Petaling Jaya',
+    city:     'Petaling Jaya',
+    postcode: '47300',
+    state:    'Selangor',
+  },
+  {
+    key:      'siti',
+    name:     'Siti Aminah',
+    phone:    '60101234002',
+    address:  '8 Lorong Maarof, Bangsar',
+    city:     'Kuala Lumpur',
+    postcode: '59000',
+    state:    'Wilayah Persekutuan',
+  },
+  {
+    key:      'lee',
+    name:     'Lee Wei',
+    phone:    '60101234003',
+    address:  '45 Jalan USJ 10/1, Subang Jaya',
+    city:     'Subang Jaya',
+    postcode: '47620',
+    state:    'Selangor',
+  },
+  {
+    key:      'raj',
+    name:     'Raj Kumar',
+    phone:    '60101234004',
+    address:  '3 Jalan Tun Razak, KLCC',
+    city:     'Kuala Lumpur',
+    postcode: '50450',
+    state:    'Wilayah Persekutuan',
+  },
+  {
+    key:      'hassan',
+    name:     'Hassan Ali',
+    phone:    '60101234005',
+    address:  '27 Jalan Ampang Hilir, Ampang',
+    city:     'Ampang',
+    postcode: '55000',
+    state:    'Selangor',
+  },
+];
+
 function todayAt(hour, minute = 0) {
   return dayjs().hour(hour).minute(minute).second(0).millisecond(0).toDate();
 }
@@ -233,39 +337,62 @@ async function upsertTruck({ plateNo, driverId = null, assistantId = null }) {
 
 // ── Products & Customers ──────────────────────────────────────────────────────
 
-async function createProduct(name, installRequired) {
-  let product = await prisma.products.findFirst({ where: { product_name: name } });
+async function createProduct(spec) {
+  let product = await prisma.products.findFirst({ where: { product_name: spec.name } });
+  const data = {
+    product_name:                   spec.name,
+    installer_team_required_flag:   spec.installRequired ?? false,
+    fragile_flag:                   spec.fragile ?? false,
+    available_flag:                 true,
+    package_length_cm:              spec.length ?? 100,
+    package_width_cm:               spec.width ?? 50,
+    package_height_cm:              spec.height ?? 30,
+    ...(spec.installRequired ? {
+      estimated_installation_time_min: 60,
+      estimated_installation_time_max: 120,
+    } : {}),
+  };
   if (!product) {
-    product = await prisma.products.create({
-      data: {
-        product_name:                 name,
-        installer_team_required_flag: installRequired,
-        available_flag:               true,
-        package_length_cm:            100,
-        package_width_cm:             50,
-        package_height_cm:            30,
-      },
-    });
+    product = await prisma.products.create({ data });
   }
   return product;
 }
 
-async function createCustomer(name, phone) {
+async function seedProductCatalog() {
+  const catalog = {};
+  for (const [key, spec] of Object.entries(PRODUCT_CATALOG)) {
+    catalog[key] = await createProduct(spec);
+  }
+  console.log(`[seed] Product catalog: ${Object.keys(catalog).length} items`);
+  return catalog;
+}
+
+async function createCustomer({ name, phone, address, city, postcode, state }) {
   let customer = await prisma.customers.findFirst({ where: { phone } });
+  const data = {
+    full_name: name,
+    phone,
+    email:     `${name.toLowerCase().replace(/[^a-z0-9]+/g, '.')}@demo.local`,
+    address,
+    city,
+    postcode,
+    state,
+  };
   if (!customer) {
-    customer = await prisma.customers.create({
-      data: {
-        full_name: name,
-        phone,
-        email:     `${name.toLowerCase().replace(/\s+/g, '.')}@test.local`,
-        address:   '12 Jalan Test, Taman Sample',
-        city:      'Petaling Jaya',
-        postcode:  '47400',
-        state:     'Selangor',
-      },
-    });
+    customer = await prisma.customers.create({ data });
+  } else {
+    customer = await prisma.customers.update({ where: { id: customer.id }, data });
   }
   return customer;
+}
+
+async function seedCustomers() {
+  const customers = {};
+  for (const c of CUSTOMER_ROSTER) {
+    customers[c.key] = await createCustomer(c);
+  }
+  console.log(`[seed] Customers: ${CUSTOMER_ROSTER.map(c => c.name).join(', ')}`);
+  return customers;
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -307,10 +434,15 @@ async function createOrder({
   customerId,
   slotId,
   scheduledAt,
-  product,
+  products,
   pickingStatus,
   extra = {},
 }) {
+  const customer = await prisma.customers.findUnique({
+    where: { id: customerId },
+    select: { address: true, city: true, postcode: true, state: true },
+  });
+
   const order = await prisma.orders.create({
     data: {
       odoo_order_ref:            odooRef,
@@ -320,10 +452,10 @@ async function createOrder({
       time_slot_id:              slotId,
       scheduled_start_date_time: scheduledAt,
       scheduled_end_date_time:   dayjs(scheduledAt).add(2, 'hour').toDate(),
-      delivery_address:          '12 Jalan Test, Taman Sample, 47400 Petaling Jaya',
-      delivery_city:             'Petaling Jaya',
-      delivery_postcode:         '47400',
-      delivery_state:            'Selangor',
+      delivery_address:          customer?.address ?? '12 Jalan SS2/24, Petaling Jaya',
+      delivery_city:             customer?.city ?? 'Petaling Jaya',
+      delivery_postcode:         customer?.postcode ?? '47300',
+      delivery_state:            customer?.state ?? 'Selangor',
       delivery_notes:            label,
       assignment_status:         'approved',
       created_at:                new Date(),
@@ -332,18 +464,34 @@ async function createOrder({
     },
   });
 
-  await prisma.order_products.create({
-    data: {
-      order_id:       order.id,
-      product_id:     product.id,
-      quantity:       1,
-      picking_status: pickingStatus,
-      ...(pickingStatus === 'unloaded' ? { unloaded_at: new Date() } : {}),
-      ...(pickingStatus === 'loaded'   ? { loaded_at:   new Date() } : {}),
-    },
-  });
+  for (const line of products) {
+    const ps = line.pickingStatus ?? pickingStatus;
+    await prisma.order_products.create({
+      data: {
+        order_id:       order.id,
+        product_id:     line.product.id,
+        quantity:       1,
+        picking_status: ps,
+        service_type:   line.product.installer_team_required_flag ? 'delivery_installation' : 'delivery_only',
+        ...(ps === 'unloaded' ? { unloaded_at: new Date() } : {}),
+        ...(ps === 'loaded'   ? { loaded_at:   new Date() } : {}),
+      },
+    });
+  }
 
   return order;
+}
+
+function resolveProducts(catalog, catalogKeys, defaultPickingStatus) {
+  return catalogKeys.map(entry => {
+    if (typeof entry === 'string') {
+      return { product: catalog[entry], pickingStatus: defaultPickingStatus };
+    }
+    return {
+      product:       catalog[entry.key],
+      pickingStatus: entry.pickingStatus ?? defaultPickingStatus,
+    };
+  });
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────
@@ -445,14 +593,8 @@ async function main() {
   });
 
   // ── Products & customers ──────────────────────────────────────────────────
-  const productStd     = await createProduct(`${TEST_PREFIX} Standard Sofa`, false);
-  const productInstall = await createProduct(`${TEST_PREFIX} Wardrobe (Install)`, true);
-
-  const cust1 = await createCustomer('Ahmad Test',  '601156751977');
-  const cust2 = await createCustomer('Siti Test',   '601156751977');
-  const cust3 = await createCustomer('Lee Test',    '601156751977');
-  const cust4 = await createCustomer('Priya Test',  '601156751977');
-  const cust5 = await createCustomer('Hassan Test', '601156751977');
+  const catalog   = await seedProductCatalog();
+  const customers = await seedCustomers();
 
   const date = todayStr();
 
@@ -515,57 +657,57 @@ async function main() {
 
     {
       odooRef:       `${TEST_PREFIX}-SCHED`,
-      label:         '[TEST 1] Leave warehouse → Delivering (no POD)',
+      label:         '[TEST 1] Leave warehouse → Delivering (washer + microwave bundle)',
       status:        'Scheduled',
       driverId:      driver.id,
-      customerId:    cust1.id,
+      customerKey:   'ben',
       slotId:        slotScheduled.id,
       hour:          9,
-      product:       productStd,
+      catalogKeys:   ['washer', 'microwave'],
       pickingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-COMPLETE`,
-      label:         '[TEST 2] Delivering → Completed (POD, no install)',
+      label:         '[TEST 2] Delivering → Completed (POD, Samsung TV)',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust1.id,
+      customerKey:   'ben',
       slotId:        null,
       hour:          10,
-      product:       productStd,
+      catalogKeys:   ['tv'],
       pickingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-INSTALL`,
-      label:         '[TEST 3] Delivering → Delivered (install required product)',
+      label:         '[TEST 3] Delivering → Delivered (IKEA PAX wardrobe install)',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust2.id,
+      customerKey:   'siti',
       slotId:        null,
       hour:          11,
-      product:       productInstall,
+      catalogKeys:   ['wardrobe'],
       pickingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-BLOCKED`,
-      label:         '[TEST 4] Scan gate blocked (items still loaded, not unloaded)',
+      label:         '[TEST 4] Scan gate blocked (LG fridge still loaded)',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust2.id,
+      customerKey:   'siti',
       slotId:        null,
       hour:          12,
-      product:       productStd,
+      catalogKeys:   ['fridge'],
       pickingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-TEAM`,
-      label:         '[TEST 5] Team-assigned (employee_id null, visible via delivery team)',
+      label:         '[TEST 5] Team-assigned (TV + soundbar bundle, team slot match)',
       status:        'Delivering',
       driverId:      null,
-      customerId:    cust3.id,
+      customerKey:   'lee',
       slotId:        slotActive.id,
       hour:          13,
-      product:       productStd,
+      catalogKeys:   ['tv', 'soundbar'],
       pickingStatus: 'unloaded',
     },
     {
@@ -573,10 +715,10 @@ async function main() {
       label:         '[TEST 6] Update→Issue → Cases → Delivery Issues',
       status:        'Issue',
       driverId:      driver.id,
-      customerId:    cust3.id,
+      customerKey:   'lee',
       slotId:        null,
       hour:          14,
-      product:       productStd,
+      catalogKeys:   ['sofa'],
       pickingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
@@ -588,13 +730,13 @@ async function main() {
     },
     {
       odooRef:       `${TEST_PREFIX}-DONE`,
-      label:         '[TEST 7] Already completed (Completed tab + admin view)',
+      label:         '[TEST 7] Already completed (MIDEA washer, Completed tab)',
       status:        'Completed',
       driverId:      driver.id,
-      customerId:    cust1.id,
+      customerKey:   'ben',
       slotId:        null,
       hour:          8,
-      product:       productStd,
+      catalogKeys:   ['washer'],
       pickingStatus: 'unloaded',
       extra: {
         delivered_by:           driver.id,
@@ -605,24 +747,24 @@ async function main() {
     },
     {
       odooRef:       `${TEST_PREFIX}-AUTOCLOSE`,
-      label:         '[TEST 8] Auto-depart + auto-close slot (last order on scheduled slot)',
+      label:         '[TEST 8] Auto-depart + auto-close slot (Electrolux dryer)',
       status:        'Scheduled',
       driverId:      driver.id,
-      customerId:    cust2.id,
+      customerKey:   'siti',
       slotId:        slotScheduled.id,
       hour:          15,
-      product:       productStd,
+      catalogKeys:   ['dryer'],
       pickingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-PARTIAL-A`,
-      label:         '[TEST 9a] Slot partial close — already Completed',
+      label:         '[TEST 9a] Slot partial close — Panasonic microwave done',
       status:        'Completed',
       driverId:      driver.id,
-      customerId:    cust1.id,
+      customerKey:   'ben',
       slotId:        slotActive.id,
       hour:          16,
-      product:       productStd,
+      catalogKeys:   ['microwave'],
       pickingStatus: 'unloaded',
       extra: {
         delivered_by:           driver.id,
@@ -631,13 +773,13 @@ async function main() {
     },
     {
       odooRef:       `${TEST_PREFIX}-PARTIAL-B`,
-      label:         '[TEST 9b] Slot partial close — complete this to auto-close slot',
+      label:         '[TEST 9b] Slot partial close — fridge + rice cooker bundle',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust3.id,
+      customerKey:   'lee',
       slotId:        slotActive.id,
       hour:          17,
-      product:       productStd,
+      catalogKeys:   ['fridge', 'riceCooker'],
       pickingStatus: 'unloaded',
     },
     {
@@ -645,10 +787,10 @@ async function main() {
       label:         '[TEST 10] Full driver Report → Cases → Delivery Issues (open)',
       status:        'Issue',
       driverId:      driver.id,
-      customerId:    cust1.id,
+      customerKey:   'ben',
       slotId:        null,
       hour:          18,
-      product:       productStd,
+      catalogKeys:   ['oven'],
       pickingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
@@ -665,10 +807,10 @@ async function main() {
       label:         '[TEST 11] Resolved driver Report → Delivery Issues (resolved filter)',
       status:        'Issue',
       driverId:      driver.id,
-      customerId:    cust2.id,
+      customerKey:   'siti',
       slotId:        null,
       hour:          19,
-      product:       productStd,
+      catalogKeys:   ['dryer'],
       pickingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
@@ -684,10 +826,10 @@ async function main() {
       label:         '[TEST 12] Pre-escalated order → Cases → Delivery Issues (Escalations section)',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust2.id,
+      customerKey:   'siti',
       slotId:        null,
       hour:          20,
-      product:       productStd,
+      catalogKeys:   ['tv'],
       pickingStatus: 'unloaded',
       extra: {
         is_complaint_submitted:     true,
@@ -703,10 +845,10 @@ async function main() {
       label:         '[TEST 13] A6 ops failure (issue_reason only → Order Issues only)',
       status:        'Delivering',
       driverId:      driver.id,
-      customerId:    cust3.id,
+      customerKey:   'lee',
       slotId:        null,
       hour:          21,
-      product:       productStd,
+      catalogKeys:   ['soundbar'],
       pickingStatus: 'unloaded',
       extra: {
         issue_reason: 'Access Denied',
@@ -717,29 +859,25 @@ async function main() {
     // ── Live Deliveries (A.3.7+) scenarios — slot C / slotDemo ──────────────
 
     {
-      // Shows in admin drawer as "Delivering" with progress 1/2
-      // Admin can see: Razif (Trip lead+Truck driver, has phone), Kamal (Assistant+Team, has phone),
-      //                Nurul (Team, no phone → disabled buttons)
       odooRef:       `${TEST_PREFIX}-LIVE-A`,
-      label:         '[TEST 14a] Live Ops drawer — in-progress order (Delivering)',
+      label:         '[TEST 14a] Live Ops drawer — washer + dryer in progress',
       status:        'Delivering',
       driverId:      razif.id,
-      customerId:    cust4.id,
+      customerKey:   'raj',
       slotId:        slotDemo.id,
       hour:          14,
-      product:       productStd,
+      catalogKeys:   ['washer', 'dryer'],
       pickingStatus: 'unloaded',
     },
     {
-      // Already completed — contributes to progress bar (1 of 2 done)
       odooRef:       `${TEST_PREFIX}-LIVE-B`,
-      label:         '[TEST 14b] Live Ops drawer — completed order (progress bar 1/2)',
+      label:         '[TEST 14b] Live Ops drawer — IKEA sofa completed (progress 1/2)',
       status:        'Completed',
       driverId:      razif.id,
-      customerId:    cust5.id,
+      customerKey:   'hassan',
       slotId:        slotDemo.id,
       hour:          15,
-      product:       productStd,
+      catalogKeys:   ['sofa'],
       pickingStatus: 'unloaded',
       extra: {
         delivered_by:           razif.id,
@@ -757,10 +895,10 @@ async function main() {
       label:         s.label,
       status:        s.status,
       driverId:      s.driverId,
-      customerId:    s.customerId,
+      customerId:    customers[s.customerKey].id,
       slotId:        s.slotId,
       scheduledAt:   todayAt(s.hour),
-      product:       s.product,
+      products:      resolveProducts(catalog, s.catalogKeys, s.pickingStatus),
       pickingStatus: s.pickingStatus,
       extra: {
         salesperson_name:  DEFAULT_SALESPERSON.name,
@@ -768,7 +906,11 @@ async function main() {
         ...(s.extra || {}),
       },
     });
-    created.push({ odooRef: s.odooRef, id: order.id, label: s.label });
+    const itemNames = s.catalogKeys
+      .map(k => (typeof k === 'string' ? PRODUCT_CATALOG[k]?.name : PRODUCT_CATALOG[k.key]?.name))
+      .filter(Boolean)
+      .join(', ');
+    created.push({ odooRef: s.odooRef, id: order.id, label: s.label, items: itemNames });
   }
 
   // ── Integration outbox (admin badge test for Completed order) ─────────────
@@ -828,9 +970,9 @@ async function main() {
   console.log(`  Nurul (delivery team, no phone)   id: ${nurul.id.slice(0, 8)}…  phone: null (buttons disabled)`);
   console.log(`  slotDemo id: ${slotDemo.id}`);
 
-  console.log('\n--- Test orders (look for delivery_notes label in dashboard) ---');
+  console.log('\n--- Test orders (delivery_notes label + items) ---');
   for (const o of created) {
-    console.log(`  ${o.odooRef.padEnd(28)}  ${o.id.slice(0, 8)}…  ${o.label}`);
+    console.log(`  ${o.odooRef.padEnd(28)}  ${o.items}`);
   }
 
   console.log('\n--- What to test ---');

@@ -19,10 +19,11 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 
 import { API_BASE_URL as API_BASE_URL } from '../../utils/apiBaseUrl';
+import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 
 const WarehouseLoadingSchedule = () => {
   const { currentUser } = useAuth();
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(todayLocalDateKey());
   const [selectedTeam, setSelectedTeam] = useState('all');
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
   const [selectedTruck, setSelectedTruck] = useState('all');
@@ -196,7 +197,7 @@ const WarehouseLoadingSchedule = () => {
 
   const lorryTrips = timeSlots
     .filter(ts => field.timeSlotTruckId(ts)) // Only slots with assigned trucks
-    .filter(ts => field.timeSlotDate(ts) === selectedDate) // Filter by selected date
+    .filter(ts => toLocalDateKey(field.timeSlotDate(ts)) === selectedDate) // Filter by selected date
     .map(ts => {
       // Find orders for this timeslot
       const slotOrders = orders.filter(o => field.orderTimeSlotId(o) === field.timeSlotId(ts));

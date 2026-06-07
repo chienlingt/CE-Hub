@@ -14,6 +14,7 @@ import {
   User
 } from 'lucide-react';
 import { getSlotStatusStyle, getSlotStatusLabel } from '../../utils/slotStatusHelpers';
+import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 import { useEffect, useState } from 'react';
 import LoadingChecklist from '../common/LoadingChecklist';
 import { ScannerSection } from '../common/ScanStation';
@@ -43,7 +44,7 @@ export default function DeliverySchedule() {
   const [assignments, setAssignments] = useState([]);
   const [trucks, setTrucks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(todayLocalDateKey());
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
   const [endingTrip, setEndingTrip] = useState(null); // timeSlotId being ended
@@ -209,7 +210,9 @@ export default function DeliverySchedule() {
     const scheduledStart = field.orderScheduledStart(order);
     const timeSlot = timeSlots.find(ts => String(field.timeSlotId(ts)) === String(field.orderTimeSlotId(order)));
     const slotDate = timeSlot ? field.timeSlotDate(timeSlot) : null;
-    const orderDate = slotDate || (scheduledStart ? new Date(scheduledStart).toISOString().split('T')[0] : null);
+    const orderDate = slotDate
+      ? toLocalDateKey(slotDate)
+      : (scheduledStart ? toLocalDateKey(scheduledStart) : null);
     if (!orderDate) return false;
     if (orderDate !== selectedDate) return false;
     if (selectedTeam === 'all') return true;

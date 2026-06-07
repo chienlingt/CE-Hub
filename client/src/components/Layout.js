@@ -401,9 +401,9 @@ const Layout = () => {
           {isSidebarOpen && (
             <div className="flex items-center space-x-2">
               <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-sm">T</span>
+                <span className="text-white font-bold text-sm">CE</span>
               </div>
-              <span className="text-xl font-bold text-gray-800 truncate">TBMDelivery</span>
+              <span className="text-xl font-bold text-gray-800 truncate">CE Hub</span>
             </div>
           )}
           <button onClick={() => setIsSidebarOpen(prev => !prev)} className="p-2 rounded-lg hover:bg-gray-100">

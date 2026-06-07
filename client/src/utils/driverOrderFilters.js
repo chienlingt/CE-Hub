@@ -1,6 +1,7 @@
 // client/src/utils/driverOrderFilters.js
 // Client-side filtering helpers for the driver dashboard.
 
+import { toLocalDateKey } from './dateKey';
 import { driverTab } from './driverStatusMap';
 
 /** Fixed appointment-time windows for driver dashboard filtering. */
@@ -12,8 +13,7 @@ export const DRIVER_APPOINTMENT_WINDOWS = [
 
 /** Normalize slot date to yyyy-mm-dd for comparison (Leave warehouse banner). */
 export function slotDateKey(date) {
-  if (!date) return '';
-  return String(date).slice(0, 10);
+  return toLocalDateKey(date);
 }
 
 function parseClockToMinutes(clock) {
