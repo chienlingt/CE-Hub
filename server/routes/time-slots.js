@@ -63,16 +63,84 @@ router.get('/:id/status', async (req, res) => {
     const slot = await prisma.time_slots.findUnique({
       where: { id: req.params.id },
       include: {
-        truck:         { select: { plate_no: true } },
-        delivery_team: { select: { id: true, team_type: true } },
-        lorry_trip:    true,
+        truck: {
+          select: {
+            plate_no: true,
+            employees_trucks_driver_idToemployees: {
+              select: { id: true, name: true, display_name: true, contact_number: true },
+            },
+            employees_trucks_assistant_idToemployees: {
+              select: { id: true, name: true, display_name: true, contact_number: true },
+            },
+          },
+        },
+        delivery_team: {
+          select: {
+            id: true,
+            team_type: true,
+            assignments: {
+              select: {
+                employee: { select: { id: true, name: true, display_name: true, contact_number: true } },
+              },
+            },
+          },
+        },
+        lorry_trip: true,
         orders: {
-          select: { id: true, order_status: true, delivery_address: true },
+          select: {
+            id: true,
+            order_status: true,
+            delivery_address: true,
+            odoo_order_ref: true,
+            customers: { select: { full_name: true } },
+          },
+          orderBy: { truck_loading_sequence: 'asc' },
         },
       },
     });
 
     if (!slot) return res.status(404).json({ error: 'Time slot not found' });
+
+    // Resolve started_by employee (who triggered depart)
+    let startedByEmployee = null;
+    if (slot.started_by) {
+      startedByEmployee = await prisma.employees.findUnique({
+        where: { id: slot.started_by },
+        select: { id: true, name: true, display_name: true, contact_number: true },
+      }).catch(() => null);
+    }
+
+    // Build deduped contacts array
+    // Sources: started_by, truck driver, truck assistant, delivery team members
+    const contactMap = new Map();
+    const addContact = (emp, role) => {
+      if (!emp?.id) return;
+      if (contactMap.has(emp.id)) {
+        contactMap.get(emp.id).roles.push(role);
+      } else {
+        contactMap.set(emp.id, {
+          id:    emp.id,
+          name:  emp.display_name || emp.name || 'Unknown',
+          phone: emp.contact_number || null,
+          roles: [role],
+        });
+      }
+    };
+
+    if (startedByEmployee) addContact(startedByEmployee, 'Trip lead');
+    if (slot.truck?.employees_trucks_driver_idToemployees)    addContact(slot.truck.employees_trucks_driver_idToemployees,    'Truck driver');
+    if (slot.truck?.employees_trucks_assistant_idToemployees) addContact(slot.truck.employees_trucks_assistant_idToemployees, 'Assistant');
+    for (const a of (slot.delivery_team?.assignments || [])) {
+      if (a.employee) addContact(a.employee, 'Delivery team');
+    }
+
+    // Sort: Trip lead first, then truck driver/assistant, then team
+    const roleOrder = ['Trip lead', 'Truck driver', 'Assistant', 'Delivery team'];
+    const contacts = Array.from(contactMap.values()).sort((a, b) => {
+      const aMin = Math.min(...a.roles.map(r => roleOrder.indexOf(r)).filter(i => i >= 0));
+      const bMin = Math.min(...b.roles.map(r => roleOrder.indexOf(r)).filter(i => i >= 0));
+      return aMin - bMin;
+    });
 
     const totalOrders     = slot.orders.length;
     const deliveredOrders = slot.orders.filter(o => ['Delivered', 'Completed'].includes(o.order_status)).length;
@@ -86,13 +154,20 @@ router.get('/:id/status', async (req, res) => {
       departed_at:      slot.departed_at,
       ended_at:         slot.ended_at,
       truck_plate:      slot.truck?.plate_no || null,
-      delivery_team:    slot.delivery_team   || null,
+      delivery_team:    { id: slot.delivery_team?.id || null, team_type: slot.delivery_team?.team_type || null },
       lorry_trip:       slot.lorry_trip      || null,
+      contacts,
       orders: {
         total:     totalOrders,
         delivered: deliveredOrders,
         remaining: totalOrders - deliveredOrders,
-        items:     slot.orders,
+        items: slot.orders.map(o => ({
+          id:               o.id,
+          order_status:     o.order_status,
+          delivery_address: o.delivery_address,
+          odoo_order_ref:   o.odoo_order_ref || null,
+          customer_name:    o.customers?.full_name || null,
+        })),
       },
     });
   } catch (err) {

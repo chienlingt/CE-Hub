@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Truck, Package, Clock, Users, MapPin, CheckCircle, RotateCcw, Maximize, Info, Calendar, User, Play, Check, Navigation } from 'lucide-react';
+import { getSlotStatusStyle, getSlotStatusLabel } from '../../utils/slotStatusHelpers';
 import LoadingChecklist from '../common/LoadingChecklist';
 import { ScannerSection } from '../common/ScanStation';
 import {
@@ -390,24 +391,7 @@ const WarehouseLoadingSchedule = () => {
     });
   };
 
-  // A.3.1a: slot status badge colours
-  const getSlotStatusStyle = (slotStatus) => {
-    switch (slotStatus) {
-      case 'out_for_delivery': return 'bg-orange-100 text-orange-800 border border-orange-200';
-      case 'completed':        return 'bg-green-100 text-green-800 border border-green-200';
-      case 'scheduled':
-      default:                 return 'bg-blue-100 text-blue-800 border border-blue-200';
-    }
-  };
-
-  const getSlotStatusLabel = (slotStatus) => {
-    switch (slotStatus) {
-      case 'out_for_delivery': return 'Out for Delivery';
-      case 'completed':        return 'Completed';
-      case 'scheduled':
-      default:                 return 'Scheduled';
-    }
-  };
+  // A.3.1a: slot status badge helpers — imported from slotStatusHelpers.js
 
   const getStatusColor = (status) => {
     switch (status) {

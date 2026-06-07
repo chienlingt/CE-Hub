@@ -1,66 +1,27 @@
 // client/src/components/admin/dashboard/ActiveTripsPanel.js
 //
-// A.3.7a: Live overview of all slots currently out_for_delivery.
-// Polls GET /api/time-slots/active every 30s.
-// timeSlotId is the canonical trip key — no lorry_trips.id dependency.
+// A.3.7a: Compact teaser on Dashboard Overview (max 3 trips).
+// Full list + drill-down lives at /dashboard/live-ops.
 
-import { useEffect, useRef, useState } from 'react';
-import { CheckCircle, Clock, Navigation, RefreshCw, Truck } from 'lucide-react';
-import { API_BASE_URL } from '../../../utils/apiBaseUrl';
-const POLL_INTERVAL_MS = 30_000;
+import { Navigation, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useActiveTrips } from '../../../hooks/useActiveTrips';
+import ActiveTripCard from '../liveOps/ActiveTripCard';
+import LiveOpsEmptyState from '../liveOps/LiveOpsEmptyState';
+
+const MAX_PREVIEW = 3;
 
 export default function ActiveTripsPanel() {
-  const [trips, setTrips]       = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [error, setError]       = useState(null);
-  const timerRef                = useRef(null);
+  const navigate = useNavigate();
+  const { trips, loading, error, lastUpdated } = useActiveTrips();
 
-  const fetchActiveTrips = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/time-slots/active`, {
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setTrips(Array.isArray(data) ? data : []);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch (err) {
-      console.error('[ActiveTripsPanel] fetch failed:', err.message);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const formatTime = (date) => {
+    if (!date) return null;
+    return date.toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false });
   };
 
-  useEffect(() => {
-    fetchActiveTrips();
-    timerRef.current = setInterval(fetchActiveTrips, POLL_INTERVAL_MS);
-    return () => clearInterval(timerRef.current);
-  }, []);
-
-  const progressPct = (trip) => {
-    const total = trip.orders?.total || 0;
-    if (total === 0) return 0;
-    return Math.round(((trip.orders?.delivered || 0) / total) * 100);
-  };
-
-  const formatTime = (iso) => {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false });
-  };
-
-  if (loading) {
-    return (
-      <div className="bg-white rounded-xl shadow-sm p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Trips</h2>
-        <div className="flex items-center justify-center h-32">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500" />
-        </div>
-      </div>
-    );
-  }
+  const preview  = trips.slice(0, MAX_PREVIEW);
+  const overflow = trips.length - MAX_PREVIEW;
 
   return (
     <div className="bg-white rounded-xl shadow-sm p-6">
@@ -78,11 +39,10 @@ export default function ActiveTripsPanel() {
         <div className="flex items-center gap-3 text-xs text-gray-400">
           {lastUpdated && <span>Updated {formatTime(lastUpdated)}</span>}
           <button
-            onClick={() => { setLoading(true); fetchActiveTrips(); }}
-            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-gray-100"
+            onClick={() => navigate('/dashboard/live-ops')}
+            className="text-blue-600 hover:text-blue-800 font-medium"
           >
-            <RefreshCw className="h-3 w-3" />
-            Refresh
+            View all →
           </button>
         </div>
       </div>
@@ -93,67 +53,31 @@ export default function ActiveTripsPanel() {
         </div>
       )}
 
-      {trips.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-32 text-gray-400">
-          <Truck className="h-8 w-8 mb-2" />
-          <p className="text-sm">No trucks currently out for delivery</p>
+      {loading && trips.length === 0 && (
+        <div className="flex items-center justify-center h-32">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500" />
         </div>
-      ) : (
+      )}
+
+      {!loading && trips.length === 0 && <LiveOpsEmptyState />}
+
+      {preview.length > 0 && (
         <div className="space-y-3">
-          {trips.map(trip => {
-            const pct = progressPct(trip);
-            return (
-              <div key={trip.id} className="border border-orange-200 rounded-lg p-4 bg-orange-50">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    {/* Slot time window */}
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                      <span className="font-semibold text-gray-900 text-sm">
-                        {trip.time_window_start} – {trip.time_window_end}
-                      </span>
-                      <span className="text-xs text-gray-500">{trip.date}</span>
-                    </div>
-                    {/* Truck + team */}
-                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-600">
-                      {trip.truck_plate && (
-                        <span className="flex items-center gap-1">
-                          <Truck className="h-3 w-3" />
-                          {trip.truck_plate}
-                        </span>
-                      )}
-                      {trip.delivery_team?.team_type && (
-                        <span>{trip.delivery_team.team_type}</span>
-                      )}
-                      {trip.departed_at && (
-                        <span>Departed {formatTime(trip.departed_at)}</span>
-                      )}
-                    </div>
-                  </div>
-                  {/* Order counts */}
-                  <div className="text-right flex-shrink-0">
-                    <div className="text-sm font-bold text-orange-700">
-                      {trip.orders?.delivered ?? 0} / {trip.orders?.total ?? 0}
-                    </div>
-                    <div className="text-xs text-gray-500">delivered</div>
-                  </div>
-                </div>
-                {/* Progress bar */}
-                <div className="mt-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>{pct}% complete</span>
-                    <span>{trip.orders?.remaining ?? 0} remaining</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-orange-500 h-2 rounded-full transition-all duration-500"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+          {preview.map(trip => (
+            <ActiveTripCard
+              key={trip.id}
+              trip={trip}
+              onClick={t => navigate(`/dashboard/live-ops?trip=${t.id}`)}
+            />
+          ))}
+          {overflow > 0 && (
+            <button
+              onClick={() => navigate('/dashboard/live-ops')}
+              className="w-full py-2 text-sm text-blue-600 hover:text-blue-800 font-medium text-center border border-dashed border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+            >
+              +{overflow} more trip{overflow > 1 ? 's' : ''} — View all
+            </button>
+          )}
         </div>
       )}
     </div>

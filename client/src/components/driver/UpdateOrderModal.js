@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { X, Camera, PenLine, CheckCircle, AlertTriangle } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import PhotoPicker from './PhotoPicker';
-import { allowedTransitions, isTerminal, isIssueEditMode } from '../../utils/driverStatusMap';
+import { allowedTransitions, isTerminal, isIssueEditMode, isScheduledStatus } from '../../utils/driverStatusMap';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function apiUrl(path) {
@@ -235,6 +235,26 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
 
         {noUpdates && (
           <p className="text-center text-gray-500 py-4">No updates available for this order.</p>
+        )}
+
+        {/* Scheduled orders: departure is via Leave warehouse, not per-order status */}
+        {!editingIssue && isScheduledStatus(order.status) && (
+          <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+            {order.all_loaded ? (
+              <>
+                All items are loaded. Tap <strong>Leave warehouse</strong> at the top of the dashboard to start this trip.
+              </>
+            ) : order.time_slot_id ? (
+              <>
+                Waiting for warehouse to load items ({order.loaded_count}/{order.loading_total}).
+                Once ready, use <strong>Leave warehouse</strong> to start deliveries.
+              </>
+            ) : (
+              <>
+                This order is not on a delivery slot yet. Contact dispatch if you need to start the trip.
+              </>
+            )}
+          </div>
         )}
 
         {/* Issue edit banner */}

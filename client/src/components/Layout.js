@@ -20,6 +20,7 @@ import {
   // admin pages
   default as Overview,
 } from './admin/dashboard/Overview';
+import LiveDeliveries from './admin/liveOps/LiveDeliveries';
 import EmployeeInfo from './admin/info/EmployeeInfo';
 import BuildingInfo from './admin/info/BuildingInfo';
 import ProductInfo from './admin/info/ProductInfo';
@@ -87,9 +88,10 @@ const Layout = () => {
       icon: Home,
       route: '/dashboard',
       topNavItems: [
-        { id: 'overview', label: 'Overview', path: '', component: Overview },
-        { id: 'employee-performance', label: 'Employee Performance', path: 'employee-performance', component: EmployeePerformance },
-        { id: 'orders', label: 'Orders', path: 'order', component: OrderPerformance },
+        { id: 'overview',              label: 'Overview',            path: '',                    component: Overview          },
+        { id: 'live-ops',              label: 'Live Deliveries',     path: 'live-ops',            component: LiveDeliveries    },
+        { id: 'employee-performance',  label: 'Employee Performance', path: 'employee-performance', component: EmployeePerformance },
+        { id: 'orders',                label: 'Orders',              path: 'order',               component: OrderPerformance  },
       ],
     },
     driver: {
