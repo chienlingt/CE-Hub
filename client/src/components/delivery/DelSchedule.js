@@ -29,6 +29,7 @@ import {
   getAllTrucks,
   updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
+import { API_BASE_URL } from '../../utils/apiBaseUrl';
 
 export default function DeliverySchedule() {
   const { currentUser } = useAuth();
@@ -46,9 +47,6 @@ export default function DeliverySchedule() {
   const [selectedTeam, setSelectedTeam] = useState("all");
   const [teamAutoSelectEnabled, setTeamAutoSelectEnabled] = useState(true);
   const [endingTrip, setEndingTrip] = useState(null); // timeSlotId being ended
-
-  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
-
 
   // Load all data
   useEffect(() => {
@@ -680,10 +678,10 @@ export default function DeliverySchedule() {
                               </div>
                             </div>
 
-                            {/* A2 — Loading Checklist (pre-dispatch) + Unloading Checklist (at customer) */}
+                            {/* A2 — Loading Checklist (read-only progress) + Unloading Checklist (at customer) */}
                             {field.orderId(order) && !['Completed'].includes(status) && (
                               <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
-                                {/* Loading stage — shown before dispatch */}
+                                {/* Loading stage — read-only; departure via DriverDashboard Leave warehouse */}
                                 {!['Delivering', 'Delivered'].includes(status) && (
                                   <>
                                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">

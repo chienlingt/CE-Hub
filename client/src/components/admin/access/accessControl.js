@@ -15,7 +15,7 @@ import {
   Edit3,
 } from 'lucide-react';
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
 
 /**
  * RoleAccessControl - Fetches from PostgreSQL via API
@@ -35,6 +35,7 @@ const mockNavItems = [
   { key: 'customer',  name: 'Place Order',   description: 'Demo to place order', icon: '' },
   { key: 'scanning',  name: 'Scan Station',  description: 'Item picking and loading scan confirmation', icon: '📷' },
   { key: 'settings',  name: 'Settings',      description: 'Notification and system settings', icon: '⚙️' },
+  { key: 'driver',    name: 'Driver Dashboard', description: 'Mobile driver task dashboard (delivery staff only)', icon: '🚛' },
 ];
 
 export default function RoleAccessControl() {
@@ -59,7 +60,11 @@ export default function RoleAccessControl() {
       setError(null);
       try {
         // Load roles from API
-        const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles`);
+        const rolesUrl = `${REACT_APP_API_BASE_URL}/api/roles`;
+        const response = await fetch(rolesUrl);
+        // #region agent log
+        fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'41c37d'},body:JSON.stringify({sessionId:'41c37d',location:'accessControl.js:load',message:'roles fetch result',data:{rolesUrl,ok:response.ok,status:response.status},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
         if (!response.ok) throw new Error('Failed to load roles');
 
         const data = await response.json();
@@ -83,6 +88,10 @@ export default function RoleAccessControl() {
         setAccessControl(map);
         setOriginalAccessControl(JSON.parse(JSON.stringify(map)));
 
+        // #region agent log
+        fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'41c37d'},body:JSON.stringify({sessionId:'41c37d',location:'accessControl.js:load',message:'roles loaded',data:{roleCount:loadedRoles.length,navKeys:mockNavItems.map(n=>n.key),rolePermissions:loadedRoles.map(r=>({id:r.id,name:r.name,permissions:r.permissions}))},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+        // #endregion
+
         // select admin if present else first role
         const hasAdmin = loadedRoles.find(r => r.id === 'admin' || (r.name && r.name.toLowerCase() === 'admin'));
         setSelectedRole(hasAdmin ? (hasAdmin.id) : (loadedRoles[0] ? loadedRoles[0].id : null));
@@ -99,10 +108,17 @@ export default function RoleAccessControl() {
   }, []);
 
   useEffect(() => {
-    setHasChanges(JSON.stringify(accessControl) !== JSON.stringify(originalAccessControl));
-  }, [accessControl, originalAccessControl]);
+    const changed = JSON.stringify(accessControl) !== JSON.stringify(originalAccessControl);
+    setHasChanges(changed);
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'41c37d'},body:JSON.stringify({sessionId:'41c37d',location:'accessControl.js:hasChanges',message:'hasChanges computed',data:{changed,selectedRole,currentPerms:selectedRole?accessControl[selectedRole]:null,originalPerms:selectedRole?originalAccessControl[selectedRole]:null},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
+  }, [accessControl, originalAccessControl, selectedRole]);
 
   const toggleAccess = (roleId, navKey) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'41c37d'},body:JSON.stringify({sessionId:'41c37d',location:'accessControl.js:toggleAccess',message:'toggle clicked',data:{roleId,navKey,before:accessControl[roleId]},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
     setAccessControl(prev => ({
       ...prev,
       [roleId]: prev[roleId]?.includes(navKey)
@@ -239,6 +255,12 @@ export default function RoleAccessControl() {
   };
 
   const selectedRoleInfo = selectedRole ? getRoleInfo(selectedRole) : null;
+
+  // #region agent log
+  if (!loading) {
+    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'41c37d'},body:JSON.stringify({sessionId:'41c37d',location:'accessControl.js:render',message:'render state',data:{hasChanges,isSaving,selectedRole,navItemCount:navItems.length,navKeys:navItems.map(n=>n.key),saveButtonVisible:hasChanges},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+  }
+  // #endregion
 
   // UI Rendering
   if (loading) {

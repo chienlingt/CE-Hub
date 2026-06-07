@@ -19,7 +19,7 @@ import {
   User
 } from "lucide-react";
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
 
 export default function AutoScheduleReview() {
   const navigate = useNavigate();

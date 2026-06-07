@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "seed:driver": "node seedDriverTestData.js",
+    "seed:driver:delete": "node deleteDriverTestData.js"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +25,7 @@
     "firebase-admin": "^13.5.0",
     "groq-sdk": "^1.2.1",
     "helmet": "^7.0.0",
+    "multer": "^2.1.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.10",
     "twilio": "^6.0.2"

@@ -12,6 +12,7 @@ import {
     updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
+import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../utils/apiBaseUrl';
 
 const InstallationSchedule = () => {
   const { currentUser } = useAuth();
@@ -38,8 +39,6 @@ const InstallationSchedule = () => {
   useEffect(() => {
     async function loadData() {
       try {
-        const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
-
         const [
           ordersData,
           orderProductsData,

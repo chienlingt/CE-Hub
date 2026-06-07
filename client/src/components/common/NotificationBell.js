@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, X, AlertTriangle, Info, CheckCircle, ExternalLink } from 'lucide-react';
-
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 const POLL_INTERVAL = 5000; // 5 seconds — near real-time
 
 const TYPE_CONFIG = {
@@ -83,15 +82,35 @@ export default function NotificationBell({ userId }) {
 
   const handleOpen = () => setIsOpen(prev => !prev);
 
+  const isDriverOrderReport = (order) =>
+    order?.issue_reason === 'Driver Escalation'
+    || (
+      order?.issue_reason
+      && order?.issue_desc
+      && (order?.is_complaint_submitted === true || order?.order_status === 'Issue')
+    );
+
   const handleNotificationClick = async (n) => {
     if (!n.is_read) await markAsRead(n.id);
     setIsOpen(false);
-    // Navigate to failure log, passing order_id so it can highlight the case
-    if (n.order_id) {
-      navigate(`/cases/order-issues?orderId=${n.order_id}`);
-    } else {
+
+    if (!n.order_id) {
       navigate('/cases/order-issues');
+      return;
     }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${n.order_id}`);
+      if (res.ok) {
+        const order = await res.json();
+        if (isDriverOrderReport(order)) {
+          navigate(`/cases/delivery-issues?orderId=${n.order_id}`);
+          return;
+        }
+      }
+    } catch { /* fallback below */ }
+
+    navigate(`/cases/order-issues?orderId=${n.order_id}`);
   };
 
   return (

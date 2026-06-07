@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle, Clock, User, FileText, Calendar } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 const ComplaintManagement = () => {
     const [complaints, setComplaints] = useState([]);

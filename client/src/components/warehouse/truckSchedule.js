@@ -17,7 +17,7 @@ import {
 } from '../../services/informationService';
 import { useAuth } from '../../contexts/AuthContext';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE_URL } from '../../utils/apiBaseUrl';
 
 const WarehouseLoadingSchedule = () => {
   const { currentUser } = useAuth();
@@ -659,38 +659,44 @@ const WarehouseLoadingSchedule = () => {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 mb-4">
-                      {!trip.LoadingStartDateTime && (
-                        <button
-                          onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_start_date_time: new Date().toISOString() })}
-                          className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
-                          title="Start Loading"
-                        >
-                          Start Loading
-                        </button>
-                      )}
-                      {trip.LoadingStartDateTime && !trip.LoadingEndDateTime && (
-                        <button
-                          onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_end_date_time: new Date().toISOString() })}
-                          className="px-3 py-1 rounded-md bg-green-600 text-white text-xs hover:bg-green-700"
-                          title="End Loading"
-                        >
-                          End Loading
-                        </button>
-                      )}
-                      {/* A.3.1a: Depart button — shown when loading complete and slot not yet departed */}
-                      {trip.LoadingEndDateTime && trip.slot_status === 'scheduled' && (
-                        <button
-                          onClick={() => departSlot(trip.LorryTripID)}
-                          disabled={departingSlot === trip.LorryTripID}
-                          className="px-3 py-1 rounded-md bg-orange-600 text-white text-xs hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1"
-                          title="Mark truck as departed"
-                        >
-                          <Navigation className="w-3 h-3" />
-                          {departingSlot === trip.LorryTripID ? 'Departing…' : 'Depart'}
-                        </button>
-                      )}
-                    </div>
+                    {/* Option A: driver-confirmed depart — warehouse view is read-only.
+                        Start/End Loading timestamps and Depart are disabled here.
+                        Departure is initiated by the driver via "Leave warehouse" in DriverDashboard
+                        → POST /api/time-slots/:id/depart (full A3 lifecycle).
+                        Restore by reverting to 'true &&' below. */}
+                    {false && (
+                      <div className="flex items-center gap-2 mb-4">
+                        {!trip.LoadingStartDateTime && (
+                          <button
+                            onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_start_date_time: new Date().toISOString() })}
+                            className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs hover:bg-blue-700"
+                            title="Start Loading"
+                          >
+                            Start Loading
+                          </button>
+                        )}
+                        {trip.LoadingStartDateTime && !trip.LoadingEndDateTime && (
+                          <button
+                            onClick={() => updateLoadingTimestamp(trip.LorryTripID, { loading_end_date_time: new Date().toISOString() })}
+                            className="px-3 py-1 rounded-md bg-green-600 text-white text-xs hover:bg-green-700"
+                            title="End Loading"
+                          >
+                            End Loading
+                          </button>
+                        )}
+                        {trip.LoadingEndDateTime && trip.slot_status === 'scheduled' && (
+                          <button
+                            onClick={() => departSlot(trip.LorryTripID)}
+                            disabled={departingSlot === trip.LorryTripID}
+                            className="px-3 py-1 rounded-md bg-orange-600 text-white text-xs hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1"
+                            title="Mark truck as departed"
+                          >
+                            <Navigation className="w-3 h-3" />
+                            {departingSlot === trip.LorryTripID ? 'Departing…' : 'Depart'}
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                       {/* Truck Info */}

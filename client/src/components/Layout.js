@@ -2,10 +2,15 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle
+  Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle, Truck, Scan,
+  Shield
 } from 'lucide-react';
 import ProfileModal from './common/ProfileModal';
 import NotificationBell from './common/NotificationBell';
+import BottomNav from './layout/BottomNav';
+import MobileNavDrawer from './layout/MobileNavDrawer';
+import useIsMobile from '../hooks/useIsMobile';
+import { isFieldMobileUser, partitionNavItems } from '../utils/navigationMode';
 import FailureNotificationLog from './admin/FailureNotificationLog';
 import NotificationSettings from './admin/NotificationSettings';
 import DoAssignment from './admin/DoAssignment';
@@ -36,6 +41,9 @@ import InstallationSchedule from './installer/InsSchedule';
 import WarehouseLoadingSchedule from './warehouse/truckSchedule';
 import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
+import DriverDashboard from './driver/DriverDashboard';
+import CompletedDeliveries from './admin/CompletedDeliveries';
+import DeliveryIssues from './admin/DeliveryIssues';
 
 // Scan Station wrappers — stage locked by tab selection
 const ScanStationPicking   = () => <ScanStation forcedStage="warehouse" />;
@@ -65,6 +73,10 @@ const Layout = () => {
   const [topNavActive, setTopNavActive] = useState('');
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [displayName, setDisplayName] = useState('');
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [moreDrawerOpen, setMoreDrawerOpen] = useState(false);
+
+  const isMobile = useIsMobile();
 
   // ==========================
   // Navigation structure
@@ -78,6 +90,14 @@ const Layout = () => {
         { id: 'overview', label: 'Overview', path: '', component: Overview },
         { id: 'employee-performance', label: 'Employee Performance', path: 'employee-performance', component: EmployeePerformance },
         { id: 'orders', label: 'Orders', path: 'order', component: OrderPerformance },
+      ],
+    },
+    driver: {
+      title: 'Driver Dashboard',
+      icon: Truck,
+      route: '/driver',
+      topNavItems: [
+        { id: 'driver', label: 'My Jobs', path: '', component: DriverDashboard },
       ],
     },
     schedule: {
@@ -104,17 +124,19 @@ const Layout = () => {
     },
     cases: {
       title: 'Cases',
-      icon: Users,
+      icon: AlertCircle,
       route: '/cases',
       topNavItems: [
-        { id: 'reports',      label: 'Reports',      path: '',             component: Cases           },
-        { id: 'order-issues', label: 'Order Issues', path: 'order-issues', component: IssueManagement },
-        { id: 'sync-monitor', label: 'Sync Monitor', path: 'sync-monitor', component: SyncMonitor     },
+        { id: 'reports',              label: 'Reports',               path: '',                    component: Cases               },
+        { id: 'order-issues',         label: 'Order Issues',          path: 'order-issues',        component: IssueManagement     },
+        { id: 'delivery-issues',      label: 'Delivery Issues',       path: 'delivery-issues',     component: DeliveryIssues      },
+        { id: 'sync-monitor',         label: 'Sync Monitor',          path: 'sync-monitor',        component: SyncMonitor         },
+        { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
     },
     access: {
       title: 'Access Control',
-      icon: Users,
+      icon: Shield,
       route: '/access',
       topNavItems: [
         { id: 'access', label: 'Access Control', path: '', component: RoleAccessControl },
@@ -155,7 +177,7 @@ const Layout = () => {
     },
     scanning: {
       title: 'Scan Station',
-      icon: Users,
+      icon: Scan,
       route: '/scanning',
       topNavItems: [
         { id: 'picking',   label: 'Picking',   path: '',          component: ScanStationPicking   },
@@ -170,7 +192,7 @@ const Layout = () => {
       topNavItems: [
         { id: 'notifications', label: 'Notifications', path: '', component: NotificationSettings },
       ],
-    }
+    },
   }
 
   // normalize helper
@@ -204,6 +226,14 @@ const Layout = () => {
 
   // Make a quick list of allowed routes (e.g., ['/dashboard', '/info', ...]) for routing checks
   const allowedRoutes = useMemo(() => filteredNavigation.map(([, item]) => item.route), [filteredNavigation]);
+
+  const useBottomNav = isMobile && isFieldMobileUser(effectivePermissions);
+  const useDrawer = isMobile && !useBottomNav;
+  const { primary: primaryNavItems, overflow: overflowNavItems } = useMemo(
+    () => partitionNavItems(filteredNavigation),
+    [filteredNavigation]
+  );
+  const overflowActive = overflowNavItems.some(([key]) => key === activeSection);
 
   // Helper: get route root from a pathname, e.g. '/dashboard/overview' -> '/dashboard'
   const getPathRoot = (pathname) => {
@@ -278,6 +308,8 @@ const Layout = () => {
     setTopNavActive(firstItem?.id || '');
     const target = firstItem ? `${section.route}/${firstItem.path}` : section.route;
     navigate(target);
+    setMobileDrawerOpen(false);
+    setMoreDrawerOpen(false);
   };
 
   const handleLogout = async () => {
@@ -324,11 +356,45 @@ const Layout = () => {
   }
 
   const currentSection = navigationData[activeSection] || filteredNavigation[0][1];
+  const showTopTabs = currentSection?.topNavItems && (
+    !useBottomNav || currentSection.topNavItems.length > 1
+  );
+
+  const headerActions = (
+    <>
+      <button
+        onClick={() => navigate('/reports')}
+        className="flex items-center space-x-2 p-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+        title="Report Issues"
+      >
+        <AlertCircle size={20} />
+        {!useBottomNav && <span className="hidden md:block font-medium">Report Issue</span>}
+      </button>
+      <NotificationBell userId={employeeData?.id} />
+      <button
+        type="button"
+        onClick={openProfileModal}
+        className="flex items-center space-x-2 p-2 text-gray-700 rounded-lg hover:text-blue-600 hover:bg-blue-50"
+        title="View profile"
+      >
+        <User size={20} />
+        {!useBottomNav && <span className="hidden md:block font-medium">{displayName}</span>}
+      </button>
+      <button
+        onClick={handleLogout}
+        className="flex items-center space-x-2 p-2 text-gray-700 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        title="Logout"
+      >
+        <LogOut size={20} />
+        {!useBottomNav && <span className="hidden lg:block font-medium">Logout</span>}
+      </button>
+    </>
+  );
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-gray-50">
-      {/* Sidebar */}
-      <div className={`${isSidebarOpen ? 'w-64' : 'w-16'} bg-white shadow-lg transition-all duration-300 ease-in-out border-r border-gray-200 flex flex-col`}>
+      {/* Desktop sidebar */}
+      <div className={`hidden sm:flex ${isSidebarOpen ? 'w-64' : 'w-16'} bg-white shadow-lg transition-all duration-300 ease-in-out border-r border-gray-200 flex-col`}>
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           {isSidebarOpen && (
             <div className="flex items-center space-x-2">
@@ -378,42 +444,36 @@ const Layout = () => {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
         <div className="bg-white shadow-sm border-b border-gray-200">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h1 className="text-xl font-bold text-gray-800 truncate">{currentSection?.title || 'TBMDelivery'}</h1>
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => navigate('/reports')}
-                className="flex items-center space-x-2 px-3 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Report Issues"
-              >
-                <AlertCircle size={20} />
-                <span className="hidden md:block font-medium">Report Issue</span>
-              </button>
-              <NotificationBell userId={employeeData?.id} />
-              <button
-                type="button"
-                onClick={openProfileModal}
-                className="flex items-center space-x-2 p-2 text-gray-700 rounded-lg hover:text-blue-600 hover:bg-blue-50"
-                title="View profile"
-              >
-                <User size={20} />
-                <span className="hidden md:block font-medium">{displayName}</span>
-              </button>
-              <button
-                onClick={handleLogout}
-                className="flex items-center space-x-2 p-2 text-gray-700 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-              >
-                <LogOut size={20} />
-                <span className="hidden lg:block font-medium">Logout</span>
-              </button>
+          {useBottomNav ? (
+            <div className="flex items-center justify-end px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center space-x-2">{headerActions}</div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-3 min-w-0">
+                {useDrawer && (
+                  <button
+                    type="button"
+                    onClick={() => setMobileDrawerOpen(true)}
+                    className="p-2 rounded-lg hover:bg-gray-100 flex-shrink-0"
+                    aria-label="Open menu"
+                  >
+                    <Menu size={20} />
+                  </button>
+                )}
+                <h1 className="text-lg sm:text-xl font-bold text-gray-800 truncate">
+                  {currentSection?.title || 'TBMDelivery'}
+                </h1>
+              </div>
+              <div className="flex items-center space-x-2 sm:space-x-4 flex-shrink-0">{headerActions}</div>
+            </div>
+          )}
 
           {/* Top Tabs */}
-          {currentSection?.topNavItems && (
+          {showTopTabs && (
             <div className="max-w-7xl px-4 sm:px-6 lg:px-8 mt-2">
-              <div className="border-b border-gray-200">
-                <nav className="-mb-px flex space-x-8">
+              <div className="border-b border-gray-200 overflow-x-auto scrollbar-hide">
+                <nav className="-mb-px flex space-x-8 min-w-max">
                   {currentSection.topNavItems.map((tab) => (
                     <button
                       key={tab.id}
@@ -421,7 +481,7 @@ const Layout = () => {
                         setTopNavActive(tab.id);
                         navigate(`${currentSection.route}/${tab.path}`);
                       }}
-                      className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${topNavActive === tab.id
+                      className={`flex items-center py-2 px-1 border-b-2 font-medium text-sm transition-colors duration-200 whitespace-nowrap ${topNavActive === tab.id
                         ? 'border-blue-500 text-blue-600'
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                         }`}
@@ -436,7 +496,7 @@ const Layout = () => {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-2">
+        <div className={`flex-1 overflow-auto p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
           <Routes>
             {/* Standalone route for Report Issue (accessible to all employees) */}
             <Route path="/reports" element={<ReportIssue />} />
@@ -481,6 +541,35 @@ const Layout = () => {
           onProfileSaved={handleProfileSaved}
         />
       </div>
+
+      {useBottomNav && (
+        <BottomNav
+          primaryItems={primaryNavItems}
+          activeSection={activeSection}
+          overflowActive={overflowActive}
+          hasOverflow={overflowNavItems.length > 0}
+          onNavClick={handleSideNavClick}
+          onMoreClick={() => setMoreDrawerOpen(true)}
+        />
+      )}
+
+      <MobileNavDrawer
+        isOpen={mobileDrawerOpen}
+        onClose={() => setMobileDrawerOpen(false)}
+        items={filteredNavigation}
+        activeSection={activeSection}
+        onSelect={handleSideNavClick}
+        title="Menu"
+      />
+
+      <MobileNavDrawer
+        isOpen={moreDrawerOpen}
+        onClose={() => setMoreDrawerOpen(false)}
+        items={overflowNavItems}
+        activeSection={activeSection}
+        onSelect={handleSideNavClick}
+        title="More"
+      />
     </div>
   );
 };

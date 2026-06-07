@@ -4,7 +4,7 @@ import { ShoppingCart, Package, User, CheckCircle, AlertCircle, Plus, Minus, X, 
 import ResultModal from '../common/ResultModal';
 import { getAllProducts, getAllZones, addCustomer, addProduct, updateCustomer } from '../../services/informationService';
 
-const REACT_APP_API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../utils/apiBaseUrl';
 
 const SERVICE_TYPES = [
   { value: 'delivery', label: 'Delivery Only' },

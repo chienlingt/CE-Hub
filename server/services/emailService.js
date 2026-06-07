@@ -66,7 +66,8 @@ async function sendPasswordResetEmail(to, employeeName, resetToken) {
     return false;
   }
 
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+  // const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+  const clientUrl = process.env.REACT_APP_API_BASE_URL || '';
   const resetUrl = `${clientUrl}/reset-password?token=${resetToken}`;
 
   const mailOptions = {

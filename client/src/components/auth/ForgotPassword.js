@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -16,7 +17,6 @@ function ForgotPassword() {
       setMessage('');
       setLoading(true);
 
-      const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
       const response = await fetch(`${API_BASE}/api/auth/reset-request`, {
         method: 'POST',
         headers: {

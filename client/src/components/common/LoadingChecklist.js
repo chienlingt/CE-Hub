@@ -1,8 +1,9 @@
 /**
  * LoadingChecklist — Read-only status display for warehouse and delivery schedules.
  *
- * Shows picking/loading status per item. Scanning is done in Scan Station.
- * The dispatch gate (driver) blocks departure until all items are loaded.
+ * Shows picking/loading/unloading status per item. Scanning is done in Scan Station.
+ * Departure (→ Delivering) is triggered by the Leave warehouse banner in DriverDashboard
+ * via POST /api/time-slots/:id/depart. There is no per-order dispatch here.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -10,7 +11,7 @@ import {
   RefreshCw, ChevronDown, ChevronUp, User
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function formatDateTime(str) {
   if (!str) return '';
@@ -123,6 +124,8 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
   const [data,        setData]        = useState(null);
   const [loading,     setLoading]     = useState(true);
   const [expanded,    setExpanded]    = useState(true);
+
+  // Unloading completion state (used in unloading stage only)
   const [dispatching,    setDispatching]    = useState(false);
   const [dispatchErr,    setDispatchErr]    = useState(null);
   const [dispatched,     setDispatched]     = useState(false);
@@ -133,16 +136,12 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
       const res  = await fetch(`${API_BASE}/api/orders/${orderId}/loading-status`);
       const json = await res.json();
       setData(json);
-      // Restore dispatched state from API if already delivered/dispatched
+      // Restore delivered state from API
       if (json.order_status === 'Delivered' && !dispatched) {
         setDispatched(true);
         if (json.delivered_by_name && !dispatchedInfo) {
           setDispatchedInfo({ name: json.delivered_by_name, at: json.delivered_at });
         }
-      }
-      if (json.order_status === 'Delivering' && !dispatched && stage === 'driver') {
-        // Truck already dispatched — mark dispatch as done for the loading stage
-        setDispatched(true);
       }
     } catch { /* silent */ }
     finally  { setLoading(false); }
@@ -156,19 +155,20 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
     return () => clearInterval(t);
   }, [fetchStatus]);
 
+  // Kept only for unloading stage "Mark as Delivered" — dispatch no longer used
   const handleDispatch = async () => {
     setDispatching(true); setDispatchErr(null);
     try {
-      const res  = await fetch(`${API_BASE}/api/orders/${orderId}/dispatch`, {
+      const res  = await fetch(`${API_BASE}/api/orders/${orderId}/deliver`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employee_id: employeeId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Dispatch failed');
+      if (!res.ok) throw new Error(json.error || 'Failed');
       setDispatched(true);
       setDispatchedInfo({
-        name: json.dispatched_by_name || 'Unknown',
-        at:   json.dispatched_at || new Date().toISOString(),
+        name: json.delivered_by_name || 'Unknown',
+        at:   json.delivered_at || new Date().toISOString(),
       });
     } catch (err) {
       setDispatchErr(err.message);
@@ -306,52 +306,18 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
             </div>
           )}
 
-          {/* Dispatch button — driver only */}
-          {stage === 'driver' && !dispatched && items.length > 0 && (
+          {/* Option A: driver loading stage — read-only progress only.
+              Departure (Leave warehouse) is triggered from the DriverDashboard slot banner. */}
+          {stage === 'driver' && items.length > 0 && (
             <div className="px-3 py-3">
-              {dispatchErr && (
-                <div className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 px-2 py-1.5 rounded-lg mb-2">
-                  <AlertTriangle size={12} /> {dispatchErr}
+              {allLoaded ? (
+                <div className="flex items-center justify-center gap-2 py-2 rounded-xl bg-green-50 text-green-700 text-sm font-semibold">
+                  <CheckCircle size={14} /> All items loaded — use Leave warehouse to depart
                 </div>
-              )}
-              <button
-                onClick={handleDispatch}
-                disabled={!allLoaded || dispatching}
-                className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                  allLoaded
-                    ? 'bg-green-600 hover:bg-green-700 text-white'
-                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                }`}
-              >
-                {dispatching ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <RefreshCw size={13} className="animate-spin" /> Dispatching...
-                  </span>
-                ) : allLoaded ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Truck size={14} /> Ready to Dispatch
-                  </span>
-                ) : (
-                  `Dispatch blocked — ${total - loadedCnt} item${total - loadedCnt > 1 ? 's' : ''} not loaded`
-                )}
-              </button>
-              {!allLoaded && (
-                <p className="text-xs text-center text-gray-400 mt-1.5">
-                  Complete loading in Scan Station first
+              ) : (
+                <p className="text-xs text-center text-gray-400">
+                  {total - loadedCnt} item{total - loadedCnt > 1 ? 's' : ''} not yet loaded
                 </p>
-              )}
-            </div>
-          )}
-
-          {stage === 'driver' && dispatched && (
-            <div className="flex flex-col items-center justify-center gap-1 py-3 text-green-700 text-sm font-medium">
-              <span className="flex items-center gap-2">
-                <Truck size={14} /> Dispatched — En Route
-              </span>
-              {dispatchedInfo && (
-                <span className="text-xs text-green-600 font-normal">
-                  by {dispatchedInfo.name} · {formatDateTime(dispatchedInfo.at)}
-                </span>
               )}
             </div>
           )}

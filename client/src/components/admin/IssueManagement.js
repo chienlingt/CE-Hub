@@ -5,8 +5,7 @@ import {
   MapPin, MessageSquare, MessageCircle, Package, RefreshCw,
   CalendarPlus, X, ChevronRight
 } from 'lucide-react';
-
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 const REASON_STYLES = {
   'Customer Unreachable': 'bg-orange-100 text-orange-800',
