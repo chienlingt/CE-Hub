@@ -49,6 +49,12 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
           <p className="text-xs text-gray-400 font-mono truncate">#{shortId}</p>
           {/* TODO: Add a link to the Odoo order */}
           <p className="text-xs text-gray-400 font-mono truncate">Odoo Order ref: {job.odoo_order_ref}</p>
+          {job.appointment_window && (
+            <p className="text-xs text-indigo-600 font-medium flex items-center gap-1 mt-0.5 truncate">
+              <Clock className="w-3 h-3 shrink-0" />
+              {job.appointment_window}
+            </p>
+          )}
           <p className="font-semibold text-gray-900 truncate">{job.product || 'Unknown Product'}</p>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">

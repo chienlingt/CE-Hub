@@ -14,7 +14,7 @@ const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Completed', 'Cancelled', 'Fail
 function computeOrderLoadingStats(orderProducts) {
   const total = orderProducts.length;
   const loaded_count = orderProducts.filter(i =>
-    ['loaded', 'unloaded'].includes(i.picking_status)
+    i.picking_status === 'loaded'
   ).length;
   const all_loaded = total > 0 && loaded_count === total;
   return { total, loaded_count, all_loaded };
