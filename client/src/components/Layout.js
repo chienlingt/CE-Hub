@@ -182,9 +182,9 @@ const Layout = () => {
       icon: Scan,
       route: '/scanning',
       topNavItems: [
-        { id: 'picking',   label: 'Picking',   path: '',          component: ScanStationPicking   },
-        { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading   },
-        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading },
+        { id: 'picking',   label: 'Picking',   path: '',          component: ScanStationPicking,   allowedRoles: ['admin', 'warehouse', 'storekeeper'] },
+        { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
+        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
       ],
     },
     settings: {
@@ -476,7 +476,13 @@ const Layout = () => {
             <div className="max-w-7xl px-4 sm:px-6 lg:px-8 mt-2">
               <div className="border-b border-gray-200 overflow-x-auto scrollbar-hide">
                 <nav className="-mb-px flex space-x-8 min-w-max">
-                  {currentSection.topNavItems.map((tab) => (
+                  {currentSection.topNavItems.filter(tab => {
+                    if (!tab.allowedRoles) return true;
+                    const rawRole = typeof employeeData?.role === 'object'
+                      ? employeeData?.role?.name || '' : employeeData?.role || '';
+                    const role = (rawRole || '').toString().toLowerCase();
+                    return tab.allowedRoles.some(r => role.includes(r)) || role.includes('admin');
+                  }).map((tab) => (
                     <button
                       key={tab.id}
                       onClick={() => {

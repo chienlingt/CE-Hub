@@ -1595,6 +1595,26 @@ router.post('/:id/approve', async (req, res) => {
   }
 });
 
+// PATCH /:id/salesperson — update salesperson name and phone on an order
+router.patch('/:id/salesperson', async (req, res) => {
+  try {
+    const { salesperson_name, salesperson_phone } = req.body;
+    const data = { updated_at: new Date() };
+    if (salesperson_name  !== undefined) data.salesperson_name  = salesperson_name;
+    if (salesperson_phone !== undefined) data.salesperson_phone = salesperson_phone;
+
+    const order = await prisma.orders.update({
+      where: { id: req.params.id },
+      data,
+    });
+    res.json({ success: true, order });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
+    console.error('PATCH /api/orders/:id/salesperson error', err);
+    res.status(500).json({ error: 'Failed to update salesperson', details: err.message });
+  }
+});
+
 router.patch('/:id/issue', async (req, res) => {
   try {
     const {

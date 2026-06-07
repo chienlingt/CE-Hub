@@ -34,10 +34,16 @@ function preprocessImage(file) {
 
 export default function ScannerModal({ itemName, productId, onScan, onClose }) {
   const galleryInputRef = useRef(null);
-  const [status,   setStatus]   = useState('idle'); // idle | processing | success | error
-  const [scanned,  setScanned]  = useState(null);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [preview,  setPreview]  = useState(null);
+  const [status,       setStatus]       = useState('idle');
+  const [scanned,      setScanned]      = useState(null);
+  const [errorMsg,     setErrorMsg]     = useState('');
+  const [preview,      setPreview]      = useState(null);
+  const [manualSerial, setManualSerial] = useState('');
+
+  const submitManual = () => {
+    const v = manualSerial.trim();
+    if (v) onScan(v);
+  };
 
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
@@ -88,7 +94,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
         </div>
 
         {/* Image / state area */}
-        <div className="bg-black relative" style={{ minHeight: '280px' }}>
+        <div className="bg-black relative" style={{ minHeight: '200px' }}>
           {/* Hidden container required by html5-qrcode scanFile */}
           <div id="qr-file-container" style={{ display: 'none' }} />
 
@@ -132,12 +138,34 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
           <input ref={galleryInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
 
           {status === 'idle' && (
-            <button
-              onClick={() => galleryInputRef.current?.click()}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              <Camera size={16} /> Open Camera
-            </button>
+            <>
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                <Camera size={16} /> Open Camera
+              </button>
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <div className="flex-1 h-px bg-gray-200" /> or enter manually <div className="flex-1 h-px bg-gray-200" />
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualSerial}
+                  onChange={e => setManualSerial(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && submitManual()}
+                  placeholder="Enter serial number…"
+                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+                <button
+                  onClick={submitManual}
+                  disabled={!manualSerial.trim()}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white text-sm font-semibold rounded-xl disabled:opacity-40 transition-colors"
+                >
+                  ✓
+                </button>
+              </div>
+            </>
           )}
 
           {status === 'success' && (
