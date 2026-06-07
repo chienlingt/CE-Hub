@@ -13,6 +13,7 @@ import {
   Timer,
   User
 } from 'lucide-react';
+import { getSlotStatusStyle, getSlotStatusLabel } from '../../utils/slotStatusHelpers';
 import { useEffect, useState } from 'react';
 import LoadingChecklist from '../common/LoadingChecklist';
 import { ScannerSection } from '../common/ScanStation';
@@ -27,7 +28,6 @@ import {
   getAllTeams,
   getAllTimeSlots,
   getAllTrucks,
-  updateOrderStatus as updateOrderStatusApi
 } from '../../services/informationService';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
 
@@ -292,30 +292,7 @@ export default function DeliverySchedule() {
     return `https://www.google.com/maps/search/${encodeURIComponent(address)}`;
   };
 
-  const orderRequiresInstaller = (order) => {
-    const orderProds = orderProducts.filter(op => field.orderProductOrderId(op) === field.orderId(order));
-    return orderProds.some(op => {
-      const product = products.find(p => field.productId(p) === field.orderProductProductId(op));
-      return product?.installer_team_required_flag ?? product?.InstallerTeamRequiredFlag ?? false;
-    });
-  };
-
-  // A.3.6a: slot status helpers
-  const getSlotStatusStyle = (slotStatus) => {
-    switch (slotStatus) {
-      case 'out_for_delivery': return 'bg-orange-100 text-orange-800 border border-orange-200';
-      case 'completed':        return 'bg-green-100 text-green-800 border border-green-200';
-      default:                 return 'bg-blue-100 text-blue-800 border border-blue-200';
-    }
-  };
-
-  const getSlotStatusLabel = (slotStatus) => {
-    switch (slotStatus) {
-      case 'out_for_delivery': return 'Out for Delivery';
-      case 'completed':        return 'Completed';
-      default:                 return 'Scheduled';
-    }
-  };
+  // A.3.6a: slot status helpers — imported from slotStatusHelpers.js
 
   // A.3.6a: End Trip — calls POST /api/time-slots/:id/end-trip
   const endTrip = async (timeSlotId, slotOrders) => {
@@ -349,20 +326,6 @@ export default function DeliverySchedule() {
     }
   };
 
-  const updateOrderStatus = async (orderId, newStatus) => {
-    try {
-      const result = await updateOrderStatusApi(orderId, newStatus);
-      const updated = result?.order;
-      setOrders(prev => prev.map(order =>
-        field.orderId(order) === orderId
-          ? (updated ? { ...order, ...updated } : { ...order, order_status: newStatus, OrderStatus: newStatus })
-          : order
-      ));
-    } catch (error) {
-      console.error('Failed to update order status:', error);
-      alert('Failed to update order status. Please try again.');
-    }
-  };
 
   const getEstimatedDuration = (order) => {
     // Calculate estimated duration based on products
@@ -552,9 +515,6 @@ export default function DeliverySchedule() {
                         }).filter(Boolean);
 
                         const loadingSeq = field.orderLoadingSequence(order);
-                        const requiresInstaller = orderRequiresInstaller(order);
-                        const completionStatus = requiresInstaller ? 'Delivered' : 'Completed';
-                        const completionLabel = requiresInstaller ? 'Mark Delivered' : 'Mark Completed';
                         const status = field.orderStatus(order);
 
                         return (

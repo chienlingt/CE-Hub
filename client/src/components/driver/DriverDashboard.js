@@ -1,11 +1,16 @@
 // client/src/components/driver/DriverDashboard.js
 // A.4.1 / FR-04-001: Mobile-first driver task dashboard.
 // Mirrors TBMDelivery stafflanding.tsx layout and UX.
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Search, RefreshCw, CalendarDays, Truck, CheckCircle2, LayoutList, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
-import { applyDriverFilters, computeStats } from '../../utils/driverOrderFilters';
+import {
+  applyDriverFilters,
+  computeStats,
+  buildAppointmentWindowOptions,
+  enrichJobsWithAppointmentWindow,
+} from '../../utils/driverOrderFilters';
 import { DRIVER_TABS } from '../../utils/driverStatusMap';
 import OrderTaskCard from './OrderTaskCard';
 import UpdateOrderModal from './UpdateOrderModal';
@@ -45,6 +50,7 @@ export default function DriverDashboard() {
   const today       = new Date().toISOString().split('T')[0];
   const [date, setDate]         = useState(today);
   const [tab, setTab]           = useState('all');
+  const [windowFilter, setWindowFilter] = useState('all');
   const [search, setSearch]     = useState('');
   const [updateTarget, setUpdateTarget] = useState(null);
   const [evidenceTarget, setEvidenceTarget] = useState(null);
@@ -53,15 +59,31 @@ export default function DriverDashboard() {
 
   const { jobs, slots, loading, error, refresh } = useDriverJobs(employeeId);
 
-  // Jobs for the selected date
-  const dateJobs = useMemo(() => jobs.filter(j => j.assigned_date === date), [jobs, date]);
+  useEffect(() => {
+    setWindowFilter('all');
+  }, [date]);
+
+  const dateJobsRaw = useMemo(
+    () => jobs.filter(j => j.assigned_date === date),
+    [jobs, date]
+  );
+
+  const dateJobs = useMemo(
+    () => enrichJobsWithAppointmentWindow(dateJobsRaw),
+    [dateJobsRaw]
+  );
+
+  const windowOptions = useMemo(
+    () => buildAppointmentWindowOptions(dateJobsRaw),
+    [dateJobsRaw]
+  );
+
   const stats    = useMemo(() => computeStats(dateJobs), [dateJobs]);
   const strip    = useMemo(() => buildDateStrip(date), [date]);
 
-  // Filtered list
   const displayed = useMemo(
-    () => applyDriverFilters(dateJobs, { date, tab, search }),
-    [dateJobs, date, tab, search]
+    () => applyDriverFilters(dateJobs, { date, tab, window: windowFilter, search }),
+    [dateJobs, date, tab, windowFilter, search]
   );
 
   function handleJobUpdated() {
@@ -120,7 +142,6 @@ export default function DriverDashboard() {
             <span className={`text-base font-semibold ${key === today && key !== date ? 'text-blue-600' : ''}`}>{d}</span>
           </button>
         ))}
-        {/* Full calendar button */}
         <button
           onClick={() => setCalendarOpen(true)}
           className="flex flex-col items-center min-w-[44px] py-1.5 text-gray-400 hover:text-gray-600"
@@ -163,11 +184,34 @@ export default function DriverDashboard() {
         </div>
       </div>
 
-      {/* ── Leave Warehouse Banner ─────────────────────────────────── */}
+      {/* ── Appointment window filter ──────────────────────────────── */}
+      <div className="px-4 mb-3">
+        <p className="text-xs font-medium text-gray-500 mb-1.5">Time slot</p>
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-0.5">
+          {windowOptions.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setWindowFilter(opt.value)}
+              className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors
+                ${windowFilter === opt.value
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'}`}
+            >
+              {opt.label}
+              <span className={`tabular-nums ${windowFilter === opt.value ? 'text-indigo-200' : 'text-gray-400'}`}>
+                {opt.count}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Leave Warehouse Banner (All runs only) ─────────────────── */}
       <SlotDepartBanner
         slots={slots}
         employeeId={employeeId}
         selectedDate={date}
+        windowFilter={windowFilter}
         onDeparted={refresh}
       />
 
@@ -189,7 +233,13 @@ export default function DriverDashboard() {
           <div className="flex flex-col items-center py-16 text-gray-400">
             <LayoutList className="w-10 h-10 mb-3" />
             <p className="font-medium">No orders found</p>
-            <p className="text-sm mt-1">for {date} in {TAB_LABELS[tab]} tab</p>
+            <p className="text-sm mt-1">
+              for {date}
+              {windowFilter !== 'all' && windowOptions.find(o => o.value === windowFilter)
+                ? ` · ${windowOptions.find(o => o.value === windowFilter).label}`
+                : ''}
+              {' '}in {TAB_LABELS[tab]} tab
+            </p>
           </div>
         )}
 

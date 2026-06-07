@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { Truck, AlertTriangle, RefreshCw } from 'lucide-react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import { slotDateKey } from '../../utils/driverOrderFilters';
 
 function formatWindow(start, end) {
   if (start && end) return `${start} – ${end}`;
@@ -21,16 +22,22 @@ function formatWindow(start, end) {
  *   slots:      Array<object>,  // from useDriverJobs
  *   employeeId: string|null,
  *   selectedDate: string,       // 'yyyy-mm-dd' — only show banners for today's slots
+ *   windowFilter?: string,      // 'all' | appointment bucket — banner only when 'all'
  *   onDeparted: () => void,     // refresh callback
  * }}
  */
-export default function SlotDepartBanner({ slots, employeeId, selectedDate, onDeparted }) {
-  const [departing, setDeparting] = useState(null); // slot id currently being departed
-  const [errors, setErrors]       = useState({});   // { [slotId]: string }
+export default function SlotDepartBanner({ slots, employeeId, selectedDate, windowFilter = 'all', onDeparted }) {
+  const [departing, setDeparting] = useState(null);
+  const [errors, setErrors]       = useState({});
 
-  const readySlots = slots.filter(
-    s => s.ready_to_depart && (!selectedDate || s.date === selectedDate)
-  );
+  // Leave warehouse is only available on "All runs" — real truck runs, not appointment buckets
+  if (windowFilter !== 'all') return null;
+
+  const readySlots = slots.filter(s => {
+    if (!s.ready_to_depart) return false;
+    if (selectedDate && slotDateKey(s.date) !== selectedDate) return false;
+    return true;
+  });
 
   if (readySlots.length === 0) return null;
 

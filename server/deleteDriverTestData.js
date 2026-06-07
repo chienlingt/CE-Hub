@@ -17,7 +17,7 @@ const TEST_PREFIX      = 'TEST-DRV';
 const DRIVER_EMAIL     = 'driver.test@cehub.local';
 const ADMIN_EMAIL      = 'admin.test@cehub.local';
 const FALLBACK_TEAM_TYPE = 'Delivery Team Alpha';
-const TEST_PHONES      = ['60123456789', '60198765432', '60112233445'];
+const TEST_PHONES      = ['601156751977', '60198765432', '60112233445'];
 const TEST_PRODUCTS    = [
   `${TEST_PREFIX} Standard Sofa`,
   `${TEST_PREFIX} Wardrobe (Install)`,
