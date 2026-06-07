@@ -9,6 +9,8 @@ const { getCoordinatesFromAddress, calculateRoute } = require('../services/routi
 const { sendDeliveryFailureNotifications } = require('../services/notificationService');
 const { markOrderDelivering, markOrderDelivered } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
+const upload = require('../middleware/upload');
+const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
 
 const TRAVEL_FALLBACK_MINUTES = 17;
 
@@ -276,6 +278,173 @@ router.post('/sync-odoo', async (req, res) => {
   }
 });
 
+// GET /completed-deliveries — FR-04-004: admin view of completed delivery records
+router.get('/completed-deliveries', async (req, res) => {
+  try {
+    const { date_from, date_to, sync_status } = req.query;
+
+    const where = {
+      order_status: { in: ['Delivered', 'Completed'] },
+    };
+
+    if (date_from || date_to) {
+      where.delivery_end_date_time = {};
+      if (date_from) where.delivery_end_date_time.gte = new Date(date_from);
+      if (date_to)   where.delivery_end_date_time.lte = new Date(date_to);
+    }
+
+    const orders = await prisma.orders.findMany({
+      where,
+      include: {
+        customers:  { select: { full_name: true, phone: true } },
+        employees:  { select: { name: true, display_name: true } },
+        time_slots: { select: { id: true, date: true } },
+      },
+      orderBy: { delivery_end_date_time: 'desc' },
+    });
+
+    // Attach latest outbox sync status per order
+    const orderIds = orders.map(o => o.id);
+    const outboxRows = orderIds.length
+      ? await prisma.integration_outbox.findMany({
+          where: {
+            idempotency_key: { in: [
+              ...orders.map(o => `order:${o.id}:odoo:Delivered`),
+              ...orders.map(o => `order:${o.id}:odoo:Completed`),
+            ]},
+          },
+          orderBy: { created_at: 'desc' },
+        })
+      : [];
+
+    const outboxByOrder = {};
+    for (const row of outboxRows) {
+      const match = row.idempotency_key.match(/^order:([^:]+):odoo:/);
+      if (match) outboxByOrder[match[1]] = outboxByOrder[match[1]] || row;
+    }
+
+    const result = orders.map(o => ({
+      id:                     o.id,
+      order_status:           o.order_status,
+      customer_name:          o.customers?.full_name || '',
+      driver_name:            o.employees?.name || o.employees?.display_name || o.delivered_by || '',
+      completed_at:           o.delivery_end_date_time,
+      delivery_evidence:      o.delivery_evidence || [],
+      proof_of_delivery_url:  o.proof_of_delivery_url || null,
+      odoo_order_ref:         o.odoo_order_ref || null,
+      delivery_address:       o.delivery_address || '',
+      slot_id:                o.time_slot_id || null,
+      odoo_sync: outboxByOrder[o.id]
+        ? {
+            status:      outboxByOrder[o.id].status,
+            last_error:  outboxByOrder[o.id].last_error || null,
+            attempts:    outboxByOrder[o.id].attempts,
+            processed_at: outboxByOrder[o.id].processed_at || null,
+          }
+        : null,
+    }));
+
+    // Optional client-side filter by sync_status
+    const filtered = sync_status
+      ? result.filter(r => {
+          if (sync_status === 'synced')  return r.odoo_sync?.status === 'processed';
+          if (sync_status === 'pending') return !r.odoo_sync || r.odoo_sync.status === 'pending';
+          if (sync_status === 'failed')  return r.odoo_sync?.status === 'dead';
+          return true;
+        })
+      : result;
+
+    res.json({ data: filtered, total: filtered.length });
+  } catch (err) {
+    console.error('GET /api/orders/completed-deliveries error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
+
+// Driver order report predicate — full Update→Issue reports AND lightweight escalations
+function driverOrderReportWhere(extra = {}) {
+  return {
+    AND: [
+      { issue_reason: { not: null } },
+      { issue_reason: { not: '' } },
+      { issue_desc: { not: null } },
+      { issue_desc: { not: '' } },
+      {
+        OR: [
+          { is_complaint_submitted: true },
+          { order_status: 'Issue' },
+          { issue_reason: 'Driver Escalation' },
+        ],
+      },
+    ],
+    ...extra,
+  };
+}
+
+const DRIVER_ESCALATION_REASON = 'Driver Escalation';
+
+// GET /delivery-issues — driver order reports (Cases → Delivery Issues tab)
+router.get('/delivery-issues', async (req, res) => {
+  try {
+    const { status = 'all', priority } = req.query;
+
+    const where = driverOrderReportWhere();
+
+    if (status === 'open') {
+      where.OR = [
+        { issue_status: null },
+        { issue_status: { not: 'resolved' } },
+      ];
+    } else if (status === 'resolved') {
+      where.issue_status = 'resolved';
+    }
+
+    if (priority) {
+      where.issue_priority_level = { equals: priority, mode: 'insensitive' };
+    }
+
+    const orders = await prisma.orders.findMany({
+      where,
+      include: {
+        customers: true,
+        employees: { select: { id: true, name: true, display_name: true, email: true } },
+        order_products: {
+          include: {
+            products: { select: { id: true, product_name: true } },
+          },
+        },
+      },
+      orderBy: { updated_at: 'desc' },
+    });
+
+    res.json(orders);
+  } catch (err) {
+    console.error('GET /api/orders/delivery-issues error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
+
+// PATCH /:id/escalation-ack — admin acknowledges a driver escalation
+router.patch('/:id/escalation-ack', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({ where: { id: req.params.id } });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (order.issue_reason !== DRIVER_ESCALATION_REASON) {
+      return res.status(400).json({ error: 'Order is not a driver escalation' });
+    }
+
+    const updated = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  { is_escalation_acknowledged: true, updated_at: new Date() },
+    });
+
+    res.json({ success: true, is_escalation_acknowledged: updated.is_escalation_acknowledged });
+  } catch (err) {
+    console.error('PATCH /api/orders/:id/escalation-ack error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const { status, search, date_from, date_to, sort = 'created_desc' } = req.query;
@@ -313,11 +482,25 @@ router.get('/', async (req, res) => {
       ];
     }
 
-    // Issues filter
+    // Issues filter — operational failures only; exclude driver order reports
     if (req.query.issues_only === 'true') {
         where.AND = [
             { issue_reason: { not: null } },
-            { issue_reason: { not: '' } }
+            { issue_reason: { not: '' } },
+            {
+              NOT: {
+                AND: [
+                  { issue_desc: { not: null } },
+                  { issue_desc: { not: '' } },
+                  {
+                    OR: [
+                      { is_complaint_submitted: true },
+                      { order_status: 'Issue' },
+                    ],
+                  },
+                ],
+              },
+            },
         ];
     }
 
@@ -1018,6 +1201,24 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// GET /:id — single order (used by notification routing and admin views)
+router.get('/:id', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where: { id: req.params.id },
+      include: {
+        customers: true,
+        employees: { select: { id: true, name: true, display_name: true } },
+      },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    console.error('GET /api/orders/:id error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
+
 // GET /:id/loading-status — A2: per-item picking/loading status for an order
 router.get('/:id/loading-status', async (req, res) => {
   try {
@@ -1167,11 +1368,45 @@ router.post('/:id/dispatch', async (req, res) => {
   }
 });
 
-// POST /:id/deliver — driver marks order as Delivered after unloading all items (A2)
-router.post('/:id/deliver', async (req, res) => {
+// POST /:id/deliver — driver marks order as Delivered after unloading all items (A2 / A4)
+// Accepts multipart/form-data for POD photos (field: photos) and optional signature (field: signature).
+// Falls back to JSON body (employee_id only) for backwards compatibility with warehouse tablets.
+router.post('/:id/deliver', upload.fields([
+  { name: 'photos',    maxCount: 10 },
+  { name: 'signature', maxCount: 1  },
+]), async (req, res) => {
   try {
-    const { employee_id } = req.body;
+    const { employee_id, delivery_notes, signature_data_url } = req.body;
 
+    const photoFiles   = req.files?.photos    || [];
+    const sigFiles     = req.files?.signature || [];
+
+    // Determine if this is a driver web completion (has POD) or a legacy warehouse tablet call
+    const hasAnyPod = photoFiles.length > 0 || sigFiles.length > 0 || !!signature_data_url;
+
+    if (hasAnyPod) {
+      // A.4 path — driver web dashboard with full POD + completion chain
+      const signatureDataUrl = signature_data_url || null;
+
+      const result = await processDeliveryCompletion(req.params.id, {
+        employeeId:       employee_id || null,
+        deliveryNotes:    delivery_notes || null,
+        photoFiles,
+        signatureDataUrl,
+      });
+
+      return res.json({
+        success:         true,
+        order:           result.order,
+        final_status:    result.finalStatus,
+        slot_auto_closed: result.slotAutoClosed,
+        auto_departed:   result.autoDeparted,
+        odoo_enqueued:   result.odooEnqueued,
+        delivered_at:    result.order.delivery_end_date_time,
+      });
+    }
+
+    // Legacy path — warehouse tablet (no POD files) — existing behaviour preserved
     const items = await prisma.order_products.findMany({
       where:   { order_id: req.params.id },
       include: { products: { select: { product_name: true } } },
@@ -1212,6 +1447,7 @@ router.post('/:id/deliver', async (req, res) => {
     res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Order not found' });
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, code: err.code });
     console.error('POST /api/orders/:id/deliver error', err);
     res.status(500).json({ error: 'Failed to mark as delivered', details: err.message });
   }

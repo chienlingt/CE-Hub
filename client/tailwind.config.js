@@ -4,7 +4,17 @@ module.exports = {
     "./src/**/*.{js,jsx,ts,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      spacing: {
+        'bottom-nav': '4rem',
+      },
+      padding: {
+        safe: 'env(safe-area-inset-bottom)',
+      },
+      height: {
+        'bottom-nav': '4rem',
+      },
+    },
   },
   plugins: [],
 }
