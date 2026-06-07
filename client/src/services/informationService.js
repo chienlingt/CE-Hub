@@ -8,7 +8,7 @@
 //  - Set REACT_APP_API_BASE_URL in your environment (e.g. http://localhost:4000)
 //  - Drop this file in client/src/services and import functions as before.
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
+import { API_BASE_URL as API_BASE } from '../utils/apiBaseUrl';
 
 // Map Firestore collection names (original) to REST endpoints provided by the server
 const endpointMap = {

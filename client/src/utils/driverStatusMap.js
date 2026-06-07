@@ -57,9 +57,10 @@ export function statusBadge(orderStatus) {
 /**
  * Returns allowed status transitions from the current status.
  * Completion (→ Completed) is handled separately via the POD modal.
+ * Delivering is no longer a manual transition — use slot depart (Leave warehouse).
  */
 export function allowedTransitions(orderStatus) {
-  if (SCHEDULED_STATUSES.includes(orderStatus))  return ['Delivering', 'Issue'];
+  if (SCHEDULED_STATUSES.includes(orderStatus))  return ['Issue'];
   if (DELIVERING_STATUSES.includes(orderStatus)) return ['Completed', 'Issue'];
   return [];
 }
@@ -81,4 +82,9 @@ export function isIssueEditMode(orderStatus) {
 /** Completed/delivered orders — driver can view or add delivery evidence. */
 export function isCompletedEvidenceMode(orderStatus) {
   return orderStatus === 'Completed' || orderStatus === 'Delivered';
+}
+
+/** Whether the order is in the Scheduled tab (used for loading badge visibility). */
+export function isScheduledStatus(orderStatus) {
+  return SCHEDULED_STATUSES.includes(orderStatus);
 }

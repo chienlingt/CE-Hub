@@ -12,6 +12,7 @@ const { resolveEvidenceSubDir, evidenceFilePath } = upload;
 const {
   createInAppNotification,
 } = require('../services/notificationService');
+const { computeOrderLoadingStats, buildSlotSummaries } = require('../services/orderLoadingStats');
 
 // ─── GET /api/driver/jobs ────────────────────────────────────────────────────
 // Returns orders scoped to the logged-in driver:
@@ -67,7 +68,13 @@ router.get('/jobs', async (req, res) => {
       orderBy: { scheduled_start_date_time: 'asc' },
     });
 
-    const jobs = orders.map(o => {
+    // Augment each order with computed loading stats
+    const ordersWithLoading = orders.map(o => ({
+      ...o,
+      ...computeOrderLoadingStats(o.order_products),
+    }));
+
+    const jobs = ordersWithLoading.map(o => {
       const productNames = o.order_products
         .map(op => op.products?.product_name)
         .filter(Boolean)
@@ -103,6 +110,7 @@ router.get('/jobs', async (req, res) => {
         proof_of_delivery_url:    o.proof_of_delivery_url || null,
         delivery_notes:           o.delivery_notes || null,
         time_slot_id:             o.time_slot_id || null,
+        slot_status:              o.time_slots?.slot_status || null,
         odoo_order_ref:           o.odoo_order_ref || null,
         salesperson_name:         o.salesperson_name  || null,
         salesperson_phone:        o.salesperson_phone || null,
@@ -115,10 +123,23 @@ router.get('/jobs', async (req, res) => {
         issue_desc:               o.issue_desc           || null,
         issue_evidence:               o.issue_evidence               || [],
         is_escalation_acknowledged:   o.is_escalation_acknowledged   ?? false,
+        // Option A: computed loading progress (no new order_status)
+        loading_total:            o.total,
+        loaded_count:             o.loaded_count,
+        all_loaded:               o.all_loaded,
       };
     });
 
-    res.json({ jobs });
+    // Build per-slot summaries from all fetched orders
+    const slots = buildSlotSummaries(ordersWithLoading.map(o => ({
+      id:           o.id,
+      time_slot_id: o.time_slot_id,
+      order_status: o.order_status,
+      all_loaded:   o.all_loaded,
+      time_slots:   o.time_slots,
+    })));
+
+    res.json({ jobs, slots });
   } catch (err) {
     console.error('GET /api/driver/jobs error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -126,15 +147,23 @@ router.get('/jobs', async (req, res) => {
 });
 
 // ─── PUT /api/driver/jobs/:orderId/status ────────────────────────────────────
-// Simple status updates: Scheduled → Delivering, → Issue.
-// When status=Issue: issue_priority_level, issue_reason (required), issue_desc, files are also saved.
-// Completion (→ Completed) must go through POST /api/orders/:id/deliver with POD.
+// Status updates from the driver dashboard: → Issue only.
+// Completion (→ Completed/Delivered) must go through POST /api/orders/:id/deliver with POD.
+// Moving to Delivering is now done via POST /api/time-slots/:id/depart (Option A — Leave warehouse).
 router.put('/jobs/:orderId/status', upload.array('files', 5), async (req, res) => {
   try {
     const { orderId } = req.params;
     const { employee_id, status, delivery_notes, issue_priority_level, issue_reason, issue_desc } = req.body;
 
-    const ALLOWED = ['Scheduled', 'Delivering', 'Issue'];
+    // Option A: Delivering is no longer a valid manual status — use slot depart instead.
+    if (status === 'Delivering') {
+      return res.status(410).json({
+        error: 'Setting status to Delivering directly is no longer supported. Use POST /api/time-slots/:id/depart (Leave warehouse) instead.',
+        code:  'USE_SLOT_DEPART',
+      });
+    }
+
+    const ALLOWED = ['Issue'];
     if (!status || !ALLOWED.includes(status)) {
       return res.status(400).json({
         error: `Invalid status. Allowed: ${ALLOWED.join(', ')}. To complete an order use POST /api/orders/:id/deliver`,
@@ -161,12 +190,6 @@ router.put('/jobs/:orderId/status', upload.array('files', 5), async (req, res) =
 
     const now  = new Date();
     const data = { order_status: status, updated_at: now };
-
-    if (status === 'Delivering') {
-      data.delivery_start_date_time = data.delivery_start_date_time || now;
-      data.actual_start_date_time   = data.actual_start_date_time   || now;
-      if (employee_id) data.dispatched_by = employee_id;
-    }
 
     if (status === 'Issue') {
       if (issue_priority_level !== undefined) data.issue_priority_level = issue_priority_level;

@@ -15,6 +15,7 @@ function apiUrl(path) {
  */
 export function useDriverJobs(employeeId, refreshInterval = 30000) {
   const [jobs, setJobs]       = useState([]);
+  const [slots, setSlots]     = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const timerRef              = useRef(null);
@@ -29,6 +30,7 @@ export function useDriverJobs(employeeId, refreshInterval = 30000) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setJobs(data.jobs || []);
+      setSlots(data.slots || []);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -46,5 +48,5 @@ export function useDriverJobs(employeeId, refreshInterval = 30000) {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [fetchJobs, refreshInterval]);
 
-  return { jobs, loading, error, refresh: fetchJobs };
+  return { jobs, slots, loading, error, refresh: fetchJobs };
 }

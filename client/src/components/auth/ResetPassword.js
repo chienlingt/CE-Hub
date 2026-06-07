@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function ResetPassword() {
   const [searchParams] = useSearchParams();
@@ -40,7 +41,6 @@ function ResetPassword() {
       setMessage('');
       setLoading(true);
 
-      const API_BASE = process.env.REACT_APP_API_BASE_URL || '';
       const response = await fetch(`${API_BASE}/api/auth/reset-confirm`, {
         method: 'POST',
         headers: {
