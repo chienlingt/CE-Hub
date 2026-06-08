@@ -29,19 +29,46 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Serve uploaded POD / issue evidence files
+// Serve uploaded POD / issue evidence files.
+// Allow cross-origin embedding so <img> thumbnails work when the React app
+// (e.g. :3000) and API (:4000) run on different origins during local dev.
+function sniffImageMime(filePath) {
+  try {
+    const head = fs.readFileSync(filePath, { encoding: null }).subarray(0, 12);
+    if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    if (head.length >= 8 && head.toString('ascii', 0, 4) === 'RIFF' && head.toString('ascii', 8, 12) === 'WEBP') {
+      return 'image/webp';
+    }
+    if (head.length >= 8 && head.toString('ascii', 0, 8) === '\x89PNG\r\n\x1a\n') {
+      return 'image/png';
+    }
+  } catch {
+    // fall through — sendFile will guess from extension
+  }
+  return null;
+}
+
+function sendUploadFile(res, filePath) {
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  const mime = sniffImageMime(filePath);
+  if (mime) res.type(mime);
+  return res.sendFile(filePath);
+}
+
 app.use('/uploads', (req, res, next) => {
   const rel = req.path.replace(/^\/+/, '');
   const primary = path.join(uploadsRoot, rel);
   if (fs.existsSync(primary)) {
-    return res.sendFile(primary);
+    return sendUploadFile(res, primary);
   }
   // Back-compat: issue photos saved under status/ before upload path fix
   const legacy = rel.match(/^orders\/del\/report\/([^/]+)\/(.+)$/);
   if (legacy) {
     const alt = path.join(uploadsRoot, 'orders', 'del', 'status', legacy[1], legacy[2]);
     if (fs.existsSync(alt)) {
-      return res.sendFile(alt);
+      return sendUploadFile(res, alt);
     }
   }
   next();

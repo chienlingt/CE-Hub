@@ -93,7 +93,7 @@ export default function CompletedDeliveries() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-xl font-bold text-gray-800">Completed Deliveries</h2>
-          <p className="text-sm text-gray-500">FR-04-004 — delivery completion records with POD and sync status</p>
+          {/* <p className="text-sm text-gray-500">FR-04-004 — delivery completion records with POD and sync status</p> */}
         </div>
         <button
           onClick={load}

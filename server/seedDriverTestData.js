@@ -100,7 +100,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'ben',
     name:     'Ben Tan',
-    phone:    '60101234001',
+    phone:    '601156751977',
     address:  '12 Jalan SS2/24, Petaling Jaya',
     city:     'Petaling Jaya',
     postcode: '47300',
@@ -109,7 +109,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'siti',
     name:     'Siti Aminah',
-    phone:    '60101234002',
+    phone:    '60182614238',
     address:  '8 Lorong Maarof, Bangsar',
     city:     'Kuala Lumpur',
     postcode: '59000',

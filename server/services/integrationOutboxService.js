@@ -146,6 +146,8 @@ async function enqueueOnTheWayNotifications(timeSlotId, activeOrders, slotMeta =
         orderId:        order.id,
         customerId:     customer.id,
         timeSlotId,
+        orderRef:       order.odoo_order_ref || order.id.slice(0, 8).toUpperCase(),
+        address:        order.delivery_address || 'your delivery address',
         phone:          customer.phone || null,
         email:          customer.email || null,
         customerName:   customer.full_name || 'Customer',
