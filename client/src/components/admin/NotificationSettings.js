@@ -1,80 +1,234 @@
-import React, { useState, useEffect } from 'react';
 import {
-  Bell, MessageCircle, Save, CheckCircle,
-  AlertCircle, ToggleLeft, ToggleRight, User, Phone
+  AlertCircle,
+  Bell,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  MessageCircle,
+  Phone,
+  Save,
+  Search,
+  ToggleLeft, ToggleRight,
+  Users
 } from 'lucide-react';
-
+import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
-// ── Shared UI helpers ─────────────────────────────────────────────────────────
+// ── Primitives ────────────────────────────────────────────────────────────────
 
 function Toggle({ checked, onChange, disabled }) {
   return (
     <button
       onClick={() => !disabled && onChange(!checked)}
       disabled={disabled}
-      className={`transition-colors ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+      className={`transition-colors ${disabled ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
     >
       {checked
-        ? <ToggleRight size={36} className="text-green-600" />
-        : <ToggleLeft  size={36} className="text-gray-400" />
-      }
+        ? <ToggleRight size={32} className="text-green-500" />
+        : <ToggleLeft  size={32} className="text-gray-300" />}
     </button>
   );
 }
 
-function SectionHeader({ icon: Icon, title, subtitle, color = 'text-gray-600' }) {
+function Toast({ toast }) {
+  if (!toast) return null;
   return (
-    <div className="px-5 py-4 border-b border-gray-100">
-      <div className="flex items-center space-x-2">
-        <Icon size={16} className={color} />
-        <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
-      </div>
-      {subtitle && <p className="text-xs text-gray-500 mt-0.5 ml-6">{subtitle}</p>}
+    <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium border ${
+      toast.type === 'error'
+        ? 'bg-red-50 text-red-700 border-red-200'
+        : 'bg-green-50 text-green-700 border-green-200'
+    }`}>
+      {toast.type === 'error'
+        ? <AlertCircle size={15} />
+        : <CheckCircle size={15} />}
+      {toast.msg}
     </div>
   );
 }
 
-function SettingRow({ title, description, children }) {
+// ── Searchable Admin Dropdown ─────────────────────────────────────────────────
+
+function AdminDropdown({ admins, isEnabled, onToggle, masterOn }) {
+  const [open, setOpen]     = useState(false);
+  const [query, setQuery]   = useState('');
+  const ref                 = useRef(null);
+
+  const selectedCount = admins.filter(a => isEnabled(a.id)).length;
+  const filtered      = admins.filter(a =>
+    (a.name || a.display_name || '').toLowerCase().includes(query.toLowerCase()) ||
+    (a.contact_number || '').includes(query)
+  );
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
   return (
-    <div className="flex items-start justify-between py-4 border-b border-gray-100 last:border-0">
-      <div className="flex-1 pr-6">
-        <p className="text-sm font-medium text-gray-900">{title}</p>
-        {description && <p className="text-xs text-gray-500 mt-0.5">{description}</p>}
-      </div>
-      <div className="flex-shrink-0">{children}</div>
+    <div className="relative" ref={ref}>
+      {/* Trigger */}
+      <button
+        onClick={() => masterOn && setOpen(v => !v)}
+        disabled={!masterOn}
+        className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-colors w-full
+          ${masterOn
+            ? 'border-gray-200 bg-white hover:bg-gray-50 text-gray-700 cursor-pointer'
+            : 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'}`}
+      >
+        <Users size={14} className="text-gray-400 flex-shrink-0" />
+        <span className="flex-1 text-left">
+          {selectedCount === 0
+            ? 'No recipients'
+            : selectedCount === admins.length
+            ? 'All admins'
+            : `${selectedCount} of ${admins.length} admins`}
+        </span>
+        <ChevronDown size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute left-0 right-0 mt-1 bg-white rounded-xl border border-gray-200 shadow-xl z-30 overflow-hidden">
+          {/* Search */}
+          <div className="p-2 border-b border-gray-100">
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 rounded-lg">
+              <Search size={13} className="text-gray-400 flex-shrink-0" />
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search admins…"
+                className="flex-1 bg-transparent text-sm outline-none text-gray-700 placeholder-gray-400"
+              />
+            </div>
+          </div>
+
+          {/* List */}
+          <div className="max-h-56 overflow-y-auto divide-y divide-gray-50">
+            {filtered.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">No results</p>
+            ) : filtered.map(admin => {
+              const on      = isEnabled(admin.id);
+              const hasPhone = !!admin.contact_number;
+              return (
+                <div
+                  key={admin.id}
+                  onClick={() => hasPhone && onToggle(admin.id)}
+                  className={`flex items-center gap-3 px-3 py-2.5 transition-colors
+                    ${hasPhone ? 'cursor-pointer hover:bg-gray-50' : 'opacity-50 cursor-not-allowed'}`}
+                >
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold
+                    ${on ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {(admin.name || admin.display_name || '?')[0].toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {admin.name || admin.display_name || 'Unknown'}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate flex items-center gap-1">
+                      {hasPhone
+                        ? <><Phone size={9} />{admin.contact_number}</>
+                        : <span className="text-red-400">No phone</span>}
+                    </p>
+                  </div>
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0
+                    ${on ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+                    {on && <CheckCircle size={10} className="text-white" />}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function TemplatePlaceholders({ placeholders }) {
+// ── Collapsible Template Editor ───────────────────────────────────────────────
+
+function TemplateEditor({ value, onChange, onSave, saving, disabled, color, placeholders }) {
+  const [open, setOpen] = useState(false);
   return (
-    <p className="text-xs text-gray-500 mb-2">
-      Placeholders:{' '}
-      {placeholders.map(p => (
-        <code key={p} className="bg-gray-100 px-1 rounded mr-1">{`{${p}}`}</code>
-      ))}
-    </p>
+    <div className="border border-gray-100 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center justify-between w-full px-3 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors text-xs text-gray-500 font-medium"
+      >
+        <span>Message template</span>
+        <ChevronRight size={13} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <div className="p-3 space-y-2">
+          <div className="flex flex-wrap gap-1">
+            {placeholders.map(p => (
+              <code key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{`{${p}}`}</code>
+            ))}
+          </div>
+          <textarea
+            rows={3}
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            disabled={disabled}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-offset-0 resize-none disabled:opacity-40 disabled:bg-gray-50"
+            style={{ '--tw-ring-color': color }}
+          />
+          <button
+            onClick={onSave}
+            disabled={saving || disabled}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-white text-xs font-semibold rounded-lg disabled:opacity-40 transition-colors"
+            style={{ backgroundColor: disabled ? '#9ca3af' : color }}
+          >
+            <Save size={12} />
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Notification Card ─────────────────────────────────────────────────────────
+
+function NotifCard({ icon: Icon, label, color, accentBg, checked, onToggle, disabled: masterDisabled, children }) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+      {/* Card header — rounded top so no overflow-hidden needed on outer div */}
+      <div className={`flex items-center justify-between px-4 py-3 ${accentBg} rounded-t-2xl`}>
+        <div className="flex items-center gap-2">
+          <Icon size={16} style={{ color }} />
+          <span className="text-sm font-semibold text-gray-800">{label}</span>
+        </div>
+        <Toggle checked={checked} onChange={onToggle} disabled={masterDisabled} />
+      </div>
+      {/* Card body — overflow-visible so dropdowns escape the card */}
+      <div className="p-4 space-y-3 relative overflow-visible">
+        {children}
+      </div>
+    </div>
   );
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function NotificationSettings() {
-  const [settings,           setSettings]           = useState({});
-  const [admins,             setAdmins]             = useState([]);
-  const [adminWaRecipients,  setAdminWaRecipients]  = useState([]); // IDs
-  const [allAdminsEnabled,   setAllAdminsEnabled]   = useState(true);
-  const [loading,            setLoading]            = useState(true);
-  const [saving,             setSaving]             = useState({});
-  const [toast,              setToast]              = useState(null);
+  const [settings,          setSettings]          = useState({});
+  const [admins,            setAdmins]            = useState([]);
+  const [adminWaRecipients, setAdminWaRecipients] = useState([]);
+  const [allAdminsEnabled,  setAllAdminsEnabled]  = useState(true);
+  const [loading,           setLoading]           = useState(true);
+  const [saving,            setSaving]            = useState({});
+  const [toast,             setToast]             = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // ── Load settings + admin employees ──────────────────────────────────────
   useEffect(() => {
     Promise.all([
       fetch(`${API_BASE}/api/settings`).then(r => r.json()),
@@ -103,8 +257,6 @@ export default function NotificationSettings() {
       .finally(() => setLoading(false));
   }, []);
 
-  // ── Save helpers ──────────────────────────────────────────────────────────
-
   const saveSetting = async (key, value) => {
     setSaving(prev => ({ ...prev, [key]: true }));
     try {
@@ -128,8 +280,6 @@ export default function NotificationSettings() {
     saveSetting(key, next);
   };
 
-  // ── Toggle individual admin in WhatsApp recipient list ────────────────────
-
   const toggleAdminWa = async (adminId) => {
     let next;
     if (allAdminsEnabled) {
@@ -149,218 +299,102 @@ export default function NotificationSettings() {
   const isAdminWaEnabled = (adminId) =>
     allAdminsEnabled || adminWaRecipients.includes(adminId);
 
-  // ── Derived values ────────────────────────────────────────────────────────
+  const adminWaOn       = settings['whatsapp_admin_notification_enabled']      !== 'false';
+  const salespersonWaOn = settings['whatsapp_salesperson_notification_enabled'] !== 'false';
+  const customerWaOn    = settings['whatsapp_customer_notification_enabled']    !== 'false';
 
-  const adminWaOn       = settings['whatsapp_admin_notification_enabled']       !== 'false';
-  const salespersonWaOn = settings['whatsapp_salesperson_notification_enabled']  !== 'false';
-  const customerWaOn    = settings['whatsapp_customer_notification_enabled']     !== 'false';
-
-  const customerTemplate    = settings['whatsapp_failure_message_template']       || '';
-  const salespersonTemplate = settings['whatsapp_failure_salesperson_template']   || '';
-  const adminTemplate       = settings['whatsapp_failure_admin_template']         || '';
+  const customerTemplate    = settings['whatsapp_failure_message_template']      || '';
+  const salespersonTemplate = settings['whatsapp_failure_salesperson_template']  || '';
+  const adminTemplate       = settings['whatsapp_failure_admin_template']        || '';
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600" />
+        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-green-500" />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
+      <Toast toast={toast} />
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${
-          toast.type === 'error'
-            ? 'bg-red-50 text-red-700 border border-red-200'
-            : 'bg-green-50 text-green-700 border border-green-200'
-        }`}>
-          {toast.type === 'error'
-            ? <AlertCircle size={16} className="mr-2" />
-            : <CheckCircle size={16} className="mr-2" />}
-          {toast.msg}
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-          <Bell className="w-6 h-6 mr-2 text-green-600" />
-          Notification Settings
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Configure WhatsApp notifications sent on delivery failure.
-        </p>
+      {/* Page header */}
+      <div className="flex items-center gap-2 mb-6">
+        <Bell size={20} className="text-gray-500" />
+        <h1 className="text-lg font-bold text-gray-800">Delivery Failure WhatsApp Notification</h1>
       </div>
 
-      {/* ── Customer WhatsApp ──────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
-        <SectionHeader
+      {/* 3-column grid on wide screens, stacked on mobile */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+        {/* ── Customer ─────────────────────────────────────────────────────── */}
+        <NotifCard
           icon={MessageCircle}
-          title="Customer WhatsApp"
-          subtitle="Sent to the customer's phone number when a delivery fails."
-          color="text-green-600"
-        />
-        <div className="px-5">
-          <SettingRow
-            title="Enable customer WhatsApp notification"
-            description="Automatically send a WhatsApp message to the customer on delivery failure."
-          >
-            <Toggle
-              checked={customerWaOn}
-              onChange={() => toggleSetting('whatsapp_customer_notification_enabled')}
-              disabled={saving['whatsapp_customer_notification_enabled']}
-            />
-          </SettingRow>
-          <div className="pb-5">
-            <TemplatePlaceholders placeholders={['customerName', 'orderRef', 'reason']} />
-            <textarea
-              rows={3}
-              value={customerTemplate}
-              onChange={e => setSettings(prev => ({ ...prev, whatsapp_failure_message_template: e.target.value }))}
-              disabled={!customerWaOn}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none disabled:opacity-50 disabled:bg-gray-50"
-              placeholder="Hi {customerName}, your delivery for order {orderRef} was unsuccessful..."
-            />
-            <button
-              onClick={() => saveSetting('whatsapp_failure_message_template', customerTemplate)}
-              disabled={saving['whatsapp_failure_message_template'] || !customerWaOn}
-              className="mt-2 flex items-center px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              <Save size={14} className="mr-1.5" />
-              {saving['whatsapp_failure_message_template'] ? 'Saving...' : 'Save Template'}
-            </button>
-          </div>
-        </div>
-      </div>
+          label="Customer"
+          color="#16a34a"
+          accentBg="bg-green-50"
+          checked={customerWaOn}
+          onToggle={() => toggleSetting('whatsapp_customer_notification_enabled')}
+        >
+          <TemplateEditor
+            value={customerTemplate}
+            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_message_template: v }))}
+            onSave={() => saveSetting('whatsapp_failure_message_template', customerTemplate)}
+            saving={saving['whatsapp_failure_message_template']}
+            disabled={!customerWaOn}
+            color="#16a34a"
+            placeholders={['customerName', 'orderRef', 'reason']}
+          />
+        </NotifCard>
 
-      {/* ── Salesperson WhatsApp ──────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
-        <SectionHeader
+        {/* ── Salesperson ───────────────────────────────────────────────────── */}
+        <NotifCard
           icon={MessageCircle}
-          title="Salesperson WhatsApp"
-          subtitle="Sent to the salesperson in charge of the order on delivery failure."
-          color="text-blue-600"
-        />
-        <div className="px-5">
-          <SettingRow
-            title="Enable salesperson WhatsApp notification"
-            description="Salesperson phone is pulled from the Odoo order. Make sure the salesperson_phone field is populated."
-          >
-            <Toggle
-              checked={salespersonWaOn}
-              onChange={() => toggleSetting('whatsapp_salesperson_notification_enabled')}
-              disabled={saving['whatsapp_salesperson_notification_enabled']}
-            />
-          </SettingRow>
-          <div className="pb-5">
-            <TemplatePlaceholders placeholders={['recipientName', 'customerName', 'customerPhone', 'orderRef', 'reason', 'driverName', 'address']} />
-            <textarea
-              rows={3}
-              value={salespersonTemplate}
-              onChange={e => setSettings(prev => ({ ...prev, whatsapp_failure_salesperson_template: e.target.value }))}
-              disabled={!salespersonWaOn}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none disabled:opacity-50 disabled:bg-gray-50"
-              placeholder="Hi {recipientName}, delivery failed for order {orderRef}..."
-            />
-            <button
-              onClick={() => saveSetting('whatsapp_failure_salesperson_template', salespersonTemplate)}
-              disabled={saving['whatsapp_failure_salesperson_template'] || !salespersonWaOn}
-              className="mt-2 flex items-center px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              <Save size={14} className="mr-1.5" />
-              {saving['whatsapp_failure_salesperson_template'] ? 'Saving...' : 'Save Template'}
-            </button>
-          </div>
-        </div>
-      </div>
+          label="Salesperson"
+          color="#2563eb"
+          accentBg="bg-blue-50"
+          checked={salespersonWaOn}
+          onToggle={() => toggleSetting('whatsapp_salesperson_notification_enabled')}
+        >
+          <TemplateEditor
+            value={salespersonTemplate}
+            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_salesperson_template: v }))}
+            onSave={() => saveSetting('whatsapp_failure_salesperson_template', salespersonTemplate)}
+            saving={saving['whatsapp_failure_salesperson_template']}
+            disabled={!salespersonWaOn}
+            color="#2563eb"
+            placeholders={['recipientName', 'customerName', 'customerPhone', 'orderRef', 'reason', 'driverName', 'address']}
+          />
+        </NotifCard>
 
-      {/* ── Admin WhatsApp ─────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
-        <SectionHeader
+        {/* ── Admin ─────────────────────────────────────────────────────────── */}
+        <NotifCard
           icon={MessageCircle}
-          title="Admin WhatsApp"
-          subtitle="Sent to logistics admin employees on delivery failure."
-          color="text-orange-600"
-        />
-        <div className="px-5">
-          <SettingRow
-            title="Enable admin WhatsApp notification"
-            description="Admin must have a contact number set in their employee profile to receive WhatsApp."
-          >
-            <Toggle
-              checked={adminWaOn}
-              onChange={() => toggleSetting('whatsapp_admin_notification_enabled')}
-              disabled={saving['whatsapp_admin_notification_enabled']}
-            />
-          </SettingRow>
+          label="Admin"
+          color="#ea580c"
+          accentBg="bg-orange-50"
+          checked={adminWaOn}
+          onToggle={() => toggleSetting('whatsapp_admin_notification_enabled')}
+        >
+          <AdminDropdown
+            admins={admins}
+            isEnabled={isAdminWaEnabled}
+            onToggle={toggleAdminWa}
+            masterOn={adminWaOn}
+          />
+          <TemplateEditor
+            value={adminTemplate}
+            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_admin_template: v }))}
+            onSave={() => saveSetting('whatsapp_failure_admin_template', adminTemplate)}
+            saving={saving['whatsapp_failure_admin_template']}
+            disabled={!adminWaOn}
+            color="#ea580c"
+            placeholders={['adminName', 'customerName', 'orderRef', 'reason', 'driverName', 'address', 'salespersonName', 'salespersonPhone']}
+          />
+        </NotifCard>
 
-          {/* Admin recipient list */}
-          {admins.length === 0 ? (
-            <div className="py-4 text-sm text-gray-400 text-center">
-              No admin employees found.
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-100 mb-4">
-              {admins.map(admin => (
-                <div key={admin.id} className="flex items-center justify-between py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
-                      <User size={14} className="text-orange-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {admin.name || admin.display_name || 'Unknown'}
-                      </p>
-                      <p className="text-xs text-gray-500 flex items-center gap-1">
-                        <Phone size={10} />
-                        {admin.contact_number
-                          ? admin.contact_number
-                          : <span className="text-red-400">No contact number — add in Employee profile</span>
-                        }
-                      </p>
-                    </div>
-                  </div>
-                  <Toggle
-                    checked={isAdminWaEnabled(admin.id)}
-                    onChange={() => toggleAdminWa(admin.id)}
-                    disabled={!adminWaOn || !admin.contact_number}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {!adminWaOn && (
-            <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mb-4">
-              Enable admin WhatsApp above to configure recipients.
-            </p>
-          )}
-
-          <div className="pb-5">
-            <TemplatePlaceholders placeholders={['adminName', 'customerName', 'orderRef', 'reason', 'driverName', 'address', 'salespersonName', 'salespersonPhone']} />
-            <textarea
-              rows={3}
-              value={adminTemplate}
-              onChange={e => setSettings(prev => ({ ...prev, whatsapp_failure_admin_template: e.target.value }))}
-              disabled={!adminWaOn}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none disabled:opacity-50 disabled:bg-gray-50"
-              placeholder="Hi {adminName}, delivery failed — Order {orderRef}..."
-            />
-            <button
-              onClick={() => saveSetting('whatsapp_failure_admin_template', adminTemplate)}
-              disabled={saving['whatsapp_failure_admin_template'] || !adminWaOn}
-              className="mt-2 flex items-center px-4 py-2 bg-orange-600 text-white text-sm rounded-lg hover:bg-orange-700 disabled:opacity-50 transition-colors"
-            >
-              <Save size={14} className="mr-1.5" />
-              {saving['whatsapp_failure_admin_template'] ? 'Saving...' : 'Save Template'}
-            </button>
-          </div>
-        </div>
       </div>
-
     </div>
   );
 }

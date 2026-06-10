@@ -1,21 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle, Clock, User, FileText, Calendar } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, FileText, MessageSquare, X } from 'lucide-react';
 import {
     getAllCases,
     getAllEmployees,
     updateCases
 } from '../../services/informationService';
 
-/**
- * Cases component
- * - Normalizes API payloads to a consistent shape for the UI
- * - Handles loading, errors, filtering, and updating case status (mark resolved)
- * - Uses defensive parsing for dates and fields to avoid runtime errors
- */
-
-// Normalize a case object coming from the API to the UI shape used in this component
 function normalizeCase(c) {
-    // Common variants: snake_case from server or PascalCase/other from older code
     return {
         id: c.id ?? c.case_id ?? c.CasesID ?? c.CasesId,
         EmployeeID: c.employee_id ?? c.EmployeeID ?? c.employeeId ?? null,
@@ -25,28 +16,37 @@ function normalizeCase(c) {
     };
 }
 
-const getStatusIcon = (status) => {
-    switch (status) {
-        case 'resolved': return <CheckCircle className="w-4 h-4 text-green-600" />;
-        case 'pending': return <Clock className="w-4 h-4 text-yellow-600" />;
-        default: return <AlertTriangle className="w-4 h-4 text-red-600" />;
-    }
-};
-
 function formatDate(value) {
     if (!value) return '';
-    // If Firestore-like Timestamp object
-    if (typeof value === 'object' && typeof value.toDate === 'function') {
-        const d = value.toDate();
-        return d.toLocaleString();
-    }
-    // If ISO string or Date
     const d = (value instanceof Date) ? value : new Date(value);
     if (Number.isNaN(d.getTime())) return String(value);
-    return d.toLocaleString('en-US', {
+    return d.toLocaleString('en-MY', {
         year: 'numeric', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: false
     });
+}
+
+function StatusBadge({ status }) {
+    if ((status || '').toLowerCase() === 'resolved') {
+        return (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                <CheckCircle size={11} /> Resolved
+            </span>
+        );
+    }
+    return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+            <Clock size={11} /> Pending
+        </span>
+    );
+}
+
+function EmployeeAvatar({ name }) {
+    return (
+        <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
+            {(name || '?')[0].toUpperCase()}
+        </div>
+    );
 }
 
 export default function Cases() {
@@ -68,7 +68,6 @@ export default function Cases() {
                     getAllCases(),
                     getAllEmployees()
                 ]);
-                // Normalize both lists defensively
                 const normalizedCases = (Array.isArray(rawCases) ? rawCases : (rawCases?.data ?? [])).map(normalizeCase);
                 const normalizedEmployees = (Array.isArray(rawEmployees) ? rawEmployees : (rawEmployees?.data ?? [])).map(emp => ({
                     id: emp.id ?? emp.employee_id ?? emp.EmployeeID,
@@ -78,10 +77,8 @@ export default function Cases() {
                     setCases(normalizedCases);
                     setEmployees(normalizedEmployees);
                 }
-                // console.log('Loaded cases and employees:', normalizedCases, normalizedEmployees);
             } catch (err) {
                 if (err.name !== 'AbortError') {
-                    console.error('Error loading cases/employees:', err);
                     setError('Failed to load data. ' + (err.message || ''));
                 }
             } finally {
@@ -92,134 +89,94 @@ export default function Cases() {
         return () => ac.abort();
     }, []);
 
-    const employeeMap = new Map(
-        employees.map(e => [String(e.id ?? e.employeeId ?? e.EmployeeID ?? ''), e])
-    );
-    console.log('Employee Map:', Array.from(employeeMap.entries()))
+    const employeeMap = new Map(employees.map(e => [String(e.id ?? ''), e]));
 
     const getEmployeeName = (employeeId) => {
         if (!employeeId) return 'Unassigned';
-
-        const key = String(employeeId);
-        const emp = employeeMap.get(key);
-
-        console.log('Lookup:', { employeeId: key, found: emp });
-
-        return emp?.name ?? `Unknown Employee (${key})`;
+        return employeeMap.get(String(employeeId))?.name ?? 'Unknown';
     };
-
 
     const updateCaseStatus = async (caseId, newStatus) => {
         if (!caseId) return;
         setSaving(true);
         setError(null);
         try {
-            // updateCases should accept (id, data) where data uses the server's expected field names.
-            // The informationService.updateCases likely maps to PUT /api/reports or similar; adjust if your API expects different field names.
             await updateCases(caseId, { status: newStatus });
             setCases(prev => prev.map(c => (c.id === caseId ? { ...c, Status: newStatus } : c)));
-            if (selectedCase && selectedCase.id === caseId){
-                console.log('Updating selected case status locally', selectedCase);
-                setSelectedCase(prev => ({ ...prev, Status: newStatus }));
-            }
+            if (selectedCase?.id === caseId) setSelectedCase(prev => ({ ...prev, Status: newStatus }));
         } catch (err) {
-            console.error('Error updating case status:', err);
             setError('Failed to update status. ' + (err.message || ''));
         } finally {
             setSaving(false);
         }
     };
 
-    // Apply filter
-    const filteredCases = cases.filter(c => {
-        if (filter === 'all') return true;
-        return (c.Status || '').toLowerCase() === filter;
-    });
+    const filteredCases = cases.filter(c =>
+        filter === 'all' ? true : (c.Status || '').toLowerCase() === filter
+    );
+
+    const pending  = cases.filter(c => (c.Status || '').toLowerCase() === 'pending').length;
+    const resolved = cases.filter(c => (c.Status || '').toLowerCase() === 'resolved').length;
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-                <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
-                    <p className="mt-4 text-gray-600">Loading cases...</p>
-                </div>
+            <div className="bg-gray-50 min-h-screen flex items-center justify-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
             </div>
         );
     }
 
     return (
-        <div className="bg-gray-50">
-            <div className="w-full px-4 sm:px-2 lg:px-2 py-2">
+        <div className="bg-gray-50 min-h-screen">
+            <div className="w-full px-4 sm:px-6 py-4 space-y-4">
                 {error && (
-                    <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
-                        {error}
-                    </div>
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>
                 )}
 
-                {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-3">
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-red-100 rounded-lg">
-                                <AlertTriangle className="w-6 h-6 text-red-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Pending Issues</p>
-                                <p className="text-2xl font-bold text-gray-900">
-                                    {cases.filter(r => (r.Status || '').toLowerCase() === 'pending').length}
-                                </p>
-                            </div>
+                {/* Stat cards */}
+                <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+                        <div className="p-2 bg-orange-100 rounded-lg"><AlertTriangle className="w-5 h-5 text-orange-600" /></div>
+                        <div>
+                            <p className="text-xs text-gray-500">Pending</p>
+                            <p className="text-xl font-bold text-gray-900">{pending}</p>
                         </div>
                     </div>
-
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-green-100 rounded-lg">
-                                <CheckCircle className="w-6 h-6 text-green-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Resolved Issues</p>
-                                <p className="text-2xl font-bold text-gray-900">
-                                    {cases.filter(r => (r.Status || '').toLowerCase() === 'resolved').length}
-                                </p>
-                            </div>
+                    <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+                        <div className="p-2 bg-green-100 rounded-lg"><CheckCircle className="w-5 h-5 text-green-600" /></div>
+                        <div>
+                            <p className="text-xs text-gray-500">Resolved</p>
+                            <p className="text-xl font-bold text-gray-900">{resolved}</p>
                         </div>
                     </div>
-
-                    <div className="bg-white rounded-lg shadow p-6">
-                        <div className="flex items-center">
-                            <div className="p-2 bg-blue-100 rounded-lg">
-                                <FileText className="w-6 h-6 text-blue-600" />
-                            </div>
-                            <div className="ml-4">
-                                <p className="text-sm font-medium text-gray-600">Total</p>
-                                <p className="text-2xl font-bold text-gray-900">{cases.length}</p>
-                            </div>
+                    <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
+                        <div className="p-2 bg-blue-100 rounded-lg"><FileText className="w-5 h-5 text-blue-600" /></div>
+                        <div>
+                            <p className="text-xs text-gray-500">Total</p>
+                            <p className="text-xl font-bold text-gray-900">{cases.length}</p>
                         </div>
                     </div>
                 </div>
 
-                {/* Filters */}
-                <div className="bg-white rounded-lg shadow mb-6">
-                    <div className="border-b border-gray-200">
-                        <nav className="flex space-x-8 px-6">
-                            {[
-                                { key: 'all', label: 'All Cases' },
-                                { key: 'pending', label: 'Pending' },
-                                { key: 'resolved', label: 'Resolved' }
-                            ].map(tab => (
-                                <button
-                                    key={tab.key}
-                                    onClick={() => setFilter(tab.key)}
-                                    className={`py-4 px-1 border-b-2 font-medium text-sm ${filter === tab.key
-                                        ? 'border-blue-500 text-blue-600'
-                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                                >
-                                    {tab.label}
-                                </button>
-                            ))}
-                        </nav>
-                    </div>
+                {/* Filter pills */}
+                <div className="flex items-center gap-2">
+                    {[
+                        { key: 'all',      label: 'All' },
+                        { key: 'pending',  label: 'Pending' },
+                        { key: 'resolved', label: 'Resolved' },
+                    ].map(f => (
+                        <button
+                            key={f.key}
+                            onClick={() => setFilter(f.key)}
+                            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                                filter === f.key
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                        >
+                            {f.label}
+                        </button>
+                    ))}
                 </div>
 
                 {/* Table */}
@@ -228,132 +185,116 @@ export default function Cases() {
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Content</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Employee</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Issue Content</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                                    <th className="px-4 py-3" />
                                 </tr>
                             </thead>
-
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {filteredCases.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="text-center py-8 text-gray-500">No cases found.</td>
+                                        <td colSpan={5} className="text-center py-10 text-gray-400">
+                                            <FileText className="w-7 h-7 mx-auto mb-2 opacity-40" />
+                                            No cases found.
+                                        </td>
                                     </tr>
                                 ) : (
-                                    filteredCases.map((c, idx) => (
-                                        <tr key={c.id ?? idx} className="hover:bg-gray-50">
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{idx + 1}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="flex items-center">
-                                                    <User className="w-4 h-4 text-gray-400 mr-2" />
-                                                    <span className="text-sm text-gray-900">{getEmployeeName(c.EmployeeID)}</span>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <div className="text-sm text-gray-900 max-w-xs truncate">{c.Content}</div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="flex items-center">
-                                                    {getStatusIcon(c.Status)}
-                                                    <span className="ml-2 text-sm text-gray-900 capitalize">{c.Status}</span>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                <div className="flex items-center">
-                                                    <Calendar className="w-4 h-4 mr-1" />
+                                    filteredCases.map(c => {
+                                        const name = getEmployeeName(c.EmployeeID);
+                                        return (
+                                            <tr
+                                                key={c.id}
+                                                className="hover:bg-gray-50 cursor-pointer"
+                                                onClick={() => setSelectedCase(c)}
+                                            >
+                                                <td className="px-4 py-3 whitespace-nowrap">
+                                                    <div className="flex items-center gap-2">
+                                                        <EmployeeAvatar name={name} />
+                                                        <span className="text-sm font-medium text-gray-900">{name}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-4 py-3 max-w-xs">
+                                                    <p className="text-sm text-gray-700 truncate">{c.Content || '—'}</p>
+                                                </td>
+                                                <td className="px-4 py-3 whitespace-nowrap">
+                                                    <StatusBadge status={c.Status} />
+                                                </td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">
                                                     {formatDate(c.DateCasesed)}
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                                                <button
-                                                    onClick={() => setSelectedCase(c)}
-                                                    className="text-blue-600 hover:text-blue-900"
-                                                >
-                                                    View
-                                                </button>
-                                                {(c.Status || '').toLowerCase() === 'pending' && (
-                                                    <button
-                                                        onClick={() => updateCaseStatus(c.id, 'resolved')}
-                                                        className="text-green-600 hover:text-green-900"
-                                                        disabled={saving}
-                                                    >
-                                                        Resolve
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))
+                                                </td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-right">
+                                                    {(c.Status || '').toLowerCase() === 'pending' && (
+                                                        <button
+                                                            onClick={e => { e.stopPropagation(); updateCaseStatus(c.id, 'resolved'); }}
+                                                            className="text-xs text-green-600 hover:text-green-800 font-medium"
+                                                            disabled={saving}
+                                                        >
+                                                            Resolve
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
                                 )}
                             </tbody>
                         </table>
                     </div>
                 </div>
-
-                {filteredCases.length === 0 && (
-                    <div className="text-center py-12">
-                        <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500">No cases found for the selected filter.</p>
-                    </div>
-                )}
             </div>
 
             {/* Detail modal */}
             {selectedCase && (
-                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-                    <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-                        <div className="mt-3">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-bold text-gray-900">Case Details</h3>
-                                <button onClick={() => setSelectedCase(null)} className="text-gray-400 hover:text-gray-600">
-                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                                    </svg>
-                                </button>
+                <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mt-16 mb-10">
+                        <div className={`px-6 py-4 rounded-t-2xl flex items-center justify-between border-b ${
+                            (selectedCase.Status || '').toLowerCase() === 'resolved'
+                                ? 'bg-green-50 border-green-200'
+                                : 'bg-orange-50 border-orange-200'
+                        }`}>
+                            <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <MessageSquare size={16} className="text-gray-600" />
+                                    <h3 className="text-base font-bold text-gray-900">Case Details</h3>
+                                    <StatusBadge status={selectedCase.Status} />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-0.5">{formatDate(selectedCase.DateCasesed)}</p>
                             </div>
+                            <button onClick={() => setSelectedCase(null)} className="p-1 rounded-lg hover:bg-gray-200">
+                                <X size={18} />
+                            </button>
+                        </div>
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Employee</label>
-                                    <p className="mt-1 text-sm text-gray-900">{getEmployeeName(selectedCase.EmployeeID)}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Issue Description</label>
-                                    <p className="mt-1 text-sm text-gray-900">{selectedCase.Content}</p>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Status</label>
-                                    <div className="flex items-center mt-1">
-                                        {getStatusIcon(selectedCase.Status)}
-                                        <span className="ml-2 text-sm text-gray-900 capitalize">{selectedCase.Status}</span>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Date</label>
-                                    <p className="mt-1 text-sm text-gray-900">{formatDate(selectedCase.DateCasesed)}</p>
+                        <div className="p-6 space-y-4">
+                            <div>
+                                <p className="text-xs text-gray-500 mb-1.5">Reported by</p>
+                                <div className="flex items-center gap-2">
+                                    <EmployeeAvatar name={getEmployeeName(selectedCase.EmployeeID)} />
+                                    <span className="text-sm font-medium text-gray-900">{getEmployeeName(selectedCase.EmployeeID)}</span>
                                 </div>
                             </div>
 
-                            <div className="flex justify-end space-x-3 mt-6">
-                                <button onClick={() => setSelectedCase(null)} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Close</button>
-                                {(selectedCase.Status || '').toLowerCase() === 'pending' && (
+                            <div>
+                                <p className="text-xs text-gray-500 mb-1.5">Issue Description</p>
+                                <div className="text-sm text-gray-800 bg-gray-50 rounded-lg p-3 border border-gray-100 whitespace-pre-wrap leading-relaxed">
+                                    {selectedCase.Content || '—'}
+                                </div>
+                            </div>
+
+                            {(selectedCase.Status || '').toLowerCase() === 'pending' && (
+                                <div className="flex justify-end pt-2 border-t border-gray-100">
                                     <button
-                                        onClick={() => {
-                                            updateCaseStatus(selectedCase.id, 'resolved');
-                                            setSelectedCase(null);
-                                        }}
-                                        className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                                        onClick={() => { updateCaseStatus(selectedCase.id, 'resolved'); setSelectedCase(null); }}
+                                        className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
                                         disabled={saving}
                                     >
-                                        Resolve
+                                        <CheckCircle size={16} />
+                                        {saving ? 'Resolving…' : 'Mark Resolved'}
                                     </button>
-                                )}
-                            </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

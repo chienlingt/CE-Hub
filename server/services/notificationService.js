@@ -29,7 +29,7 @@ async function getAdminEmployees() {
   return prisma.employees.findMany({
     where: {
       active_flag: true,
-      role: { name: { equals: 'admin', mode: 'insensitive' } },
+      role: { name: { contains: 'admin', mode: 'insensitive' } },
     },
     include: { role: true },
   });
@@ -133,8 +133,30 @@ async function sendDeliveryFailureNotifications(orderId) {
   // ── 2. Notify admins in-app (FR-06-001, FR-06-002) ───────────────────────
   const allAdmins = await getAdminEmployees();
   for (const admin of allAdmins) {
-    const message = `Delivery failed — Order ${orderRef} | Customer: ${customerName} | Reason: ${failureReason}`;
+    const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
+    const message = `Delivery failed · ${customerName} · ${failureReason} · #${shortRef}`;
     await createInAppNotification(admin.id, message, 'error', orderId);
+  }
+
+  // ── 2b. Notify salesperson in-app ────────────────────────────────────────
+  if (salespersonPhone) {
+    const salespersonEmployee = await prisma.employees.findFirst({
+      where: {
+        contact_number: salespersonPhone,
+        active_flag: true,
+        OR: [
+          { name:         { contains: salespersonName, mode: 'insensitive' } },
+          { display_name: { contains: salespersonName, mode: 'insensitive' } },
+        ],
+      },
+    });
+    if (salespersonEmployee) {
+      const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
+      const message = `Delivery failed · ${customerName} · ${failureReason} · #${shortRef}`;
+      await createInAppNotification(salespersonEmployee.id, message, 'error', orderId);
+    } else {
+      console.warn(`[NotificationService] No employee account found for salesperson phone ${salespersonPhone} — skipping in-app`);
+    }
   }
 
   // ── 3. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
@@ -181,13 +203,16 @@ async function sendDeliveryFailureNotifications(orderId) {
   }
 
   // ── 6. WhatsApp to customer (FR-06-004) ──────────────────────────────────
-  if (customerPhone) {
+  const customerWaEnabled = await isSettingEnabled('whatsapp_customer_notification_enabled');
+  if (customerPhone && customerWaEnabled) {
     await sendDeliveryFailureWhatsApp(customerPhone, {
       customerName,
       orderRef,
       reason: failureReason,
     });
     console.log(`[NotificationService] WhatsApp sent to customer ${customerName} (${customerPhone})`);
+  } else if (customerPhone && !customerWaEnabled) {
+    console.log(`[NotificationService] Customer WhatsApp skipped (toggle off) for ${customerName}`);
   }
 
   console.log(`[NotificationService] A6 notifications sent for order ${orderRef}`);

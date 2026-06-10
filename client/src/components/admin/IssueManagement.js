@@ -1,10 +1,19 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, CheckCircle, Clock, User, FileText, Calendar,
-  MapPin, MessageSquare, MessageCircle, Package, RefreshCw,
-  CalendarPlus, X, ChevronRight
+  AlertTriangle,
+  Calendar,
+  CalendarPlus,
+  CheckCircle,
+  ChevronRight,
+  FileText,
+  MapPin,
+  MessageCircle,
+  MessageSquare,
+  Package, RefreshCw,
+  User,
+  X
 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 const REASON_STYLES = {
@@ -44,8 +53,6 @@ function CaseDetail({ order, onClose, onResolved }) {
   const navigate    = useNavigate();
   const [items,     setItems]     = useState(order.order_products || []);
   const [resolving, setResolving] = useState(false);
-  const [sendingWA, setSendingWA] = useState(false);
-  const [waResult,  setWaResult]  = useState(null);
   const [updatingItem, setUpdatingItem] = useState(null);
 
   const isResolved = order.issue_status === 'resolved';
@@ -87,19 +94,11 @@ function CaseDetail({ order, onClose, onResolved }) {
     }
   };
 
-  const handleSendWhatsApp = async () => {
-    setSendingWA(true);
-    setWaResult(null);
-    try {
-      const res  = await fetch(`${API_BASE}/api/notifications/whatsapp/${order.id}`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setWaResult({ success: true, msg: `WhatsApp sent to ${customer?.phone}` });
-    } catch (err) {
-      setWaResult({ success: false, msg: err.message });
-    } finally {
-      setSendingWA(false);
-    }
+  const handleSendWhatsApp = () => {
+    if (!customer?.phone) return;
+    const clean = customer.phone.replace(/[\s\-+()]/g, '');
+    const wa = clean.startsWith('60') ? clean : clean.startsWith('0') ? '60' + clean.slice(1) : '60' + clean;
+    window.open(`https://api.whatsapp.com/send/?phone=${wa}&type=phone_number&app_absent=0`, '_blank', 'noopener,noreferrer');
   };
 
   const handleReschedule = () => {
@@ -245,27 +244,18 @@ function CaseDetail({ order, onClose, onResolved }) {
             )}
           </div>
 
-          {/* WhatsApp feedback */}
-          {waResult && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
-              waResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-            }`}>
-              {waResult.success ? <CheckCircle size={14} /> : <AlertTriangle size={14} />}
-              {waResult.msg}
-            </div>
-          )}
-
           {/* Actions */}
           {!isResolved ? (
             <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-100">
-              <button
-                onClick={handleSendWhatsApp}
-                disabled={sendingWA}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-              >
-                <MessageCircle size={14} />
-                {sendingWA ? 'Sending...' : 'Send WhatsApp'}
-              </button>
+              {customer?.phone && (
+                <button
+                  onClick={handleSendWhatsApp}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors"
+                >
+                  <MessageCircle size={14} />
+                  WhatsApp
+                </button>
+              )}
 
               {failedItems.length > 0 && (
                 <button
