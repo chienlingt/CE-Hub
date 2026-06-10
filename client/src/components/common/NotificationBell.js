@@ -84,11 +84,7 @@ export default function NotificationBell({ userId }) {
 
   const isDriverOrderReport = (order) =>
     order?.issue_reason === 'Driver Escalation'
-    || (
-      order?.issue_reason
-      && order?.issue_desc
-      && (order?.is_complaint_submitted === true || order?.order_status === 'Issue')
-    );
+    || order?.is_complaint_submitted === true;
 
   const handleNotificationClick = async (n) => {
     if (!n.is_read) await markAsRead(n.id);
@@ -180,10 +176,30 @@ export default function NotificationBell({ userId }) {
                         <IconComp size={14} className={cfg.text} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm leading-snug ${n.is_read ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>
-                          {n.message}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1">{formatTime(n.created_at)}</p>
+                        {(() => {
+                          const raw = n.message || '';
+                          // Normalise old format: "Delivery failed — Order uuid | Customer: X | Reason: Y"
+                          const oldMatch = raw.match(/^(Delivery failed)[^|]*\|\s*Customer:\s*([^|]+?)\s*\|\s*Reason:\s*(.+)$/i);
+                          const msg = oldMatch
+                            ? `${oldMatch[1]} · ${oldMatch[2]} · ${oldMatch[3]}`
+                            : raw;
+                          const parts = msg.split(' · ');
+                          return parts.length > 1 ? (
+                            <>
+                              <p className={`text-xs font-semibold truncate ${n.is_read ? 'text-gray-500' : 'text-gray-800'}`}>
+                                {parts[0]}
+                              </p>
+                              <p className={`text-xs truncate ${n.is_read ? 'text-gray-400' : 'text-gray-600'}`}>
+                                {parts.slice(1).join(' · ')}
+                              </p>
+                            </>
+                          ) : (
+                            <p className={`text-sm leading-snug truncate ${n.is_read ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>
+                              {msg}
+                            </p>
+                          );
+                        })()}
+                        <p className="text-xs text-gray-400 mt-0.5">{formatTime(n.created_at)}</p>
                       </div>
                       {!n.is_read && (
                         <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />

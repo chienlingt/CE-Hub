@@ -7,7 +7,8 @@
     "dev": "nodemon index.js",
     "seed": "node seed.js",
     "seed:driver": "node seedDriverTestData.js",
-    "seed:driver:delete": "node deleteDriverTestData.js"
+    "seed:driver:delete": "node deleteDriverTestData.js",
+    "seed:picking": "node seedPickingDemo.js"
   },
   "keywords": [],
   "author": "",
