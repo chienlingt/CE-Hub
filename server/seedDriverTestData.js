@@ -626,6 +626,16 @@ async function main() {
     },
   });
 
+  // Slot D — Pending-to-pick: scheduled tomorrow morning, items not yet picked
+  const slotPending = await createSlot({
+    date,
+    deliveryTeamId:  deliveryTeam.id,
+    warehouseTeamId: warehouseTeam.id,
+    slotStatus:      'scheduled',
+    timeStart:       '08:00',
+    timeEnd:         '11:00',
+  });
+
   // Slot C — Live Deliveries demo: truck + started_by + full team contacts
   //   Contact dedup outcome:
   //     • Razif   → [Trip lead, Truck driver]   (started_by + truck.driver_id → merged)
@@ -856,6 +866,67 @@ async function main() {
       },
     },
 
+    // ── Pending-to-pick scenarios — slot D / slotPending ────────────────────
+
+    {
+      odooRef:       `${TEST_PREFIX}-PICK-A`,
+      label:         '[PICK 1] Single item — fridge awaiting pick',
+      status:        'Scheduled',
+      driverId:      driver.id,
+      customerKey:   'ben',
+      slotId:        slotPending.id,
+      hour:          8,
+      catalogKeys:   ['fridge'],
+      pickingStatus: 'pending',
+    },
+    {
+      odooRef:       `${TEST_PREFIX}-PICK-B`,
+      label:         '[PICK 2] Bundle — washer + dryer awaiting pick',
+      status:        'Scheduled',
+      driverId:      driver.id,
+      customerKey:   'siti',
+      slotId:        slotPending.id,
+      hour:          8,
+      catalogKeys:   ['washer', 'dryer'],
+      pickingStatus: 'pending',
+    },
+    {
+      odooRef:       `${TEST_PREFIX}-PICK-C`,
+      label:         '[PICK 3] Install item — oven awaiting pick',
+      status:        'Scheduled',
+      driverId:      driver.id,
+      customerKey:   'lee',
+      slotId:        slotPending.id,
+      hour:          9,
+      catalogKeys:   ['oven'],
+      pickingStatus: 'pending',
+    },
+    {
+      odooRef:       `${TEST_PREFIX}-PICK-D`,
+      label:         '[PICK 4] Partial — TV picked, soundbar still pending',
+      status:        'Scheduled',
+      driverId:      driver.id,
+      customerKey:   'raj',
+      slotId:        slotPending.id,
+      hour:          9,
+      catalogKeys:   [
+        { key: 'tv',       pickingStatus: 'picked' },
+        { key: 'soundbar', pickingStatus: 'pending' },
+      ],
+      pickingStatus: 'pending',
+    },
+    {
+      odooRef:       `${TEST_PREFIX}-PICK-E`,
+      label:         '[PICK 5] All picked, not yet loaded — sofa + rice cooker',
+      status:        'Scheduled',
+      driverId:      driver.id,
+      customerKey:   'hassan',
+      slotId:        slotPending.id,
+      hour:          10,
+      catalogKeys:   ['sofa', 'riceCooker'],
+      pickingStatus: 'picked',
+    },
+
     // ── Live Deliveries (A.3.7+) scenarios — slot C / slotDemo ──────────────
 
     {
@@ -990,6 +1061,13 @@ async function main() {
   console.log('  TEST 12   Admin escalation only — Report btn disabled, not in Cases tabs');
   console.log('  TEST 13   Cases → Order Issues (A6-style failure, no driver report)');
   console.log('  Notify    Bell: TEST 10 → Delivery Issues; TEST 13 → Order Issues');
+  console.log('');
+  console.log('  --- Pending-to-Pick (Warehouse Loading Schedule) ---');
+  console.log('  PICK 1    Single item (fridge) — picking_status: pending');
+  console.log('  PICK 2    Bundle (washer + dryer) — both pending');
+  console.log('  PICK 3    Install item (oven) — pending');
+  console.log('  PICK 4    Partial — TV picked, soundbar still pending');
+  console.log('  PICK 5    All picked, not yet loaded (sofa + rice cooker)');
   console.log('');
   console.log('  --- Live Deliveries (Admin /dashboard/live-ops) ---');
   console.log('  TEST 14   Admin opens slot C drawer → contacts section shows:');

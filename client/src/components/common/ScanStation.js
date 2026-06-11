@@ -6,15 +6,23 @@
  * Admin     → Warehouse View / Driver View selector
  */
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  Camera, Package, Truck, RefreshCw, User,
-  Search, AlertTriangle, XCircle, CalendarDays,
-  ArrowUpDown, ArrowUp, ArrowDown,
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CalendarDays,
+  Camera, Package,
+  RefreshCw,
+  Search,
+  Truck,
+  User,
+  XCircle,
 } from 'lucide-react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import ScannerModal from './ScannerModal';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import ScannerModal from './ScannerModal';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -571,7 +579,7 @@ export default function ScanStation({ forcedStage }) {
 
   const today = new Date().toLocaleDateString('en-CA');
 
-  // ── Tab options: role beats forcedStage for non-admin users ──────────────────
+  // ─ role beats forcedStage for non-admin users ──────────────────
   const tabOptions = useMemo(() => {
     const roleKnown = isAdmin || isWarehouse || isDriver;
     if (roleKnown && !isAdmin) {
@@ -593,8 +601,9 @@ export default function ScanStation({ forcedStage }) {
     return tabOptions[0].id;
   });
 
-  // Keep tab valid when tabOptions changes (auth loaded async)
-  useEffect(() => {
+  // Keep tab valid when tabOptions changes (auth loaded async).
+  // useLayoutEffect runs before paint so the wrong tab is never shown.
+  useLayoutEffect(() => {
     if (!tabOptions.find(t => t.id === tab)) setTab(tabOptions[0].id);
   }, [tabOptions, tab]);
 

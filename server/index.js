@@ -149,16 +149,28 @@ app.listen(port, async () => {
   // console.log('  /api/health\n');
 
   // Seed default WhatsApp notification settings
-  const { seedWhatsAppSettings } = require('./services/whatsappService');
-  await seedWhatsAppSettings();
+  try {
+    const { seedWhatsAppSettings } = require('./services/whatsappService');
+    await seedWhatsAppSettings();
+  } catch (e) {
+    console.warn('[Startup] seedWhatsAppSettings skipped — DB unreachable:', e.message);
+  }
 
   // Seed notification message templates (idempotent — never overwrites existing)
-  const { seedA3Templates } = require('./seedNotificationTemplates');
-  await seedA3Templates();
+  try {
+    const { seedA3Templates } = require('./seedNotificationTemplates');
+    await seedA3Templates();
+  } catch (e) {
+    console.warn('[Startup] seedA3Templates skipped — DB unreachable:', e.message);
+  }
 
   // Initialize scheduler cron job
-  const { initializeSchedulerCron } = require('./schedulerCron');
-  await initializeSchedulerCron();
+  try {
+    const { initializeSchedulerCron } = require('./schedulerCron');
+    await initializeSchedulerCron();
+  } catch (e) {
+    console.warn('[Startup] initializeSchedulerCron skipped — DB unreachable:', e.message);
+  }
 
   // A1.4 — Odoo polling fallback (daily at 5PM MYT — catches any orders missed by manual push)
   if (process.env.ODOO_URL) {
