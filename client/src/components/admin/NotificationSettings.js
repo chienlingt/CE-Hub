@@ -453,7 +453,6 @@ export default function NotificationSettings() {
                 color="#16a34a"
                 placeholders={PROACTIVE_PLACEHOLDERS}
                 label="Email subject"
-                multiline={false}
               />
             </NotifCard>
 
@@ -485,7 +484,6 @@ export default function NotificationSettings() {
                 color="#2563eb"
                 placeholders={PROACTIVE_PLACEHOLDERS}
                 label="Email subject"
-                multiline={false}
               />
             </NotifCard>
           </div>
