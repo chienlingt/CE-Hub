@@ -14,6 +14,20 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
+const PROACTIVE_DEFAULTS = {
+  notification_from_name: 'TBM Delivery',
+  template_on_the_way:
+    'Dear {customerName}, this is {brandName} regarding your delivery for order {orderRef}. Your order is on its way and scheduled for {slotDate} between {timeWindow} at {address}. Our team will be with you shortly.',
+  subject_on_the_way: 'Your delivery is on its way - Order {orderRef}',
+  template_d1_reminder:
+    'Dear {customerName}, this is {brandName} with a reminder that your delivery for order {orderRef} is scheduled for tomorrow ({slotDate}) between {timeWindow} at {address}. Please ensure someone is available to receive it.',
+  subject_d1_reminder: 'Delivery reminder - Order {orderRef} on {slotDate}',
+  customer_on_the_way_notification_enabled: 'true',
+  customer_d1_reminder_notification_enabled: 'true',
+};
+
+const PROACTIVE_PLACEHOLDERS = ['customerName', 'orderRef', 'slotDate', 'timeWindow', 'address', 'brandName'];
+
 // ── Primitives ────────────────────────────────────────────────────────────────
 
 function Toggle({ checked, onChange, disabled }) {
@@ -69,7 +83,6 @@ function AdminDropdown({ admins, isEnabled, onToggle, masterOn }) {
 
   return (
     <div className="relative" ref={ref}>
-      {/* Trigger */}
       <button
         onClick={() => masterOn && setOpen(v => !v)}
         disabled={!masterOn}
@@ -89,10 +102,8 @@ function AdminDropdown({ admins, isEnabled, onToggle, masterOn }) {
         <ChevronDown size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {/* Dropdown */}
       {open && (
         <div className="absolute left-0 right-0 mt-1 bg-white rounded-xl border border-gray-200 shadow-xl z-30 overflow-hidden">
-          {/* Search */}
           <div className="p-2 border-b border-gray-100">
             <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 rounded-lg">
               <Search size={13} className="text-gray-400 flex-shrink-0" />
@@ -107,7 +118,6 @@ function AdminDropdown({ admins, isEnabled, onToggle, masterOn }) {
             </div>
           </div>
 
-          {/* List */}
           <div className="max-h-56 overflow-y-auto divide-y divide-gray-50">
             {filtered.length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-4">No results</p>
@@ -151,7 +161,17 @@ function AdminDropdown({ admins, isEnabled, onToggle, masterOn }) {
 
 // ── Collapsible Template Editor ───────────────────────────────────────────────
 
-function TemplateEditor({ value, onChange, onSave, saving, disabled, color, placeholders }) {
+function TemplateEditor({
+  value,
+  onChange,
+  onSave,
+  saving,
+  disabled,
+  color,
+  placeholders,
+  label = 'Message template',
+  multiline = true,
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="border border-gray-100 rounded-xl overflow-hidden">
@@ -159,7 +179,7 @@ function TemplateEditor({ value, onChange, onSave, saving, disabled, color, plac
         onClick={() => setOpen(v => !v)}
         className="flex items-center justify-between w-full px-3 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors text-xs text-gray-500 font-medium"
       >
-        <span>Message template</span>
+        <span>{label}</span>
         <ChevronRight size={13} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
@@ -169,14 +189,25 @@ function TemplateEditor({ value, onChange, onSave, saving, disabled, color, plac
               <code key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{`{${p}}`}</code>
             ))}
           </div>
-          <textarea
-            rows={3}
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            disabled={disabled}
-            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-offset-0 resize-none disabled:opacity-40 disabled:bg-gray-50"
-            style={{ '--tw-ring-color': color }}
-          />
+          {multiline ? (
+            <textarea
+              rows={3}
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              disabled={disabled}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-offset-0 resize-none disabled:opacity-40 disabled:bg-gray-50"
+              style={{ '--tw-ring-color': color }}
+            />
+          ) : (
+            <input
+              type="text"
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              disabled={disabled}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-offset-0 disabled:opacity-40 disabled:bg-gray-50"
+              style={{ '--tw-ring-color': color }}
+            />
+          )}
           <button
             onClick={onSave}
             disabled={saving || disabled}
@@ -197,15 +228,15 @@ function TemplateEditor({ value, onChange, onSave, saving, disabled, color, plac
 function NotifCard({ icon: Icon, label, color, accentBg, checked, onToggle, disabled: masterDisabled, children }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-      {/* Card header — rounded top so no overflow-hidden needed on outer div */}
       <div className={`flex items-center justify-between px-4 py-3 ${accentBg} rounded-t-2xl`}>
         <div className="flex items-center gap-2">
           <Icon size={16} style={{ color }} />
           <span className="text-sm font-semibold text-gray-800">{label}</span>
         </div>
-        <Toggle checked={checked} onChange={onToggle} disabled={masterDisabled} />
+        {onToggle != null && (
+          <Toggle checked={checked} onChange={onToggle} disabled={masterDisabled} />
+        )}
       </div>
-      {/* Card body — overflow-visible so dropdowns escape the card */}
       <div className="p-4 space-y-3 relative overflow-visible">
         {children}
       </div>
@@ -223,6 +254,7 @@ export default function NotificationSettings() {
   const [loading,           setLoading]           = useState(true);
   const [saving,            setSaving]            = useState({});
   const [toast,             setToast]             = useState(null);
+  const [activeTab,         setActiveTab]         = useState('updates');
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -238,13 +270,15 @@ export default function NotificationSettings() {
       (settingsRes.data || settingsRes || []).forEach(s => {
         map[s.key || s.setting_key] = s.value || s.setting_value;
       });
-      setSettings(map);
+      setSettings({ ...PROACTIVE_DEFAULTS, ...map });
 
       try {
-        const ids = JSON.parse(map['whatsapp_admin_recipients'] || '[]');
+        const ids = JSON.parse(map.whatsapp_admin_recipients || '[]');
         setAdminWaRecipients(ids);
         setAllAdminsEnabled(ids.length === 0);
-      } catch { setAllAdminsEnabled(true); }
+      } catch {
+        setAllAdminsEnabled(true);
+      }
 
       const adminEmps = Array.isArray(empRes)
         ? empRes.filter(e =>
@@ -299,13 +333,21 @@ export default function NotificationSettings() {
   const isAdminWaEnabled = (adminId) =>
     allAdminsEnabled || adminWaRecipients.includes(adminId);
 
-  const adminWaOn       = settings['whatsapp_admin_notification_enabled']      !== 'false';
-  const salespersonWaOn = settings['whatsapp_salesperson_notification_enabled'] !== 'false';
-  const customerWaOn    = settings['whatsapp_customer_notification_enabled']    !== 'false';
+  const adminWaOn         = settings.whatsapp_admin_notification_enabled !== 'false';
+  const salespersonWaOn = settings.whatsapp_salesperson_notification_enabled !== 'false';
+  const customerWaOn      = settings.whatsapp_customer_notification_enabled !== 'false';
+  const onTheWayEnabled   = settings.customer_on_the_way_notification_enabled !== 'false';
+  const d1ReminderEnabled = settings.customer_d1_reminder_notification_enabled !== 'false';
 
-  const customerTemplate    = settings['whatsapp_failure_message_template']      || '';
-  const salespersonTemplate = settings['whatsapp_failure_salesperson_template']  || '';
-  const adminTemplate       = settings['whatsapp_failure_admin_template']        || '';
+  const customerTemplate    = settings.whatsapp_failure_message_template || '';
+  const salespersonTemplate = settings.whatsapp_failure_salesperson_template || '';
+  const adminTemplate       = settings.whatsapp_failure_admin_template || '';
+
+  const fromName        = settings.notification_from_name ?? PROACTIVE_DEFAULTS.notification_from_name;
+  const onTheWayTemplate = settings.template_on_the_way ?? PROACTIVE_DEFAULTS.template_on_the_way;
+  const onTheWaySubject  = settings.subject_on_the_way ?? PROACTIVE_DEFAULTS.subject_on_the_way;
+  const d1Template       = settings.template_d1_reminder ?? PROACTIVE_DEFAULTS.template_d1_reminder;
+  const d1Subject          = settings.subject_d1_reminder ?? PROACTIVE_DEFAULTS.subject_d1_reminder;
 
   if (loading) {
     return (
@@ -319,82 +361,203 @@ export default function NotificationSettings() {
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
       <Toast toast={toast} />
 
-      {/* Page header */}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex items-center gap-2 mb-4">
         <Bell size={20} className="text-gray-500" />
-        <h1 className="text-lg font-bold text-gray-800">Delivery Failure WhatsApp Notification</h1>
+        <div>
+          <h1 className="text-lg font-bold text-gray-800">Notification Settings</h1>
+          <p className="text-xs text-gray-500">Configure delivery update and failure notifications.</p>
+        </div>
       </div>
 
-      {/* 3-column grid on wide screens, stacked on mobile */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="mb-6 border-b border-gray-200">
+        <div className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('updates')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
+              activeTab === 'updates'
+                ? 'bg-white border-gray-200 text-gray-900'
+                : 'bg-gray-100 border-transparent text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            Delivery updates
+          </button>
+          <button
+            onClick={() => setActiveTab('failures')}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
+              activeTab === 'failures'
+                ? 'bg-white border-gray-200 text-gray-900'
+                : 'bg-gray-100 border-transparent text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            Delivery failures
+          </button>
+        </div>
+      </div>
 
-        {/* ── Customer ─────────────────────────────────────────────────────── */}
-        <NotifCard
-          icon={MessageCircle}
-          label="Customer"
-          color="#16a34a"
-          accentBg="bg-green-50"
-          checked={customerWaOn}
-          onToggle={() => toggleSetting('whatsapp_customer_notification_enabled')}
-        >
-          <TemplateEditor
-            value={customerTemplate}
-            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_message_template: v }))}
-            onSave={() => saveSetting('whatsapp_failure_message_template', customerTemplate)}
-            saving={saving['whatsapp_failure_message_template']}
-            disabled={!customerWaOn}
+      {activeTab === 'updates' && (
+        <div className="space-y-4">
+          <NotifCard
+            icon={Bell}
+            label="Sender identity"
+            color="#374151"
+            accentBg="bg-gray-50"
+            checked
+            onToggle={null}
+          >
+            <p className="text-xs text-gray-500">
+              Used as the email sender display name and as {'{brandName}'} in proactive templates.
+            </p>
+            <input
+              type="text"
+              value={fromName}
+              onChange={e => setSettings(p => ({ ...p, notification_from_name: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+              placeholder="TBM Delivery"
+            />
+            <button
+              onClick={() => saveSetting('notification_from_name', fromName)}
+              disabled={saving.notification_from_name}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+            >
+              <Save size={12} />
+              {saving.notification_from_name ? 'Saving…' : 'Save sender name'}
+            </button>
+          </NotifCard>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <NotifCard
+              icon={MessageCircle}
+              label="On-the-way"
+              color="#16a34a"
+              accentBg="bg-green-50"
+              checked={onTheWayEnabled}
+              onToggle={() => toggleSetting('customer_on_the_way_notification_enabled')}
+            >
+              <p className="text-xs text-gray-500">Sent when a slot departs (WhatsApp + email).</p>
+              <TemplateEditor
+                value={onTheWayTemplate}
+                onChange={v => setSettings(p => ({ ...p, template_on_the_way: v }))}
+                onSave={() => saveSetting('template_on_the_way', onTheWayTemplate)}
+                saving={saving.template_on_the_way}
+                disabled={!onTheWayEnabled}
+                color="#16a34a"
+                placeholders={PROACTIVE_PLACEHOLDERS}
+                label="Message template"
+              />
+              <TemplateEditor
+                value={onTheWaySubject}
+                onChange={v => setSettings(p => ({ ...p, subject_on_the_way: v }))}
+                onSave={() => saveSetting('subject_on_the_way', onTheWaySubject)}
+                saving={saving.subject_on_the_way}
+                disabled={!onTheWayEnabled}
+                color="#16a34a"
+                placeholders={PROACTIVE_PLACEHOLDERS}
+                label="Email subject"
+                multiline={false}
+              />
+            </NotifCard>
+
+            <NotifCard
+              icon={MessageCircle}
+              label="D-1 reminder"
+              color="#2563eb"
+              accentBg="bg-blue-50"
+              checked={d1ReminderEnabled}
+              onToggle={() => toggleSetting('customer_d1_reminder_notification_enabled')}
+            >
+              <p className="text-xs text-gray-500">Sent for tomorrow&apos;s scheduled orders (WhatsApp + email).</p>
+              <TemplateEditor
+                value={d1Template}
+                onChange={v => setSettings(p => ({ ...p, template_d1_reminder: v }))}
+                onSave={() => saveSetting('template_d1_reminder', d1Template)}
+                saving={saving.template_d1_reminder}
+                disabled={!d1ReminderEnabled}
+                color="#2563eb"
+                placeholders={PROACTIVE_PLACEHOLDERS}
+                label="Message template"
+              />
+              <TemplateEditor
+                value={d1Subject}
+                onChange={v => setSettings(p => ({ ...p, subject_d1_reminder: v }))}
+                onSave={() => saveSetting('subject_d1_reminder', d1Subject)}
+                saving={saving.subject_d1_reminder}
+                disabled={!d1ReminderEnabled}
+                color="#2563eb"
+                placeholders={PROACTIVE_PLACEHOLDERS}
+                label="Email subject"
+                multiline={false}
+              />
+            </NotifCard>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'failures' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <NotifCard
+            icon={MessageCircle}
+            label="Customer"
             color="#16a34a"
-            placeholders={['customerName', 'orderRef', 'reason']}
-          />
-        </NotifCard>
+            accentBg="bg-green-50"
+            checked={customerWaOn}
+            onToggle={() => toggleSetting('whatsapp_customer_notification_enabled')}
+          >
+            <TemplateEditor
+              value={customerTemplate}
+              onChange={v => setSettings(p => ({ ...p, whatsapp_failure_message_template: v }))}
+              onSave={() => saveSetting('whatsapp_failure_message_template', customerTemplate)}
+              saving={saving.whatsapp_failure_message_template}
+              disabled={!customerWaOn}
+              color="#16a34a"
+              placeholders={['customerName', 'orderRef', 'reason']}
+            />
+          </NotifCard>
 
-        {/* ── Salesperson ───────────────────────────────────────────────────── */}
-        <NotifCard
-          icon={MessageCircle}
-          label="Salesperson"
-          color="#2563eb"
-          accentBg="bg-blue-50"
-          checked={salespersonWaOn}
-          onToggle={() => toggleSetting('whatsapp_salesperson_notification_enabled')}
-        >
-          <TemplateEditor
-            value={salespersonTemplate}
-            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_salesperson_template: v }))}
-            onSave={() => saveSetting('whatsapp_failure_salesperson_template', salespersonTemplate)}
-            saving={saving['whatsapp_failure_salesperson_template']}
-            disabled={!salespersonWaOn}
+          <NotifCard
+            icon={MessageCircle}
+            label="Salesperson"
             color="#2563eb"
-            placeholders={['recipientName', 'customerName', 'customerPhone', 'orderRef', 'reason', 'driverName', 'address']}
-          />
-        </NotifCard>
+            accentBg="bg-blue-50"
+            checked={salespersonWaOn}
+            onToggle={() => toggleSetting('whatsapp_salesperson_notification_enabled')}
+          >
+            <TemplateEditor
+              value={salespersonTemplate}
+              onChange={v => setSettings(p => ({ ...p, whatsapp_failure_salesperson_template: v }))}
+              onSave={() => saveSetting('whatsapp_failure_salesperson_template', salespersonTemplate)}
+              saving={saving.whatsapp_failure_salesperson_template}
+              disabled={!salespersonWaOn}
+              color="#2563eb"
+              placeholders={['recipientName', 'customerName', 'customerPhone', 'orderRef', 'reason', 'driverName', 'address']}
+            />
+          </NotifCard>
 
-        {/* ── Admin ─────────────────────────────────────────────────────────── */}
-        <NotifCard
-          icon={MessageCircle}
-          label="Admin"
-          color="#ea580c"
-          accentBg="bg-orange-50"
-          checked={adminWaOn}
-          onToggle={() => toggleSetting('whatsapp_admin_notification_enabled')}
-        >
-          <AdminDropdown
-            admins={admins}
-            isEnabled={isAdminWaEnabled}
-            onToggle={toggleAdminWa}
-            masterOn={adminWaOn}
-          />
-          <TemplateEditor
-            value={adminTemplate}
-            onChange={v => setSettings(p => ({ ...p, whatsapp_failure_admin_template: v }))}
-            onSave={() => saveSetting('whatsapp_failure_admin_template', adminTemplate)}
-            saving={saving['whatsapp_failure_admin_template']}
-            disabled={!adminWaOn}
+          <NotifCard
+            icon={MessageCircle}
+            label="Admin"
             color="#ea580c"
-            placeholders={['adminName', 'customerName', 'orderRef', 'reason', 'driverName', 'address', 'salespersonName', 'salespersonPhone']}
-          />
-        </NotifCard>
-
-      </div>
+            accentBg="bg-orange-50"
+            checked={adminWaOn}
+            onToggle={() => toggleSetting('whatsapp_admin_notification_enabled')}
+          >
+            <AdminDropdown
+              admins={admins}
+              isEnabled={isAdminWaEnabled}
+              onToggle={toggleAdminWa}
+              masterOn={adminWaOn}
+            />
+            <TemplateEditor
+              value={adminTemplate}
+              onChange={v => setSettings(p => ({ ...p, whatsapp_failure_admin_template: v }))}
+              onSave={() => saveSetting('whatsapp_failure_admin_template', adminTemplate)}
+              saving={saving.whatsapp_failure_admin_template}
+              disabled={!adminWaOn}
+              color="#ea580c"
+              placeholders={['adminName', 'customerName', 'orderRef', 'reason', 'driverName', 'address', 'salespersonName', 'salespersonPhone']}
+            />
+          </NotifCard>
+        </div>
+      )}
     </div>
   );
 }

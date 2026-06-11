@@ -27,7 +27,10 @@ async function runD1ReminderCron() {
           date: tomorrow,
         },
       },
-      include: {
+      select: {
+        id: true,
+        odoo_order_ref: true,
+        delivery_address: true,
         customers:  { select: { id: true, full_name: true, phone: true, email: true } },
         time_slots: { select: { id: true, date: true, time_window_start: true, time_window_end: true } },
       },
@@ -49,6 +52,8 @@ async function runD1ReminderCron() {
         payload: {
           orderId:        order.id,
           customerId:     customer.id,
+          orderRef:       order.odoo_order_ref || order.id.slice(0, 8).toUpperCase(),
+          address:        order.delivery_address || 'your delivery address',
           phone:          customer.phone  || null,
           email:          customer.email  || null,
           customerName:   customer.full_name || 'Customer',

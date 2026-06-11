@@ -17,10 +17,33 @@ const {
   markProcessed,
   recordFailure,
 } = require('./services/integrationOutboxService');
+const { sendEmail } = require('./services/emailService');
+const { sendWhatsAppMessage } = require('./services/whatsappService');
 
 const prisma = require('./prismaClient');
 
 let _running = false; // prevent overlapping runs
+const DEFAULT_FROM_NAME = 'TBM Delivery';
+
+function formatTimeWindow(start, end) {
+  if (!start || !end) return 'your scheduled time window';
+  return `${start} - ${end}`;
+}
+
+function applyTemplate(template, vars) {
+  if (!template) return '';
+  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] || '');
+}
+
+async function getSettingMap(settingKeys) {
+  const rows = await prisma.system_settings.findMany({
+    where: { setting_key: { in: settingKeys } },
+  });
+  return rows.reduce((acc, row) => {
+    acc[row.setting_key] = row.setting_value;
+    return acc;
+  }, {});
+}
 
 // ── Odoo handler ─────────────────────────────────────────────────────────────
 
@@ -43,37 +66,50 @@ async function handleOdoo(row) {
 // ── Customer notification handler ─────────────────────────────────────────────
 
 async function handleCustomerOnTheWay(row) {
-  const { orderId, phone, email, customerName, slotDate, timeWindowStart, timeWindowEnd } = row.payload || {};
-
+  const {
+    orderId,
+    phone,
+    email,
+    customerName,
+    slotDate,
+    timeWindowStart,
+    timeWindowEnd,
+    orderRef,
+    address,
+  } = row.payload || {};
   const now = new Date();
+  const settings = await getSettingMap([
+    'customer_on_the_way_notification_enabled',
+    'template_on_the_way',
+    'subject_on_the_way',
+    'notification_from_name',
+  ]);
 
-  // Build message from system_settings templates (falls back to defaults)
-  const templateRow = await prisma.system_settings.findUnique({
-    where: { setting_key: 'template_on_the_way' },
-  });
+  if (settings.customer_on_the_way_notification_enabled === 'false') {
+    console.log('[OutboxWorker] CUSTOMER_ON_THE_WAY disabled via settings - skipping send.');
+    return;
+  }
 
-  const timeWindow = (timeWindowStart && timeWindowEnd)
-    ? `${timeWindowStart} – ${timeWindowEnd}`
-    : 'your scheduled time window';
+  const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
+  const vars = {
+    customerName: customerName || 'Customer',
+    orderRef: orderRef || orderId?.slice(0, 8).toUpperCase() || 'your order',
+    slotDate: slotDate || 'today',
+    timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
+    address: address || 'your delivery address',
+    brandName,
+  };
 
-  const defaultMessage =
-    `Hi ${customerName || 'there'}, your delivery is on its way! ` +
-    `It is scheduled for ${slotDate || 'today'} between ${timeWindow}. ` +
-    `Our team will be with you shortly.`;
-
-  let message = templateRow?.setting_value
-    ? templateRow.setting_value
-        .replace('{customerName}', customerName || 'there')
-        .replace('{slotDate}',    slotDate      || 'today')
-        .replace('{timeWindow}',  timeWindow)
-    : defaultMessage;
+  const defaultMessage = `Dear {customerName}, this is {brandName} regarding your delivery for order {orderRef}. Your order is on its way and scheduled for {slotDate} between {timeWindow} at {address}. Our team will be with you shortly.`;
+  const defaultSubject = 'Your delivery is on its way - Order {orderRef}';
+  const message = applyTemplate(settings.template_on_the_way || defaultMessage, vars);
+  const subject = applyTemplate(settings.subject_on_the_way || defaultSubject, vars);
 
   const errors = [];
 
   // WhatsApp via Green API
   if (phone) {
     try {
-      const { sendWhatsAppMessage } = require('./services/whatsappService');
       await sendWhatsAppMessage(phone, message);
       console.log(`[OutboxWorker] On-the-way WhatsApp sent → ${phone}`);
     } catch (e) {
@@ -85,12 +121,12 @@ async function handleCustomerOnTheWay(row) {
   // Email
   if (email) {
     try {
-      const { sendEmail } = require('./services/emailService');
       await sendEmail({
-        to:      email,
-        subject: `Your delivery is on its way${slotDate ? ` — ${slotDate}` : ''}`,
-        text:    message,
-        html:    `<p>${message.replace(/\n/g, '<br>')}</p>`,
+        to: email,
+        subject,
+        text: message,
+        html: `<p>${message.replace(/\n/g, '<br>')}</p>`,
+        from: `"${brandName}" <${process.env.EMAIL_USER}>`,
       });
       console.log(`[OutboxWorker] On-the-way email sent → ${email}`);
     } catch (e) {
@@ -124,34 +160,49 @@ async function handleCustomerOnTheWay(row) {
 // ── D-1 reminder handler ──────────────────────────────────────────────────────
 
 async function handleD1Reminder(row) {
-  const { orderId, phone, email, customerName, slotDate, timeWindowStart, timeWindowEnd } = row.payload || {};
-
+  const {
+    orderId,
+    phone,
+    email,
+    customerName,
+    slotDate,
+    timeWindowStart,
+    timeWindowEnd,
+    orderRef,
+    address,
+  } = row.payload || {};
   const now = new Date();
-  const templateRow = await prisma.system_settings.findUnique({
-    where: { setting_key: 'template_d1_reminder' },
-  });
+  const settings = await getSettingMap([
+    'customer_d1_reminder_notification_enabled',
+    'template_d1_reminder',
+    'subject_d1_reminder',
+    'notification_from_name',
+  ]);
 
-  const timeWindow = (timeWindowStart && timeWindowEnd)
-    ? `${timeWindowStart} – ${timeWindowEnd}`
-    : 'your scheduled time window';
+  if (settings.customer_d1_reminder_notification_enabled === 'false') {
+    console.log('[OutboxWorker] CUSTOMER_D1_REMINDER disabled via settings - skipping send.');
+    return;
+  }
 
-  const defaultMessage =
-    `Hi ${customerName || 'there'}, this is a reminder that your delivery is scheduled for ` +
-    `tomorrow (${slotDate || 'tomorrow'}) between ${timeWindow}. ` +
-    `Please ensure someone is available to receive it.`;
+  const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
+  const vars = {
+    customerName: customerName || 'Customer',
+    orderRef: orderRef || orderId?.slice(0, 8).toUpperCase() || 'your order',
+    slotDate: slotDate || 'tomorrow',
+    timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
+    address: address || 'your delivery address',
+    brandName,
+  };
 
-  let message = templateRow?.setting_value
-    ? templateRow.setting_value
-        .replace('{customerName}', customerName || 'there')
-        .replace('{slotDate}',    slotDate      || 'tomorrow')
-        .replace('{timeWindow}',  timeWindow)
-    : defaultMessage;
+  const defaultMessage = `Dear {customerName}, this is {brandName} with a reminder that your delivery for order {orderRef} is scheduled for tomorrow ({slotDate}) between {timeWindow} at {address}. Please ensure someone is available to receive it.`;
+  const defaultSubject = 'Delivery reminder - Order {orderRef} on {slotDate}';
+  const message = applyTemplate(settings.template_d1_reminder || defaultMessage, vars);
+  const subject = applyTemplate(settings.subject_d1_reminder || defaultSubject, vars);
 
   const errors = [];
 
   if (phone) {
     try {
-      const { sendWhatsAppMessage } = require('./services/whatsappService');
       await sendWhatsAppMessage(phone, message);
       console.log(`[OutboxWorker] D-1 WhatsApp sent → ${phone}`);
     } catch (e) {
@@ -161,12 +212,12 @@ async function handleD1Reminder(row) {
 
   if (email) {
     try {
-      const { sendEmail } = require('./services/emailService');
       await sendEmail({
-        to:      email,
-        subject: `Delivery reminder — ${slotDate || 'tomorrow'}`,
-        text:    message,
-        html:    `<p>${message.replace(/\n/g, '<br>')}</p>`,
+        to: email,
+        subject,
+        text: message,
+        html: `<p>${message.replace(/\n/g, '<br>')}</p>`,
+        from: `"${brandName}" <${process.env.EMAIL_USER}>`,
       });
       console.log(`[OutboxWorker] D-1 email sent → ${email}`);
     } catch (e) {

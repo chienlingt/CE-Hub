@@ -397,16 +397,16 @@ async function sendDeliveryFailureCustomerEmail(to, customerName, { orderRef, fa
  * Generic send for A.3 outbox worker (on-the-way / D-1 notifications).
  * Throws if email is not configured so the outbox row retries/backoffs correctly.
  *
- * @param {{ to: string, subject: string, text?: string, html?: string }} opts
+ * @param {{ to: string, subject: string, text?: string, html?: string, from?: string }} opts
  */
-async function sendEmail({ to, subject, text, html }) {
+async function sendEmail({ to, subject, text, html, from }) {
   const transport = createTransporter();
   if (!transport) {
     throw new Error('Email not configured — set EMAIL_USER and EMAIL_PASSWORD in .env');
   }
 
   const mailOptions = {
-    from:    process.env.EMAIL_FROM || `"TBM Delivery" <${process.env.EMAIL_USER}>`,
+    from: from || process.env.EMAIL_FROM || `"TBM Delivery" <${process.env.EMAIL_USER}>`,
     to,
     subject,
     text,

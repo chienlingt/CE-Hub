@@ -58,22 +58,17 @@ router.put('/:key', async (req, res) => {
       return res.status(400).json({ error: 'Setting value is required' });
     }
 
-    // Check if setting exists
-    const existingSetting = await prisma.system_settings.findUnique({
-      where: { setting_key: key }
-    });
-
-    if (!existingSetting) {
-      return res.status(404).json({ error: 'Setting not found' });
-    }
-
-    // Update setting
-    const updatedSetting = await prisma.system_settings.update({
+    const updatedSetting = await prisma.system_settings.upsert({
       where: { setting_key: key },
-      data: {
+      create: {
+        setting_key: key,
         setting_value: value.toString(),
-        updated_at: new Date()
-      }
+        description: req.body.description || null,
+      },
+      update: {
+        setting_value: value.toString(),
+        updated_at: new Date(),
+      },
     });
 
     res.json({
