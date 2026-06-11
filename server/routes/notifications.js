@@ -119,8 +119,7 @@ router.post('/whatsapp/:orderId', async (req, res) => {
       .replace('{reason}',       reason);
 
     // 3. Send directly — bypasses the enabled toggle (admin manual send)
-    const { normalizePhoneForWhatsApp } = require('../services/whatsappService');
-    const normalized = normalizePhoneForWhatsApp(phone);
+    const normalized = phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
     const result     = await sendWhatsAppDirect(phone, body);
 
     console.log(`[WhatsApp] Manual send to ${normalized}:`, result);

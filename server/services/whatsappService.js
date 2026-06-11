@@ -25,20 +25,7 @@ async function sendViaGreenApi(phone, body) {
 
   console.log(`[WhatsApp/GreenAPI] Sending to ${chatId}...`);
 
-  let res;
-  try {
-    res = await axios.post(url, { chatId, message: body }, { timeout: 15000 });
-  } catch (err) {
-    if (err.response?.status === 466) {
-      const detail = err.response.data || {};
-      const hint = detail.correspondentsStatus?.description
-        || detail.invokeStatus?.description
-        || 'Green API Developer plan limit reached (unique chat quota).';
-      throw new Error(`Green API plan limit (466): ${hint}`);
-    }
-    const apiMsg = err.response?.data?.description || err.response?.data?.message;
-    throw new Error(apiMsg || err.message);
-  }
+  const res = await axios.post(url, { chatId, message: body }, { timeout: 15000 });
 
   console.log(`[WhatsApp/GreenAPI] Full response:`, JSON.stringify(res.data));
 
@@ -100,17 +87,7 @@ async function isSettingEnabled(key) {
  */
 function normalizePhone(phone) {
   if (!phone) return null;
-
-  const digits = String(phone).replace(/\D/g, '');
-  if (!digits) return null;
-
-  // Already international MY: 60XXXXXXXXX
-  if (digits.startsWith('60')) return `+${digits}`;
-
-  // Local MY: 0XXXXXXXXX
-  if (digits.startsWith('0')) return `+60${digits.slice(1)}`;
-
-  return `+60${digits}`;
+  return phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
 }
 
 async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, reason }) {
@@ -187,8 +164,9 @@ async function sendWhatsAppMessage(phone, message) {
 async function sendWhatsAppDirect(phone, message) {
   if (!phone) throw new Error('Phone number is required');
 
-  const normalized = normalizePhone(phone);
-  if (!normalized) throw new Error('Phone number is required');
+  const normalized = phone.startsWith('+')
+    ? phone
+    : `+60${phone.replace(/^0/, '')}`;
 
   return sendViaGreenApi(normalized, message);
 }
@@ -247,5 +225,4 @@ module.exports = {
   sendWhatsAppMessage,
   seedWhatsAppSettings,
   isSettingEnabled,
-  normalizePhoneForWhatsApp: normalizePhone,
 };

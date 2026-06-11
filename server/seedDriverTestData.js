@@ -29,13 +29,10 @@ const LIVEOPS_TEAM_TYPE     = 'TEST-DRV Live Ops Team';
 const WAREHOUSE_TEAM_TYPE   = 'TEST-DRV Warehouse Team';
 const WAREHOUSE_STAFF_EMAIL = 'warehouse.test@cehub.local';
 
-/** All demo contacts route to this number for notification testing. */
-const DEMO_PHONE = '01156751977';
-
 /** Default salesperson on every test order (overridable per scenario). */
 const DEFAULT_SALESPERSON = {
   name:  'Ahmad bin Sales',
-  phone: DEMO_PHONE,
+  phone: '601156751977',
 };
 
 // Original Delivery Team access-control permissions (Access Control panel nav keys)
@@ -98,12 +95,12 @@ const PRODUCT_CATALOG = {
   },
 };
 
-/** Short realistic customer names — shared demo phone for notification testing. */
+/** Short realistic customer names — unique phones for distinct records. */
 const CUSTOMER_ROSTER = [
   {
     key:      'ben',
     name:     'Ben Tan',
-    phone:    DEMO_PHONE,
+    phone:    '601156751977',
     address:  '12 Jalan SS2/24, Petaling Jaya',
     city:     'Petaling Jaya',
     postcode: '47300',
@@ -112,7 +109,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'siti',
     name:     'Siti Aminah',
-    phone:    DEMO_PHONE,
+    phone:    '60182614238',
     address:  '8 Lorong Maarof, Bangsar',
     city:     'Kuala Lumpur',
     postcode: '59000',
@@ -121,7 +118,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'lee',
     name:     'Lee Wei',
-    phone:    DEMO_PHONE,
+    phone:    '60101234003',
     address:  '45 Jalan USJ 10/1, Subang Jaya',
     city:     'Subang Jaya',
     postcode: '47620',
@@ -130,7 +127,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'raj',
     name:     'Raj Kumar',
-    phone:    DEMO_PHONE,
+    phone:    '60101234004',
     address:  '3 Jalan Tun Razak, KLCC',
     city:     'Kuala Lumpur',
     postcode: '50450',
@@ -139,7 +136,7 @@ const CUSTOMER_ROSTER = [
   {
     key:      'hassan',
     name:     'Hassan Ali',
-    phone:    DEMO_PHONE,
+    phone:    '60101234005',
     address:  '27 Jalan Ampang Hilir, Ampang',
     city:     'Ampang',
     postcode: '55000',
@@ -371,7 +368,7 @@ async function seedProductCatalog() {
 }
 
 async function createCustomer({ name, phone, address, city, postcode, state }) {
-  let customer = await prisma.customers.findFirst({ where: { full_name: name } });
+  let customer = await prisma.customers.findFirst({ where: { phone } });
   const data = {
     full_name: name,
     phone,
@@ -527,19 +524,17 @@ async function main() {
 
   // ── Core test accounts ────────────────────────────────────────────────────
   const driver = await upsertEmployee({
-    email:         DRIVER_EMAIL,
-    name:          'Test Driver',
-    password:      DRIVER_PASS,
-    roleId:        driverRole.id,
-    contactNumber: DEMO_PHONE,
+    email:    DRIVER_EMAIL,
+    name:     'Test Driver',
+    password: DRIVER_PASS,
+    roleId:   driverRole.id,
   });
 
   const admin = await upsertEmployee({
-    email:         ADMIN_EMAIL,
-    name:          'Admin',
-    password:      ADMIN_PASS,
-    roleId:        adminRole.id,
-    contactNumber: DEMO_PHONE,
+    email:    ADMIN_EMAIL,
+    name:     'Admin',
+    password: ADMIN_PASS,
+    roleId:   adminRole.id,
   });
 
   const deliveryTeam = await resolveDeliveryOpsTeam();
@@ -552,7 +547,7 @@ async function main() {
     name:          'Farid Warehouse',
     password:      DRIVER_PASS,
     roleId:        driverRole.id,
-    contactNumber: DEMO_PHONE,
+    contactNumber: '601156751977',
   });
   await assignTeam(warehouseStaff.id, warehouseTeam.id);
   console.log(`[seed] Warehouse contact: ${warehouseStaff.name} (${warehouseStaff.contact_number})`);
@@ -564,7 +559,7 @@ async function main() {
     name:          'Razif bin Ahmad',
     password:      DRIVER_PASS,
     roleId:        driverRole.id,
-    contactNumber: DEMO_PHONE,
+    contactNumber: '601156751977',
   });
 
   // Kamal: truck assistant AND delivery team member → tests role dedup (Assistant + Delivery team → 1 row)
@@ -573,15 +568,16 @@ async function main() {
     name:          'Kamal Harun',
     password:      DRIVER_PASS,
     roleId:        driverRole.id,
-    contactNumber: DEMO_PHONE,
+    contactNumber: '601156751977',
   });
 
+  // Nurul: delivery team member only, NO phone → disabled Call/WhatsApp buttons
   const nurul = await upsertEmployee({
     email:         LIVEOPS_MEMBER_EMAIL,
     name:          'Nurul Aina',
     password:      DRIVER_PASS,
     roleId:        driverRole.id,
-    contactNumber: DEMO_PHONE,
+    contactNumber: null,
   });
 
   // Live ops team: Kamal + Nurul as members
@@ -634,7 +630,7 @@ async function main() {
   //   Contact dedup outcome:
   //     • Razif   → [Trip lead, Truck driver]   (started_by + truck.driver_id → merged)
   //     • Kamal   → [Assistant, Delivery team]  (truck.assistant_id + team member → merged)
-  //     • Nurul   → [Delivery team]
+  //     • Nurul   → [Delivery team]              (no phone → disabled buttons)
   const slotDemo = await createSlot({
     date,
     deliveryTeamId:  liveOpsTeam.id,
@@ -803,7 +799,7 @@ async function main() {
         issue_desc:             'Knocked three times, no answer. Neighbour confirmed customer is away.',
         issue_evidence:         SEED_EVIDENCE,
         salesperson_name:       'Seed Salesperson',
-        salesperson_phone:      DEMO_PHONE,
+        salesperson_phone:      '601156751977',
       },
     },
     {
@@ -841,7 +837,7 @@ async function main() {
         issue_reason:               'Driver Escalation',
         issue_desc:                 'Pre-seeded escalation: gate access denied by security.',
         salesperson_name:           'Hafiz Sales',
-        salesperson_phone:          DEMO_PHONE,
+        salesperson_phone:          '601156751977',
       },
     },
     {
@@ -969,9 +965,9 @@ async function main() {
 
   console.log('\n--- Live Ops demo contacts (slot C / TEST-DRV-LIVE-*) ---');
   console.log(`  Truck        : ${TEST_TRUCK_PLATE}`);
-  console.log(`  Razif (trip lead + truck driver)  id: ${razif.id.slice(0, 8)}…  phone: ${DEMO_PHONE}`);
-  console.log(`  Kamal (assistant + delivery team) id: ${kamal.id.slice(0, 8)}…  phone: ${DEMO_PHONE}`);
-  console.log(`  Nurul (delivery team)             id: ${nurul.id.slice(0, 8)}…  phone: ${DEMO_PHONE}`);
+  console.log(`  Razif (trip lead + truck driver)  id: ${razif.id.slice(0, 8)}…  phone: 601156751977`);
+  console.log(`  Kamal (assistant + delivery team) id: ${kamal.id.slice(0, 8)}…  phone: 601156751977`);
+  console.log(`  Nurul (delivery team, no phone)   id: ${nurul.id.slice(0, 8)}…  phone: null (buttons disabled)`);
   console.log(`  slotDemo id: ${slotDemo.id}`);
 
   console.log('\n--- Test orders (delivery_notes label + items) ---');
@@ -999,7 +995,7 @@ async function main() {
   console.log('  TEST 14   Admin opens slot C drawer → contacts section shows:');
   console.log('              • Razif  — "Trip lead" + "Truck driver" (deduped, phone shown, Call/WA active)');
   console.log('              • Kamal  — "Assistant" + "Delivery team" (deduped, phone shown, Call/WA active)');
-  console.log('              • Nurul  — "Delivery team" (phone shown, Call/WA active)');
+  console.log('              • Nurul  — "Delivery team" (no phone → buttons disabled, "No number" hint)');
   console.log('            → Progress bar shows 1 / 2 delivered (LIVE-B completed, LIVE-A in progress)');
   console.log('            → Order table shows customer names + Odoo refs + status badges');
   console.log('  TEST 15   Complete LIVE-A on driver dash → admin Live Deliveries updates in ≤30 s');
