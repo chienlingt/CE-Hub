@@ -24,7 +24,30 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const team = await prisma.teams.create({ data: req.body });
+    const { team_type, employeeIds } = req.body;
+
+    const team = await prisma.$transaction(async (tx) => {
+      if (employeeIds?.length > 0) {
+        await tx.employee_team_assignments.deleteMany({
+          where: { employee_id: { in: employeeIds } },
+        });
+      }
+
+      return tx.teams.create({
+        data: {
+          team_type,
+          ...(employeeIds?.length > 0
+            ? {
+                assignments: {
+                  create: employeeIds.map((eid) => ({ employee_id: eid })),
+                },
+              }
+            : {}),
+        },
+        include: { assignments: { include: { employee: true } } },
+      });
+    });
+
     res.status(201).json(team);
   } catch (err) {
     console.error('POST /api/teams error', err);
