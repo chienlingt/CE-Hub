@@ -50,8 +50,37 @@ async function getWhatsAppAdminRecipients(allAdmins) {
 
 // ─── Odoo chatter post (FR-06-003) ──────────────────────────────────────────
 
-async function postToOdooChatter(odooOrderRef, { customerName, address, failureReason, failureDesc, driverName }) {
-  if (!process.env.ODOO_URL || !odooOrderRef) return;
+// Records each chatter-post attempt to integration_outbox for admin visibility
+// (Cases → Order Issues → Odoo Chatter section). Logging failure is non-fatal.
+async function logChatterAttempt(orderId, odooOrderRef, { status, details, error }) {
+  try {
+    await prisma.integration_outbox.create({
+      data: {
+        event_type:      'ODOO_CHATTER_POST',
+        target:          'odoo',
+        payload:         { orderId, odooOrderRef, details: details || null },
+        idempotency_key: `order:${orderId}:odoo_chatter:${Date.now()}`,
+        status,
+        attempts:        1,
+        last_error:      error || null,
+        processed_at:    new Date(),
+      },
+    });
+  } catch (err) {
+    console.error('[NotificationService] Failed to log Odoo chatter attempt:', err.message);
+  }
+}
+
+async function postToOdooChatter(orderId, odooOrderRef, { customerName, address, failureReason, failureDesc, driverName }) {
+  const details = { customerName, address, driverName, failureReason, failureDesc };
+
+  if (!process.env.ODOO_URL || !odooOrderRef) {
+    await logChatterAttempt(orderId, odooOrderRef, {
+      status: 'skipped', details,
+      error:  'Odoo integration not configured (ODOO_URL missing) or order has no odoo_order_ref',
+    });
+    return;
+  }
 
   try {
     const { callModel } = require('./odooService');
@@ -63,6 +92,9 @@ async function postToOdooChatter(odooOrderRef, { customerName, address, failureR
 
     if (!odooOrders?.length) {
       console.warn(`[NotificationService] Odoo order not found for ref: ${odooOrderRef}`);
+      await logChatterAttempt(orderId, odooOrderRef, {
+        status: 'failed', details, error: `Odoo order not found for ref: ${odooOrderRef}`,
+      });
       return;
     }
 
@@ -83,9 +115,11 @@ async function postToOdooChatter(odooOrderRef, { customerName, address, failureR
     });
 
     console.log(`[NotificationService] Posted failure to Odoo chatter for ${odooOrderRef}`);
+    await logChatterAttempt(orderId, odooOrderRef, { status: 'posted', details });
   } catch (err) {
     // Odoo chatter failure must never crash the main flow
     console.warn('[NotificationService] Odoo chatter post failed (non-fatal):', err.message);
+    await logChatterAttempt(orderId, odooOrderRef, { status: 'failed', details, error: err.message });
   }
 }
 
@@ -134,7 +168,7 @@ async function sendDeliveryFailureNotifications(orderId) {
   const allAdmins = await getAdminEmployees();
   for (const admin of allAdmins) {
     const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
-    const message = `Delivery failed · ${customerName} · ${failureReason} · #${shortRef}`;
+    const message = `Delivery failed · ${customerName} · ${address} · ${failureReason} · #${shortRef}`;
     await createInAppNotification(admin.id, message, 'error', orderId);
   }
 
@@ -152,7 +186,7 @@ async function sendDeliveryFailureNotifications(orderId) {
     });
     if (salespersonEmployee) {
       const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
-      const message = `Delivery failed · ${customerName} · ${failureReason} · #${shortRef}`;
+      const message = `Delivery failed · ${customerName} · ${address} · ${failureReason} · #${shortRef}`;
       await createInAppNotification(salespersonEmployee.id, message, 'error', orderId);
     } else {
       console.warn(`[NotificationService] No employee account found for salesperson phone ${salespersonPhone} — skipping in-app`);
@@ -160,7 +194,7 @@ async function sendDeliveryFailureNotifications(orderId) {
   }
 
   // ── 3. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
-  await postToOdooChatter(order.odoo_order_ref, notifData);
+  await postToOdooChatter(order.id, order.odoo_order_ref, notifData);
 
   // ── 4. WhatsApp to admins (FR-06-001) ────────────────────────────────────
   const adminWhatsAppEnabled = await isSettingEnabled('whatsapp_admin_notification_enabled');
@@ -213,6 +247,8 @@ async function sendDeliveryFailureNotifications(orderId) {
     console.log(`[NotificationService] WhatsApp sent to customer ${customerName} (${customerPhone})`);
   } else if (customerPhone && !customerWaEnabled) {
     console.log(`[NotificationService] Customer WhatsApp skipped (toggle off) for ${customerName}`);
+  } else if (!customerPhone) {
+    console.warn(`[NotificationService] Customer WhatsApp skipped (no phone) for ${customerName}`);
   }
 
   console.log(`[NotificationService] A6 notifications sent for order ${orderRef}`);

@@ -71,6 +71,15 @@ export default function NotificationBell({ userId }) {
     } catch (err) { /* fail silently */ }
   };
 
+  const deleteNotification = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await fetch(`${API_BASE}/api/notifications/${id}`, { method: 'DELETE' });
+      setNotifications(prev => prev.filter(n => n.id !== id));
+      setUnreadCount(prev => Math.max(0, prev - (notifications.find(n => n.id === id)?.is_read ? 0 : 1)));
+    } catch (err) { /* fail silently */ }
+  };
+
   const markAllAsRead = async () => {
     if (!userId) return;
     try {
@@ -201,9 +210,13 @@ export default function NotificationBell({ userId }) {
                         })()}
                         <p className="text-xs text-gray-400 mt-0.5">{formatTime(n.created_at)}</p>
                       </div>
-                      {!n.is_read && (
-                        <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />
-                      )}
+                      <button
+                        onClick={(e) => deleteNotification(e, n.id)}
+                        className="flex-shrink-0 p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                        title="Dismiss"
+                      >
+                        <X size={13} />
+                      </button>
                     </div>
                   </div>
                 );

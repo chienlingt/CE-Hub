@@ -131,6 +131,18 @@ router.post('/whatsapp/:orderId', async (req, res) => {
   }
 });
 
+// DELETE /api/notifications/:id — dismiss a single notification
+router.delete('/:id', async (req, res) => {
+  try {
+    await prisma.notifications.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Notification not found' });
+    console.error('DELETE /api/notifications/:id error', err);
+    res.status(500).json({ error: 'Failed to delete notification', details: err.message });
+  }
+});
+
 // PATCH /api/notifications/:id/read  ← keep AFTER all literal-path routes
 router.patch('/:id/read', async (req, res) => {
   try {

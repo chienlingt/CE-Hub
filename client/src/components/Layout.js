@@ -50,6 +50,7 @@ import DeliveryIssues from './admin/DeliveryIssues';
 const ScanStationPicking   = () => <ScanStation forcedStage="warehouse" />;
 const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
 const ScanStationUnloading = () => <ScanStation forcedStage="unloading" />;
+const ScanStationAudit     = () => <ScanStation forcedStage="audit" />;
 
 /**
  * Layout
@@ -185,6 +186,7 @@ const Layout = () => {
         { id: 'picking',   label: 'Picking',   path: '',          component: ScanStationPicking,   allowedRoles: ['admin', 'warehouse', 'storekeeper'] },
         { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
+        { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
       ],
     },
     settings: {
