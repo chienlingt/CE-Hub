@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Modal from "./Modal";
 
+const identity = (data) => data;
+
 const SortIcon = ({ order }) => {
     if (!order) return <span className="text-gray-400">↕</span>;
     return order === 'asc' ? <span>▲</span> : <span>▼</span>;
@@ -186,8 +188,8 @@ export default function InfoPage({
     tableColumns,
     formFields,
     initialState,
-    normalizeData = (data) => data,
-    toApiFormatData = (data) => data,
+    normalizeData = identity,
+    toApiFormatData = identity,
     customDeleteHandler
 }) {
     const [data, setData] = useState([]);
