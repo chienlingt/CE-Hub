@@ -191,7 +191,7 @@ app.listen(port, async () => {
     console.log('[OutboxWorker] Cron registered — every minute.');
   }
 
-  // A.3.3: D-1 delivery reminder — nightly at 09:00 MYT (configurable via D1_REMINDER_CRON)
+  // A.3.3: D-1 delivery reminder — nightly at 07:00 MYT (configurable via D1_REMINDER_CRON)
   {
     const cron = require('node-cron');
     const { runD1ReminderCron } = require('./d1ReminderCron');
