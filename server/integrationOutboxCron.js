@@ -19,11 +19,18 @@ const {
 } = require('./services/integrationOutboxService');
 const { sendEmail } = require('./services/emailService');
 const { sendWhatsAppMessage } = require('./services/whatsappService');
+const {
+  DEFAULT_BRAND_NAME,
+  TEMPLATE_ON_THE_WAY,
+  TEMPLATE_D1_REMINDER,
+  SUBJECT_ON_THE_WAY,
+  SUBJECT_D1_REMINDER,
+} = require('./notificationTemplateDefaults');
 
 const prisma = require('./prismaClient');
 
 let _running = false; // prevent overlapping runs
-const DEFAULT_FROM_NAME = 'TBM Delivery';
+const DEFAULT_FROM_NAME = DEFAULT_BRAND_NAME;
 
 function formatTimeWindow(start, end) {
   if (!start || !end) return 'your scheduled time window';
@@ -100,10 +107,8 @@ async function handleCustomerOnTheWay(row) {
     brandName,
   };
 
-  const defaultMessage = `Dear {customerName}, this is {brandName} regarding your delivery for order {orderRef}. Your order is on its way and scheduled for {slotDate} between {timeWindow} at {address}. Our team will be with you shortly.`;
-  const defaultSubject = 'Your delivery is on its way - Order {orderRef}';
-  const message = applyTemplate(settings.template_on_the_way || defaultMessage, vars);
-  const subject = applyTemplate(settings.subject_on_the_way || defaultSubject, vars);
+  const message = applyTemplate(settings.template_on_the_way || TEMPLATE_ON_THE_WAY, vars);
+  const subject = applyTemplate(settings.subject_on_the_way || SUBJECT_ON_THE_WAY, vars);
 
   const errors = [];
 
@@ -194,10 +199,8 @@ async function handleD1Reminder(row) {
     brandName,
   };
 
-  const defaultMessage = `Dear {customerName}, this is {brandName} with a reminder that your delivery for order {orderRef} is scheduled for tomorrow ({slotDate}) between {timeWindow} at {address}. Please ensure someone is available to receive it.`;
-  const defaultSubject = 'Delivery reminder - Order {orderRef} on {slotDate}';
-  const message = applyTemplate(settings.template_d1_reminder || defaultMessage, vars);
-  const subject = applyTemplate(settings.subject_d1_reminder || defaultSubject, vars);
+  const message = applyTemplate(settings.template_d1_reminder || TEMPLATE_D1_REMINDER, vars);
+  const subject = applyTemplate(settings.subject_d1_reminder || SUBJECT_D1_REMINDER, vars);
 
   const errors = [];
 
