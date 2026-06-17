@@ -12,15 +12,38 @@ const {
 // ── GET /api/time-slots/active  (A.3.7) ────────────────────────────────────
 // Returns all slots currently out_for_delivery with order count summary.
 // Must be declared BEFORE /:id routes to avoid being matched as an id.
+//
+// Query params:
+//   ?date=today     (default) — only slots whose date matches today in Asia/KL timezone
+//   ?date=all       — no date restriction (all out_for_delivery slots)
+//   ?date=YYYY-MM-DD — exact slot date match
 router.get('/active', async (req, res) => {
   try {
+    const { date: dateParam } = req.query;
+
+    // Resolve today in Asia/Kuala_Lumpur (same convention as d1ReminderCron)
+    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }); // 'YYYY-MM-DD'
+
+    const where = { slot_status: 'out_for_delivery' };
+    if (!dateParam || dateParam === 'today') {
+      where.date = todayKL;
+    } else if (dateParam !== 'all') {
+      where.date = dateParam; // specific YYYY-MM-DD
+    }
+    // dateParam === 'all' → no date filter added
+
     const activeSlots = await prisma.time_slots.findMany({
-      where: { slot_status: 'out_for_delivery' },
+      where,
       include: {
         truck:         { select: { plate_no: true } },
         delivery_team: { select: { id: true, team_type: true } },
         orders: {
-          select: { id: true, order_status: true },
+          select: {
+            id: true,
+            order_status: true,
+            odoo_order_ref: true,
+            customers: { select: { full_name: true } },
+          },
         },
       },
       orderBy: { departed_at: 'asc' },
@@ -46,6 +69,10 @@ router.get('/active', async (req, res) => {
           delivered: deliveredOrders,
           remaining: totalOrders - deliveredOrders,
         },
+        order_summaries: slot.orders.map(o => ({
+          odoo_order_ref: o.odoo_order_ref || null,
+          customer_name:  o.customers?.full_name || null,
+        })),
       };
     });
 
