@@ -29,6 +29,13 @@ const ITEM_STATUS = {
   failed:    { label: 'Failed',    color: 'bg-red-100 text-red-700',     dot: 'bg-red-500'    },
 };
 
+// FR-06-003 — Odoo chatter post outcome badges
+const CHATTER_STATUS = {
+  posted:  { label: 'Posted to Odoo Chatter',        cls: 'bg-green-100 text-green-700' },
+  failed:  { label: 'Failed to post',                cls: 'bg-red-100 text-red-700'     },
+  skipped: { label: 'Skipped — Odoo not configured', cls: 'bg-gray-100 text-gray-600'   },
+};
+
 function formatDate(str) {
   if (!str) return 'N/A';
   const d = new Date(str);
@@ -54,11 +61,24 @@ function CaseDetail({ order, onClose, onResolved }) {
   const [items,     setItems]     = useState(order.order_products || []);
   const [resolving, setResolving] = useState(false);
   const [updatingItem, setUpdatingItem] = useState(null);
+  const [chatterLog,     setChatterLog]     = useState([]);
+  const [chatterLoading, setChatterLoading] = useState(true);
 
   const isResolved = order.issue_status === 'resolved';
   const customer   = order.customers;
   const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
   const failedItems = items.filter(i => i.item_delivery_status === 'failed');
+
+  // FR-06-003 — load Odoo chatter post history for this order
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/api/orders/${order.id}/odoo-chatter-log`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => { if (active) setChatterLog(Array.isArray(data) ? data : []); })
+      .catch(() => { if (active) setChatterLog([]); })
+      .finally(() => { if (active) setChatterLoading(false); });
+    return () => { active = false; };
+  }, [order.id]);
 
   const updateItemStatus = async (itemId, status) => {
     setUpdatingItem(itemId);
@@ -173,6 +193,42 @@ function CaseDetail({ order, onClose, onResolved }) {
             {order.issue_desc && (
               <p className="text-sm text-gray-600 italic bg-gray-50 px-3 py-2 rounded-lg">"{order.issue_desc}"</p>
             )}
+          </div>
+
+          {/* Odoo Chatter (FR-06-003) */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Odoo Chatter</p>
+            {chatterLoading ? (
+              <p className="text-sm text-gray-400">Loading…</p>
+            ) : chatterLog.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">No chatter post recorded yet.</p>
+            ) : (() => {
+              const latest = chatterLog[0];
+              const cfg = CHATTER_STATUS[latest.status] || { label: latest.status, cls: 'bg-gray-100 text-gray-600' };
+              const d = latest.payload?.details;
+              return (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.cls}`}>
+                      {cfg.label}
+                    </span>
+                    <span className="text-xs text-gray-400">{formatDate(latest.created_at)}</span>
+                  </div>
+                  {latest.last_error && (
+                    <p className="text-xs text-red-600">{latest.last_error}</p>
+                  )}
+                  {d && (
+                    <div className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-lg p-3 space-y-1">
+                      <p><span className="font-medium text-gray-500">Customer:</span> {d.customerName}</p>
+                      <p><span className="font-medium text-gray-500">Address:</span> {d.address}</p>
+                      <p><span className="font-medium text-gray-500">Driver:</span> {d.driverName}</p>
+                      <p><span className="font-medium text-gray-500">Failure Reason:</span> {d.failureReason}</p>
+                      <p><span className="font-medium text-gray-500">Details:</span> {d.failureDesc || 'None provided'}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Items */}

@@ -12,9 +12,10 @@ import {
   ArrowUp,
   ArrowUpDown,
   CalendarDays,
-  Camera, Package,
+  Camera, ClipboardList, Package,
   RefreshCw,
   Search,
+  ShieldAlert,
   Truck,
   User,
   XCircle,
@@ -151,12 +152,15 @@ function SerialBadge({ label, value, color }) {
 
 function ErrorBanner({ fb, onDismiss }) {
   if (!fb || fb.ok) return null;
+  const isMismatch = ['SERIAL_MISMATCH', 'LOADING_SERIAL_MISMATCH', 'UNLOADING_SERIAL_MISMATCH'].includes(fb.code);
   return (
     <div className="flex items-start gap-2.5 p-3 rounded-xl text-sm bg-red-50 text-red-700 border border-red-200">
       <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
       <div className="flex-1">
-        <p className="font-medium">{fb.msg}</p>
-        {fb.code === 'SERIAL_MISMATCH' && (
+        <p className="font-medium">
+          {isMismatch ? fb.msg.split('. ')[0] + '.' : fb.msg}
+        </p>
+        {isMismatch && (
           <p className="text-xs mt-0.5 opacity-80">
             Expected: <span className="font-mono font-bold">{fb.expected}</span>
             {' '}· Scanned: <span className="font-mono font-bold">{fb.scanned}</span>
@@ -490,6 +494,175 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   );
 }
 
+// ─── Audit table (read-only, admin only) ──────────────────────────────────────
+
+function AuditCell({ name, at, serial, color }) {
+  if (!name) return <span className="text-xs text-gray-300">—</span>;
+  const colors = {
+    blue:    'text-blue-600',
+    emerald: 'text-emerald-600',
+    purple:  'text-purple-600',
+  };
+  return (
+    <div className="text-xs leading-snug">
+      <p className={`font-semibold ${colors[color] || 'text-gray-700'}`}>{name}</p>
+      <p className="text-gray-400">{fmt(at)}</p>
+      {serial && <p className="font-mono text-gray-400 mt-0.5">{serial}</p>}
+    </div>
+  );
+}
+
+function AuditTable({ rows, isAdmin, onUpdated }) {
+  const [sort,      setSort]      = useState({ field: 'so', dir: 'asc' });
+  const [resetting, setResetting] = useState(null);
+
+  const handleResetScan = async (row) => {
+    const name = row.products?.product_name || `Item #${row.id}`;
+    if (!window.confirm(`Reset all scan progress for "${name}"? This cannot be undone.`)) return;
+    setResetting(row.id);
+    try {
+      const res  = await fetch(`${API_BASE}/api/order-products/${row.id}/scan`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Failed to reset item'); return; }
+      onUpdated(row._orderId, {
+        ...data.orderProduct,
+        picked_by_name:   null,
+        loaded_by_name:   null,
+        unloaded_by_name: null,
+      });
+    } catch { alert('Failed to reset item'); }
+    finally { setResetting(null); }
+  };
+
+  const handleSort = (field) =>
+    setSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' });
+
+  const sorted = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      let va, vb;
+      if (sort.field === 'so')        { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
+      else if (sort.field === 'name') { va = a.products?.product_name || ''; vb = b.products?.product_name || ''; }
+      else if (sort.field === 'status') {
+        const o = ['pending', 'picked', 'loaded', 'unloaded'];
+        va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status);
+        return sort.dir === 'asc' ? va - vb : vb - va;
+      }
+      else return 0;
+      const c = String(va).localeCompare(String(vb), undefined, { numeric: true });
+      return sort.dir === 'asc' ? c : -c;
+    });
+  }, [rows, sort]);
+
+  const grouped = useMemo(() => {
+    const map = {};
+    sorted.forEach(row => {
+      const oid = row._orderId;
+      if (!map[oid]) map[oid] = { orderId: oid, order: row._order, rows: [] };
+      map[oid].rows.push(row);
+    });
+    return Object.values(map);
+  }, [sorted]);
+
+  if (!sorted.length) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Mobile sort strip */}
+      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 md:hidden flex-wrap">
+        <span className="text-xs text-gray-400 font-medium">Sort:</span>
+        {[{ id: 'so', label: 'SO' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
+          const active = sort.field === f.id;
+          const Icon   = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
+          return (
+            <button key={f.id} onClick={() => handleSort(f.id)}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border transition-colors
+                ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'}`}>
+              {f.label}<Icon size={10} />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
+              <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
+              <SortTh field="so"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">SO Number</SortTh>
+              <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Picked</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Loaded</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Unloaded</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {grouped.map(({ orderId, order, rows: gRows }) => (
+              <React.Fragment key={orderId}>
+                {/* Per-order group header with Reset button for admin */}
+                <tr className="bg-gray-50 border-t-2 border-gray-200">
+                  <td colSpan={7} className="px-4 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-gray-600">
+                        {order?.odoo_order_ref || orderId.slice(0, 8).toUpperCase()}
+                        {order?.customers?.full_name && (
+                          <span className="font-normal text-gray-400 ml-2">{order.customers.full_name}</span>
+                        )}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+                {gRows.map((row, idx) => (
+                  <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-semibold text-gray-900">{row.products?.product_name || `Item #${row.id}`}</p>
+                      <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
+                      <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">
+                        {row._order?.odoo_order_ref || row._order?.id?.slice(0, 8).toUpperCase()}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3 hidden sm:table-cell">
+                      <span className="font-mono text-xs font-bold text-gray-700">
+                        {row._order?.odoo_order_ref || row._order?.id?.slice(0, 8).toUpperCase()}
+                      </span>
+                      {row._order?.customers?.full_name && (
+                        <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                          <User size={9} />{row._order.customers.full_name}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <StatusPill item={row} />
+                        {isAdmin && row.picking_status !== 'pending' && (
+                          <button
+                            onClick={() => handleResetScan(row)}
+                            disabled={resetting === row.id}
+                            className="text-red-400 hover:text-red-600 transition-colors disabled:opacity-40"
+                            title="Reset scan progress"
+                          >
+                            {resetting === row.id
+                              ? <RefreshCw size={11} className="animate-spin" />
+                              : <XCircle size={11} />}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3"><AuditCell name={row.picked_by_name}   at={row.picked_at}   serial={row.picked_serial}   color="blue" /></td>
+                    <td className="px-4 py-3"><AuditCell name={row.loaded_by_name}   at={row.loaded_at}   serial={row.loaded_serial}   color="emerald" /></td>
+                    <td className="px-4 py-3"><AuditCell name={row.unloaded_by_name} at={row.unloaded_at} serial={row.unloaded_serial} color="purple" /></td>
+                  </tr>
+                ))}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── ScannerSection (exported — used by truckSchedule.js) ────────────────────
 
 export function ScannerSection({ order, stage, employeeId, items, onItemUpdated }) {
@@ -574,7 +747,7 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
 // ─── Main ScanStation ─────────────────────────────────────────────────────────
 
 export default function ScanStation({ forcedStage }) {
-  const { employeeData } = useAuth();
+  const { employeeData, loadingPermissions } = useAuth();
   const { isAdmin, isWarehouse, isDriver } = useRole(employeeData);
 
   const today = new Date().toLocaleDateString('en-CA');
@@ -590,6 +763,7 @@ export default function ScanStation({ forcedStage }) {
     if (forcedStage === 'warehouse') return [{ id: 'picking',   label: 'Picking'   }];
     if (forcedStage === 'unloading') return [{ id: 'unloading', label: 'Unloading' }];
     if (forcedStage === 'driver')    return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
+    if (forcedStage === 'audit')     return [{ id: 'audit', label: 'Audit' }];
     if (isAdmin) return [{ id: 'picking', label: 'Picking' }, { id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     return [{ id: 'picking', label: 'Picking' }]; // safe default
   }, [forcedStage, isAdmin, isDriver, isWarehouse]);
@@ -598,6 +772,7 @@ export default function ScanStation({ forcedStage }) {
   const [tab, setTab] = useState(() => {
     if (forcedStage === 'unloading') return 'unloading';
     if (forcedStage === 'warehouse') return 'picking';
+    if (forcedStage === 'audit')     return 'audit';
     return tabOptions[0].id;
   });
 
@@ -612,9 +787,10 @@ export default function ScanStation({ forcedStage }) {
     if (forcedStage === 'unloading') setTab('unloading');
     else if (forcedStage === 'warehouse') setTab('picking');
     else if (forcedStage === 'driver') setTab('loading');
+    else if (forcedStage === 'audit') setTab('audit');
   }, [forcedStage]);
 
-  const orderStatus = tab === 'unloading' ? 'Delivering' : 'Scheduled';
+  const orderStatus = tab === 'unloading' ? 'Delivering' : tab === 'audit' ? 'all' : 'Scheduled';
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -660,12 +836,29 @@ export default function ScanStation({ forcedStage }) {
     });
   }, [filteredOrders, itemMap, search]);
 
-  const tabLabel = tab === 'picking' ? 'Picking' : tab === 'loading' ? 'Loading' : 'Unloading';
+  const tabLabel = tab === 'picking' ? 'Picking' : tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : 'Audit';
 
   // Global scan — only for loading / unloading (picking uses per-row buttons)
   const [showGlobalCam,    setShowGlobalCam]    = useState(false);
   const [globalScanSerial, setGlobalScanSerial] = useState(null);
   const [globalError,      setGlobalError]      = useState(null);
+
+  // Audit tab is admin-only — block direct URL access by non-admins
+  if (forcedStage === 'audit' && !isAdmin) {
+    if (loadingPermissions) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+          <RefreshCw size={28} className="animate-spin text-gray-300" />
+        </div>
+      );
+    }
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-2 text-gray-400">
+        <ShieldAlert size={40} className="opacity-30" />
+        <p className="text-sm font-medium">Admin access required.</p>
+      </div>
+    );
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -686,7 +879,7 @@ export default function ScanStation({ forcedStage }) {
               <RefreshCw className="w-4 h-4 text-white" />
             </button>
             {/* Global scan button — loading & unloading only */}
-            {tab !== 'picking' && (
+            {tab !== 'picking' && tab !== 'audit' && (
               <button onClick={() => setShowGlobalCam(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-white text-blue-700 font-bold text-sm rounded-xl hover:bg-blue-50 transition-colors shadow-sm">
                 <Camera size={16} />
@@ -733,9 +926,11 @@ export default function ScanStation({ forcedStage }) {
           </div>
         ) : rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
-            {tab === 'picking' ? <Package size={48} className="opacity-20" /> : <Truck size={48} className="opacity-20" />}
+            {tab === 'picking' ? <Package size={48} className="opacity-20" />
+              : tab === 'audit' ? <ClipboardList size={48} className="opacity-20" />
+              : <Truck size={48} className="opacity-20" />}
             <p className="text-base font-medium text-gray-500">
-              {search ? 'No items match your search.' : `No ${tabLabel.toLowerCase()} items for this date.`}
+              {search ? 'No items match your search.' : tab === 'audit' ? 'No items for this date.' : `No ${tabLabel.toLowerCase()} items for this date.`}
             </p>
           </div>
         ) : (
@@ -746,15 +941,19 @@ export default function ScanStation({ forcedStage }) {
             {globalError && (
               <ErrorBanner fb={globalError} onDismiss={() => setGlobalError(null)} />
             )}
-            <ItemTable
-              rows={rows}
-              tab={tab}
-              employeeId={employeeData?.id || null}
-              isAdmin={isAdmin}
-              onUpdated={updateItem}
-              globalScanSerial={globalScanSerial}
-              onGlobalScanError={setGlobalError}
-            />
+            {tab === 'audit' ? (
+              <AuditTable rows={rows} isAdmin={isAdmin} onUpdated={updateItem} />
+            ) : (
+              <ItemTable
+                rows={rows}
+                tab={tab}
+                employeeId={employeeData?.id || null}
+                isAdmin={isAdmin}
+                onUpdated={updateItem}
+                globalScanSerial={globalScanSerial}
+                onGlobalScanError={setGlobalError}
+              />
+            )}
           </div>
         )}
       </div>

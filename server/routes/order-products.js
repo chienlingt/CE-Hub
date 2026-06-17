@@ -141,6 +141,38 @@ router.patch('/:id/picking-status', async (req, res) => {
   }
 });
 
+// DELETE /api/order-products/:id/scan — A2: admin fully resets one item's scan progress back to pending
+router.delete('/:id/scan', async (req, res) => {
+  try {
+    const item = await prisma.order_products.findUnique({
+      where:   { id: parseInt(req.params.id) },
+      include: { products: { select: { product_name: true } } },
+    });
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    if (item.picking_status === 'pending') {
+      return res.status(400).json({ error: 'Item has no scan progress to reset' });
+    }
+
+    const updated = await prisma.order_products.update({
+      where: { id: parseInt(req.params.id) },
+      data: {
+        picking_status:  'pending',
+        picked_serial:   null, picked_by:   null, picked_at:   null,
+        loaded_serial:   null, loaded_by:   null, loaded_at:   null,
+        unloaded_serial: null, unloaded_by: null, unloaded_at: null,
+      },
+      include: { products: { select: { id: true, product_name: true } } },
+    });
+
+    console.log(`[A2] Scan reset for item ${req.params.id} — reverted to 'pending'`);
+    res.json({ success: true, orderProduct: updated });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
+    console.error('DELETE /api/order-products/:id/scan error', err);
+    res.status(500).json({ error: 'Failed to reset item scan', details: err.message });
+  }
+});
+
 // PATCH /api/order-products/:id/cancel-scan — UC-05 (admin only)
 // Cancels/resets a scanned stage, reverting the item to its previous status.
 //   stage: 'picking'   → resets to 'pending'  (clears picked_serial/by/at)

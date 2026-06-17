@@ -1320,6 +1320,24 @@ router.get('/:id/loading-status', async (req, res) => {
   }
 });
 
+// GET /:id/odoo-chatter-log — FR-06-003: history of Odoo chatter post attempts for this order
+router.get('/:id/odoo-chatter-log', async (req, res) => {
+  try {
+    const rows = await prisma.integration_outbox.findMany({
+      where: {
+        event_type:      'ODOO_CHATTER_POST',
+        idempotency_key: { startsWith: `order:${req.params.id}:odoo_chatter:` },
+      },
+      orderBy: { created_at: 'desc' },
+      take: 5,
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error('GET /api/orders/:id/odoo-chatter-log error', err);
+    res.status(500).json({ error: 'Failed to fetch Odoo chatter log', details: err.message });
+  }
+});
+
 // POST /:id/dispatch — Option A: soft-deprecated in favour of POST /api/time-slots/:id/depart.
 // Per-order dispatch bypassed the full A3 trip lifecycle (no slot depart, no on-the-way
 // notifications, no lorry_trips update). Use slot depart from the driver "Leave warehouse" banner.
@@ -1659,6 +1677,40 @@ router.patch('/:id/issue', async (req, res) => {
   } catch (err) {
     console.error('PATCH /api/orders/:id/issue error', err);
     res.status(500).json({ error: 'Failed to update order issue', details: err.message });
+  }
+});
+
+// DELETE /api/orders/:id/scan-session — A2: admin resets all scan progress for an order
+router.delete('/:id/scan-session', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where:  { id: req.params.id },
+      select: { order_status: true, odoo_order_ref: true },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    const lockedStatuses = ['Delivered', 'Completed', 'Failed', 'Cancelled'];
+    if (lockedStatuses.includes(order.order_status)) {
+      return res.status(400).json({
+        error: `Cannot reset scans for an order with status '${order.order_status}'`,
+      });
+    }
+
+    const result = await prisma.order_products.updateMany({
+      where: { order_id: req.params.id },
+      data: {
+        picking_status:  'pending',
+        picked_serial:   null, picked_by:   null, picked_at:   null,
+        loaded_serial:   null, loaded_by:   null, loaded_at:   null,
+        unloaded_serial: null, unloaded_by: null, unloaded_at: null,
+      },
+    });
+
+    console.log(`[A2] Scan session reset for order ${req.params.id} — ${result.count} item(s) cleared`);
+    res.json({ success: true, items_reset: result.count });
+  } catch (err) {
+    console.error('DELETE /api/orders/:id/scan-session error', err);
+    res.status(500).json({ error: 'Failed to reset scan session', details: err.message });
   }
 });
 
