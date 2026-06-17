@@ -195,7 +195,7 @@ app.listen(port, async () => {
   {
     const cron = require('node-cron');
     const { runD1ReminderCron } = require('./d1ReminderCron');
-    const reminderSchedule = process.env.D1_REMINDER_CRON || '0 7 * * *';
+    const reminderSchedule = process.env.D1_REMINDER_CRON || '0 19 * * *';
     cron.schedule(reminderSchedule, () => { runD1ReminderCron(); }, { timezone: 'Asia/Kuala_Lumpur' });
     console.log(`[D1Reminder] Cron registered — ${reminderSchedule} MYT.`);
   }
