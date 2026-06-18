@@ -57,17 +57,43 @@ function sendUploadFile(res, filePath) {
   return res.sendFile(filePath);
 }
 
+/** Decode URL path segments; Express leaves %20 etc. literal in req.path. */
+function decodeUploadRelPath(relPath) {
+  return relPath
+    .replace(/^\/+/, '')
+    .split('/')
+    .map(seg => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join('/');
+}
+
+/** Resolve a relative uploads path and block directory traversal. */
+function resolveUploadFile(relPath) {
+  const decoded = decodeUploadRelPath(relPath);
+  const resolved = path.resolve(uploadsRoot, decoded);
+  const root = path.resolve(uploadsRoot);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    return null;
+  }
+  return resolved;
+}
+
 app.use('/uploads', (req, res, next) => {
-  const rel = req.path.replace(/^\/+/, '');
-  const primary = path.join(uploadsRoot, rel);
-  if (fs.existsSync(primary)) {
+  const primary = resolveUploadFile(req.path);
+  if (primary && fs.existsSync(primary)) {
     return sendUploadFile(res, primary);
   }
   // Back-compat: issue photos saved under status/ before upload path fix
+  const rel = decodeUploadRelPath(req.path);
   const legacy = rel.match(/^orders\/del\/report\/([^/]+)\/(.+)$/);
   if (legacy) {
-    const alt = path.join(uploadsRoot, 'orders', 'del', 'status', legacy[1], legacy[2]);
-    if (fs.existsSync(alt)) {
+    const alt = resolveUploadFile(`orders/del/status/${legacy[1]}/${legacy[2]}`);
+    if (alt && fs.existsSync(alt)) {
       return sendUploadFile(res, alt);
     }
   }

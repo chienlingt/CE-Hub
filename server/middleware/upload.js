@@ -24,7 +24,9 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename(req, file, cb) {
-    const unique = `${Date.now()}-${file.originalname}`;
+    // Strip spaces/special chars so URLs never need fragile %20 lookups on disk.
+    const safe = path.basename(file.originalname).replace(/[^\w.\-()+]/g, '_');
+    const unique = `${Date.now()}-${safe}`;
     cb(null, unique);
   },
 });
