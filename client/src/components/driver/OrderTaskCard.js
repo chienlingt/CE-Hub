@@ -32,6 +32,10 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
     ? new Date(job.time).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false })
     : '';
 
+  const productItems = Array.isArray(job.products) && job.products.length
+    ? job.products
+    : (job.product || 'Unknown Product').split(',').map((name) => name.trim()).filter(Boolean);
+
   function handleCall() {
     callCustomer(job.customer_phone);
   }
@@ -62,7 +66,11 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
               {job.appointment_window}
             </p>
           )}
-          <p className="font-semibold text-gray-900 truncate">{job.product || 'Unknown Product'}</p>
+          <ul className="mt-0.5 space-y-0.5 text-sm font-semibold text-gray-900 list-disc list-inside">
+            {productItems.map((name, index) => (
+              <li key={index} className="leading-snug">{name}</li>
+            ))}
+          </ul>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${badge.color}`}>
