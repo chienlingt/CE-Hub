@@ -13,21 +13,28 @@
 //   {brandName}     — from notification_from_name
 
 const prisma = require('./prismaClient');
+const {
+  DEFAULT_BRAND_NAME,
+  TEMPLATE_ON_THE_WAY,
+  TEMPLATE_D1_REMINDER,
+  SUBJECT_ON_THE_WAY,
+  SUBJECT_D1_REMINDER,
+} = require('./notificationTemplateDefaults');
 
 const A3_SETTINGS = [
   {
     key:   'template_on_the_way',
-    value: 'Dear {customerName}, this is {brandName} regarding your delivery for order {orderRef}. Your order is on its way and scheduled for {slotDate} between {timeWindow} at {address}. Our team will be with you shortly.',
+    value: TEMPLATE_ON_THE_WAY,
     description: 'WhatsApp/email body for CUSTOMER_ON_THE_WAY notification. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'template_d1_reminder',
-    value: 'Dear {customerName}, this is {brandName} with a reminder that your delivery for order {orderRef} is scheduled for tomorrow ({slotDate}) between {timeWindow} at {address}. Please ensure someone is available to receive it.',
+    value: TEMPLATE_D1_REMINDER,
     description: 'WhatsApp/email body for the D-1 reminder. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'notification_from_name',
-    value: 'TBM Delivery',
+    value: DEFAULT_BRAND_NAME,
     description: 'Sender display name used in customer notification emails.',
   },
   {
@@ -42,12 +49,12 @@ const A3_SETTINGS = [
   },
   {
     key:   'subject_on_the_way',
-    value: 'Your delivery is on its way - Order {orderRef}',
+    value: SUBJECT_ON_THE_WAY,
     description: 'Email subject for CUSTOMER_ON_THE_WAY notifications. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'subject_d1_reminder',
-    value: 'Delivery reminder - Order {orderRef} on {slotDate}',
+    value: SUBJECT_D1_REMINDER,
     description: 'Email subject for CUSTOMER_D1_REMINDER notifications. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {

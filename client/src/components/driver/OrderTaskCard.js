@@ -37,7 +37,14 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
   }
 
   function handleChat() {
-    const msg = onTheWayTemplate(shortId, job.address);
+    const orderRef = job.odoo_order_ref || job.id?.slice(0, 8).toUpperCase();
+    const msg = onTheWayTemplate({
+      customerName: job.customer_name,
+      orderRef,
+      slotDate: job.slot_date || job.assigned_date,
+      timeWindow: job.appointment_window,
+      address: job.address,
+    });
     openWhatsApp(job.customer_phone, msg);
   }
 

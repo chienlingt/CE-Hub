@@ -17,11 +17,11 @@ import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 const PROACTIVE_DEFAULTS = {
   notification_from_name: 'TBM Delivery',
   template_on_the_way:
-    'Dear {customerName}, this is {brandName} regarding your delivery for order {orderRef}. Your order is on its way and scheduled for {slotDate} between {timeWindow} at {address}. Our team will be with you shortly.',
-  subject_on_the_way: 'Your delivery is on its way - Order {orderRef}',
+    'Hi {customerName},\n\nYour order {orderRef} is on the way with TBM Delivery.\n\nDate: {slotDate}\nTime: {timeWindow}\nDelivery Address: {address}\n\nPlease ensure someone is available to receive the delivery. Our driver will contact you if needed.\n\n— {brandName}',
+  subject_on_the_way: 'Your TBM delivery is on the way — {orderRef}',
   template_d1_reminder:
-    'Dear {customerName}, this is {brandName} with a reminder that your delivery for order {orderRef} is scheduled for tomorrow ({slotDate}) between {timeWindow} at {address}. Please ensure someone is available to receive it.',
-  subject_d1_reminder: 'Delivery reminder - Order {orderRef} on {slotDate}',
+    'Hi {customerName},\n\nFriendly reminder: your TBM delivery for order {orderRef} is scheduled for tomorrow.\n\nDate: {slotDate}\nTime: {timeWindow}\nDelivery Address: {address}\n\nPlease ensure someone is available to sign for the delivery. Reply to this message if you need to reschedule.\n\n— {brandName}',
+  subject_d1_reminder: 'Reminder: delivery tomorrow — {orderRef}',
   customer_on_the_way_notification_enabled: 'true',
   customer_d1_reminder_notification_enabled: 'true',
 };

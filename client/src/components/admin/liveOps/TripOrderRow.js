@@ -7,11 +7,16 @@ export default function TripOrderRow({ order, index }) {
     <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors">
       <td className="py-3 pl-4 pr-2 text-xs text-gray-400 font-medium w-8">{index + 1}</td>
       <td className="py-3 pr-3">
-        <div className="text-xs font-mono text-gray-700 truncate max-w-[120px]">
+        <div className="text-xs font-mono text-gray-700 truncate max-w-[180px]" title={order.odoo_order_ref || undefined}>
           {order.odoo_order_ref || <span className="text-gray-400 italic">No Odoo ref</span>}
         </div>
         {order.customer_name && (
-          <div className="text-xs text-gray-500 mt-0.5 truncate max-w-[120px]">{order.customer_name}</div>
+          <div className="text-xs text-gray-500 mt-0.5 truncate max-w-[180px]">{order.customer_name}</div>
+        )}
+        {order.id && (
+          <div className="text-[10px] text-gray-400 font-mono mt-0.5 break-all leading-tight max-w-[180px]" title={order.id}>
+            {order.id}
+          </div>
         )}
       </td>
       <td className="py-3 pr-3">

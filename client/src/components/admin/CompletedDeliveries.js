@@ -285,7 +285,7 @@ function PodThumbnails({ evidence = [], signatureUrl }) {
           title={type === 'signature' ? 'Customer signature' : `Photo ${i + 1}`}
           className="w-9 h-9 rounded-md border border-gray-200 bg-gray-100 flex items-center justify-center overflow-hidden hover:border-blue-400"
         >
-          {url.startsWith('data:image') || url.match(/\.(jpe?g|png|gif|webp)$/i) ? (
+          {url.startsWith('data:image') || url.match(/\.(jpe?g|png|gif|webp|avif)$/i) ? (
             <img src={mediaUrl(url)} alt={type} className="w-full h-full object-cover" />
           ) : (
             <ImageIcon className="w-4 h-4 text-gray-400" />

@@ -6,10 +6,12 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle } from 'lucide-react';
+import { CheckCircle, Search } from 'lucide-react';
 import { useActiveTrips } from '../../../hooks/useActiveTrips';
 import { useTripStatus } from '../../../hooks/useTripStatus';
+import { filterTripsBySearch } from '../../../utils/liveOpsFilters';
 import LiveOpsHeader from './LiveOpsHeader';
+import LiveOpsFilters from './LiveOpsFilters';
 import ActiveTripsList from './ActiveTripsList';
 import TripDetailDrawer from './TripDetailDrawer';
 
@@ -17,10 +19,14 @@ export default function LiveDeliveries() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTripId = searchParams.get('trip') || null;
 
+  // Filter state
+  const [dateFilter,   setDateFilter]   = useState('today');
+  const [searchQuery,  setSearchQuery]  = useState('');
+
   // Completion banner state
   const [completedBanner, setCompletedBanner] = useState(false);
 
-  const { trips, loading: listLoading, error: listError, lastUpdated, refresh } = useActiveTrips();
+  const { trips, loading: listLoading, error: listError, lastUpdated, refresh } = useActiveTrips({ date: dateFilter });
 
   // Auto-close handler when trip ends
   const handleTripEnded = useCallback(() => {
@@ -44,8 +50,8 @@ export default function LiveDeliveries() {
     }
   }, [selectedTripId, setSearchParams]);
 
-  function openTrip(trip) {
-    setSearchParams({ trip: trip.id }, { replace: true });
+  function openTrip(t) {
+    setSearchParams({ trip: t.id }, { replace: true });
     setCompletedBanner(false);
   }
 
@@ -53,14 +59,24 @@ export default function LiveDeliveries() {
     setSearchParams({}, { replace: true });
   }
 
+  const filteredTrips = filterTripsBySearch(trips, searchQuery);
+  const hasSearchActive = searchQuery.trim().length > 0;
+
   return (
     <div className="min-h-full bg-gray-50">
       <div className="max-w-4xl mx-auto px-4 py-6">
         <LiveOpsHeader
-          count={trips.length}
+          count={filteredTrips.length}
           lastUpdated={lastUpdated}
           onRefresh={refresh}
           loading={listLoading}
+        />
+
+        <LiveOpsFilters
+          dateFilter={dateFilter}
+          onDateFilter={setDateFilter}
+          searchQuery={searchQuery}
+          onSearchQuery={setSearchQuery}
         />
 
         {/* Trip-completed banner */}
@@ -87,9 +103,18 @@ export default function LiveDeliveries() {
           </div>
         )}
 
-        {!listLoading || trips.length > 0 ? (
+        {/* Search no-match state */}
+        {!listLoading && hasSearchActive && trips.length > 0 && filteredTrips.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+            <Search className="h-10 w-10 mb-3" />
+            <p className="text-sm font-medium text-gray-500">No trips match your search.</p>
+            <p className="text-xs mt-1 text-gray-400">Try a different order ref or customer name.</p>
+          </div>
+        )}
+
+        {(!listLoading || trips.length > 0) && !(hasSearchActive && filteredTrips.length === 0) ? (
           <ActiveTripsList
-            trips={trips}
+            trips={filteredTrips}
             onTripClick={openTrip}
             selectedTripId={selectedTripId}
           />
