@@ -1,11 +1,7 @@
 import { Clock, Truck, Navigation, Users } from 'lucide-react';
 import { getSlotStatusStyle, getSlotStatusLabel } from '../../../utils/slotStatusHelpers';
+import { formatDateTime } from '../../../utils/orderHelpers';
 import TripProgressBar from './TripProgressBar';
-
-function formatTime(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
 
 export default function TripDetailHeader({ trip }) {
   const orders = trip.orders || {};
@@ -29,7 +25,7 @@ export default function TripDetailHeader({ trip }) {
           {getSlotStatusLabel(slotStatus)}
         </span>
         {trip.departed_at && (
-          <span className="text-xs text-gray-500">Departed {formatTime(trip.departed_at)}</span>
+          <span className="text-xs text-gray-500">Departed {formatDateTime(trip.departed_at)}</span>
         )}
       </div>
 

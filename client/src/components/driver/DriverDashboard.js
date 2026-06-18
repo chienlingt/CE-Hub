@@ -89,9 +89,13 @@ export default function DriverDashboard() {
   );
 
   const filteredGroups = useMemo(() => {
+    const q = search.trim();
+    if (q) {
+      // Search across all tabs/windows for the selected date.
+      return filterGroupsBySearch(slotGroups, q);
+    }
     let g = filterGroupsByWindow(slotGroups, windowFilter);
     g = filterGroupsByTab(g, tab);
-    g = filterGroupsBySearch(g, search);
     return g;
   }, [slotGroups, windowFilter, tab, search]);
 
@@ -242,11 +246,17 @@ export default function DriverDashboard() {
             <LayoutList className="w-10 h-10 mb-3" />
             <p className="font-medium">No orders found</p>
             <p className="text-sm mt-1">
-              for {date}
-              {windowFilter !== 'all' && windowOptions.find(o => o.value === windowFilter)
-                ? ` · ${windowOptions.find(o => o.value === windowFilter).label}`
-                : ''}
-              {' '}in {TAB_LABELS[tab]} tab
+              {search.trim()
+                ? `matching "${search.trim()}" on ${date}`
+                : (
+                  <>
+                    for {date}
+                    {windowFilter !== 'all' && windowOptions.find(o => o.value === windowFilter)
+                      ? ` · ${windowOptions.find(o => o.value === windowFilter).label}`
+                      : ''}
+                    {' '}in {TAB_LABELS[tab]} tab
+                  </>
+                )}
             </p>
           </div>
         )}

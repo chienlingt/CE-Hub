@@ -125,17 +125,29 @@ export function filterByTab(jobs, tab) {
 /**
  * Text search across order id, product name, customer name, and address.
  */
+export function jobMatchesSearch(job, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+
+  const fields = [
+    job.id,
+    job.id?.slice(0, 8),
+    job.product,
+    ...(Array.isArray(job.products) ? job.products : []),
+    job.customer_name,
+    job.address,
+    job.odoo_order_ref,
+    job.appointment_window,
+    job.status,
+  ];
+
+  return fields.some(value => value && String(value).toLowerCase().includes(q));
+}
+
 export function filterBySearch(jobs, query) {
-  if (!query) return jobs;
-  const q = query.toLowerCase();
-  return jobs.filter(job =>
-    job.id?.toLowerCase().includes(q) ||
-    job.product?.toLowerCase().includes(q) ||
-    job.customer_name?.toLowerCase().includes(q) ||
-    job.address?.toLowerCase().includes(q) ||
-    job.odoo_order_ref?.toLowerCase().includes(q) ||
-    job.appointment_window?.toLowerCase().includes(q)
-  );
+  const q = query.trim();
+  if (!q) return jobs;
+  return jobs.filter(job => jobMatchesSearch(job, q));
 }
 
 /**
@@ -229,20 +241,18 @@ export function filterGroupsByTab(groups, tab) {
 
 /**
  * Filter slot groups by text search.
- * A group is kept if at least one job matches the query.
+ * Keeps only matching jobs inside each group; drops empty groups.
  */
 export function filterGroupsBySearch(groups, query) {
-  if (!query) return groups;
-  const q = query.toLowerCase();
-  return groups.filter(g =>
-    g.jobs.some(job =>
-      job.id?.toLowerCase().includes(q) ||
-      job.product?.toLowerCase().includes(q) ||
-      job.customer_name?.toLowerCase().includes(q) ||
-      job.address?.toLowerCase().includes(q) ||
-      job.odoo_order_ref?.toLowerCase().includes(q)
-    )
-  );
+  const q = query.trim();
+  if (!q) return groups;
+
+  return groups
+    .map(g => ({
+      ...g,
+      jobs: g.jobs.filter(job => jobMatchesSearch(job, q)),
+    }))
+    .filter(g => g.jobs.length > 0);
 }
 
 /**

@@ -164,7 +164,7 @@ export default function CompletedDeliveries() {
             <table className="w-full text-sm min-w-[1100px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-4 py-3 text-left min-w-[19rem] w-[19rem]">Order ID</th>
+                  <th className="px-4 py-3 text-left min-w-[10rem]">Order ID</th>
                   <th className="px-4 py-3 text-left min-w-[9rem]">Customer</th>
                   <th className="px-4 py-3 text-left min-w-[10rem]">Driver</th>
                   <th className="px-4 py-3 text-left min-w-[9rem] whitespace-nowrap">Completed At</th>
