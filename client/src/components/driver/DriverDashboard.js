@@ -6,19 +6,22 @@ import { Search, RefreshCw, CalendarDays, Truck, CheckCircle2, LayoutList, Alert
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
 import {
-  applyDriverFilters,
   computeStats,
-  buildAppointmentWindowOptions,
   enrichJobsWithAppointmentWindow,
+  groupJobsBySlot,
+  filterGroupsByWindow,
+  filterGroupsByTab,
+  filterGroupsBySearch,
+  buildWindowOptionsFromGroups,
 } from '../../utils/driverOrderFilters';
+import { slotDateKey } from '../../utils/driverOrderFilters';
 import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 import { DRIVER_TABS } from '../../utils/driverStatusMap';
-import OrderTaskCard from './OrderTaskCard';
 import UpdateOrderModal from './UpdateOrderModal';
 import DeliveryEvidenceModal from './DeliveryEvidenceModal';
 import ContactReportModal from './ContactReportModal';
 import DateCalendarModal from './DateCalendarModal';
-import SlotDepartBanner from './SlotDepartBanner';
+import SlotOrderGroup from './SlotOrderGroup';
 
 /** Build a 7-day strip centred around today (or selectedDate if given). */
 function buildDateStrip(selectedDate) {
@@ -80,18 +83,25 @@ export default function DriverDashboard() {
     [dateJobsRaw]
   );
 
+  const slotGroups = useMemo(
+    () => groupJobsBySlot(dateJobs, slots.filter(s => slotDateKey(s.date) === date)),
+    [dateJobs, slots, date]
+  );
+
+  const filteredGroups = useMemo(() => {
+    let g = filterGroupsByWindow(slotGroups, windowFilter);
+    g = filterGroupsByTab(g, tab);
+    g = filterGroupsBySearch(g, search);
+    return g;
+  }, [slotGroups, windowFilter, tab, search]);
+
   const windowOptions = useMemo(
-    () => buildAppointmentWindowOptions(dateJobsRaw),
-    [dateJobsRaw]
+    () => buildWindowOptionsFromGroups(slotGroups),
+    [slotGroups]
   );
 
-  const stats    = useMemo(() => computeStats(dateJobs), [dateJobs]);
-  const strip    = useMemo(() => buildDateStrip(date), [date]);
-
-  const displayed = useMemo(
-    () => applyDriverFilters(dateJobs, { date, tab, window: windowFilter, search }),
-    [dateJobs, date, tab, windowFilter, search]
-  );
+  const stats = useMemo(() => computeStats(dateJobs), [dateJobs]);
+  const strip = useMemo(() => buildDateStrip(date), [date]);
 
   function handleJobUpdated() {
     setUpdateTarget(null);
@@ -213,16 +223,7 @@ export default function DriverDashboard() {
         </div>
       </div>
 
-      {/* ── Leave Warehouse Banner (All runs only) ─────────────────── */}
-      <SlotDepartBanner
-        slots={slots}
-        employeeId={employeeId}
-        selectedDate={date}
-        windowFilter={windowFilter}
-        onDeparted={refresh}
-      />
-
-      {/* ── Job List ───────────────────────────────────────────────── */}
+      {/* ── Slot Groups ────────────────────────────────────────────── */}
       <div className="px-4 space-y-3">
         {loading && (
           <div className="flex justify-center py-12">
@@ -236,7 +237,7 @@ export default function DriverDashboard() {
           </div>
         )}
 
-        {!loading && !error && displayed.length === 0 && (
+        {!loading && !error && filteredGroups.length === 0 && (
           <div className="flex flex-col items-center py-16 text-gray-400">
             <LayoutList className="w-10 h-10 mb-3" />
             <p className="font-medium">No orders found</p>
@@ -250,13 +251,16 @@ export default function DriverDashboard() {
           </div>
         )}
 
-        {displayed.map(job => (
-          <OrderTaskCard
-            key={job.id}
-            job={job}
+        {filteredGroups.map((group, idx) => (
+          <SlotOrderGroup
+            key={group.slot?.id ?? `unassigned-${idx}`}
+            slot={group.slot}
+            jobs={group.jobs}
+            employeeId={employeeId}
             onUpdate={j => setUpdateTarget(j)}
             onViewEvidence={j => setEvidenceTarget(j)}
             onReport={j => setReportTarget(j)}
+            onDeparted={refresh}
           />
         ))}
       </div>

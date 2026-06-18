@@ -88,7 +88,7 @@ export default function CompletedDeliveries() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="p-4 max-w-6xl mx-auto space-y-4">
+    <div className="p-4 max-w-7xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -161,13 +161,13 @@ export default function CompletedDeliveries() {
         <>
           <p className="text-sm text-gray-500">{records.length} record{records.length !== 1 ? 's' : ''}</p>
           <div className="hidden md:block overflow-x-auto rounded-xl border border-gray-200">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[1100px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-4 py-3 text-left">Order ID</th>
-                  <th className="px-4 py-3 text-left">Customer</th>
-                  <th className="px-4 py-3 text-left">Driver</th>
-                  <th className="px-4 py-3 text-left">Completed At</th>
+                  <th className="px-4 py-3 text-left min-w-[19rem] w-[19rem]">Order ID</th>
+                  <th className="px-4 py-3 text-left min-w-[9rem]">Customer</th>
+                  <th className="px-4 py-3 text-left min-w-[10rem]">Driver</th>
+                  <th className="px-4 py-3 text-left min-w-[9rem] whitespace-nowrap">Completed At</th>
                   <th className="px-4 py-3 text-left">Status</th>
                   <th className="px-4 py-3 text-left">POD</th>
                   <th className="px-4 py-3 text-left">Odoo Sync</th>
@@ -187,12 +187,21 @@ export default function CompletedDeliveries() {
                       className="hover:bg-gray-50 cursor-pointer"
                       onClick={() => setExpanded(expanded === r.id ? null : r.id)}
                     >
-                      <td className="px-4 py-3 font-mono text-xs text-blue-700">{r.id.slice(0, 8).toUpperCase()}</td>
+                      <td className="px-4 py-3">
+                        <span className="font-mono text-xs text-blue-700 whitespace-nowrap" title={r.id}>
+                          {r.id}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-gray-800">{r.customer_name || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className="flex items-center gap-1 text-gray-600">
-                          <User className="w-3 h-3" /> {r.driver_name || '—'}
-                        </span>
+                        <div>
+                          <span className="flex items-center gap-1 text-gray-800">
+                            <User className="w-3 h-3" /> {r.driver_name || '—'}
+                          </span>
+                          {r.delivery_team_type && (
+                            <p className="text-xs text-gray-400 mt-0.5 pl-4">{r.delivery_team_type}</p>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{fmt(r.completed_at)}</td>
                       <td className="px-4 py-3">
@@ -231,8 +240,8 @@ export default function CompletedDeliveries() {
                 onClick={() => setExpanded(expanded === r.id ? null : r.id)}
               >
                 <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs font-mono text-blue-700">#{r.id.slice(0, 8).toUpperCase()}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-mono text-blue-700 truncate" title={r.id}>{r.id}</p>
                     <p className="font-semibold text-gray-800">{r.customer_name || '—'}</p>
                   </div>
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -240,7 +249,12 @@ export default function CompletedDeliveries() {
                   }`}>{r.order_status}</span>
                 </div>
                 <div className="text-sm text-gray-500 space-y-1">
-                  <p><span className="font-medium">Driver:</span> {r.driver_name || '—'}</p>
+                  <div>
+                    <p><span className="font-medium">Driver:</span> {r.driver_name || '—'}</p>
+                    {r.delivery_team_type && (
+                      <p className="text-xs text-gray-400 mt-0.5">{r.delivery_team_type}</p>
+                    )}
+                  </div>
                   <p><span className="font-medium">Completed:</span> {fmt(r.completed_at)}</p>
                 </div>
                 <div className="flex items-center justify-between flex-wrap gap-2">
