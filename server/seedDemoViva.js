@@ -36,7 +36,7 @@ const CUSTOMER_PHONE    = '01172293772';
 const TRUCK_PLATE         = 'HS0823';
 const TRUCK_TONE          = 1;
 const DELIVERY_TEAM_TYPE  = 'HS Delivery Team';
-const WAREHOUSE_TEAM_TYPE = 'HS Warehouse/Storekeeper Team';
+const WAREHOUSE_TEAM_TYPE = 'HS Warehouse/ Storekeeper Team';
 
 async function cleanup() {
   const orders = await prisma.orders.findMany({
