@@ -7,7 +7,7 @@ import TripOrderTable from './TripOrderTable';
 /**
  * Responsive trip detail drawer.
  * - Mobile (< md): full-screen overlay
- * - Desktop (md+): right side-panel (w-[480px])
+ * - Desktop (md+): right side-panel (w-[720px])
  *
  * @param {{ trip: object|null, loading: boolean, error: string|null, onClose: () => void, refresh: () => void }}
  */
@@ -24,7 +24,7 @@ export default function TripDetailDrawer({ trip, loading, error, onClose, refres
       />
 
       {/* Panel */}
-      <div className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:right-0 md:top-0 md:bottom-0 md:w-[480px] md:shadow-2xl md:border-l md:border-gray-200">
+      <div className="fixed inset-0 z-40 flex flex-col bg-white md:inset-auto md:right-0 md:top-0 md:bottom-0 md:w-[720px] md:shadow-2xl md:border-l md:border-gray-200">
         {/* Header bar */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white flex-shrink-0">
           <h2 className="text-base font-semibold text-gray-900">Trip Detail</h2>
@@ -69,7 +69,7 @@ export default function TripDetailDrawer({ trip, loading, error, onClose, refres
                 <h3 className="text-sm font-semibold text-gray-700 mb-3">
                   Orders ({trip.orders?.items?.length ?? 0})
                 </h3>
-                <TripOrderTable items={trip.orders?.items || []} />
+                <TripOrderTable items={trip.orders?.items || []} trip={trip} />
               </div>
             </>
           )}
