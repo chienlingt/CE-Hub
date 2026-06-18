@@ -119,7 +119,7 @@ router.get('/:id/status', async (req, res) => {
             order_status: true,
             delivery_address: true,
             odoo_order_ref: true,
-            customers: { select: { full_name: true } },
+            customers: { select: { full_name: true, phone: true } },
           },
           orderBy: { truck_loading_sequence: 'asc' },
         },
@@ -194,6 +194,7 @@ router.get('/:id/status', async (req, res) => {
           delivery_address: o.delivery_address,
           odoo_order_ref:   o.odoo_order_ref || null,
           customer_name:    o.customers?.full_name || null,
+          customer_phone:   o.customers?.phone || null,
         })),
       },
     });
