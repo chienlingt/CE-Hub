@@ -388,7 +388,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                       <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
                       {/* SO inline on mobile */}
                       <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">
-                        {row._order?.odoo_order_ref || row._order?.id?.slice(0,8).toUpperCase()}
+                        {row._order?.id}
                       </p>
                       {/* Serial inline on mobile */}
                       {(() => {
@@ -407,7 +407,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                     {/* SO Number */}
                     <td className="px-4 py-3 hidden sm:table-cell">
                       <span className="font-mono text-xs font-bold text-gray-700">
-                        {row._order?.odoo_order_ref || row._order?.id?.slice(0,8).toUpperCase()}
+                        {row._order?.id}
                       </span>
                       {row._order?.customers?.full_name && (
                         <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
@@ -570,7 +570,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
       {/* Mobile sort strip */}
       <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 md:hidden flex-wrap">
         <span className="text-xs text-gray-400 font-medium">Sort:</span>
-        {[{ id: 'so', label: 'SO' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
+        {[{ id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
           const active = sort.field === f.id;
           const Icon   = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
           return (
@@ -589,7 +589,6 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
               <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
-              <SortTh field="so"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">SO Number</SortTh>
               <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Picked</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Loaded</th>
@@ -601,10 +600,10 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
               <React.Fragment key={orderId}>
                 {/* Per-order group header with Reset button for admin */}
                 <tr className="bg-gray-50 border-t-2 border-gray-200">
-                  <td colSpan={7} className="px-4 py-2">
+                  <td colSpan={6} className="px-4 py-2">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-xs font-bold text-gray-600">
-                        {order?.odoo_order_ref || orderId.slice(0, 8).toUpperCase()}
+                        {orderId}
                         {order?.customers?.full_name && (
                           <span className="font-normal text-gray-400 ml-2">{order.customers.full_name}</span>
                         )}
@@ -618,19 +617,6 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
                     <td className="px-4 py-3">
                       <p className="font-semibold text-gray-900">{row.products?.product_name || `Item #${row.id}`}</p>
                       <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
-                      <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">
-                        {row._order?.odoo_order_ref || row._order?.id?.slice(0, 8).toUpperCase()}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3 hidden sm:table-cell">
-                      <span className="font-mono text-xs font-bold text-gray-700">
-                        {row._order?.odoo_order_ref || row._order?.id?.slice(0, 8).toUpperCase()}
-                      </span>
-                      {row._order?.customers?.full_name && (
-                        <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
-                          <User size={9} />{row._order.customers.full_name}
-                        </p>
-                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">

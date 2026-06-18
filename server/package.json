@@ -9,7 +9,8 @@
     "seed:driver": "node seedDriverTestData.js",
     "seed:driver:delete": "node deleteDriverTestData.js",
     "seed:picking": "node seedPickingDemo.js",
-    "seed:viva": "node seedDemoViva.js"
+    "seed:viva": "node seedDemoViva.js",
+    "seed:a6": "node seedA6FailureDemo.js"
   },
   "keywords": [],
   "author": "",
