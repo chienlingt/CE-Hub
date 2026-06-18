@@ -53,7 +53,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-xs text-gray-400 font-mono truncate">#{shortId}</p>
+          <p className="text-xs text-gray-400 font-mono truncate">Order ID: #{shortId}</p>
           {/* TODO: Add a link to the Odoo order */}
           <p className="text-xs text-gray-400 font-mono truncate">Odoo Order ref: {job.odoo_order_ref}</p>
           {job.appointment_window && (

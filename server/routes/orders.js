@@ -302,10 +302,27 @@ router.get('/completed-deliveries', async (req, res) => {
       include: {
         customers:  { select: { full_name: true, phone: true } },
         employees:  { select: { name: true, display_name: true } },
-        time_slots: { select: { id: true, date: true } },
+        time_slots: {
+          select: {
+            id: true,
+            date: true,
+            delivery_team: { select: { team_type: true } },
+          },
+        },
       },
       orderBy: { delivery_end_date_time: 'desc' },
     });
+
+    const deliveredByIds = [...new Set(orders.map(o => o.delivered_by).filter(Boolean))];
+    const deliveredByEmployees = deliveredByIds.length
+      ? await prisma.employees.findMany({
+          where: { id: { in: deliveredByIds } },
+          select: { id: true, name: true, display_name: true },
+        })
+      : [];
+    const deliveredByMap = new Map(
+      deliveredByEmployees.map(e => [e.id, e.display_name || e.name || null])
+    );
 
     // Attach latest outbox sync status per order
     const orderIds = orders.map(o => o.id);
@@ -331,7 +348,10 @@ router.get('/completed-deliveries', async (req, res) => {
       id:                     o.id,
       order_status:           o.order_status,
       customer_name:          o.customers?.full_name || '',
-      driver_name:            o.employees?.name || o.employees?.display_name || o.delivered_by || '',
+      driver_name:            deliveredByMap.get(o.delivered_by)
+        || o.employees?.display_name || o.employees?.name
+        || null,
+      delivery_team_type:     o.time_slots?.delivery_team?.team_type || null,
       completed_at:           o.delivery_end_date_time,
       delivery_evidence:      o.delivery_evidence || [],
       proof_of_delivery_url:  o.proof_of_delivery_url || null,

@@ -150,6 +150,128 @@ export function applyDriverFilters(jobs, { date, tab = 'all', window = 'all', se
   return sortByAppointment(result);
 }
 
+// ─── Slot-group helpers ───────────────────────────────────────────────────────
+
+/**
+ * Group a flat job list by time_slot_id.
+ * Returns [{ slot, jobs }] sorted by time_window_start ascending.
+ * Jobs with no time_slot_id are collected into a trailing { slot: null, jobs } group.
+ *
+ * @param {Array} jobs      - enriched job objects (must have time_slot_id)
+ * @param {Array} slots     - slot summary objects from useDriverJobs (for the selected date)
+ */
+export function groupJobsBySlot(jobs, slots) {
+  const slotMap = new Map((slots || []).map(s => [s.id, s]));
+
+  const groupMap = new Map();
+
+  for (const job of jobs) {
+    const key = job.time_slot_id || '__unassigned__';
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        slot: key === '__unassigned__' ? null : (slotMap.get(job.time_slot_id) || { id: job.time_slot_id }),
+        jobs: [],
+      });
+    }
+    groupMap.get(key).jobs.push(job);
+  }
+
+  return [...groupMap.values()].sort((a, b) => {
+    if (!a.slot) return 1;
+    if (!b.slot) return -1;
+    const ta = a.slot.time_window_start || '';
+    const tb = b.slot.time_window_start || '';
+    return ta.localeCompare(tb);
+  });
+}
+
+/**
+ * Map a slot's time_window_start to an appointment bucket id.
+ * @param {object|null} slot
+ * @returns {'09-12'|'13-17'|'19-21'|'other'}
+ */
+export function getSlotBucket(slot) {
+  if (!slot?.time_window_start) return 'other';
+  const mins = parseClockToMinutes(slot.time_window_start);
+  for (const w of DRIVER_APPOINTMENT_WINDOWS) {
+    const start = parseClockToMinutes(w.start);
+    const end   = parseClockToMinutes(w.end);
+    if (mins >= start && mins <= end) return w.id;
+  }
+  return 'other';
+}
+
+/**
+ * Filter slot groups by appointment-window chip.
+ * Unassigned group (slot === null) matches 'other'.
+ */
+export function filterGroupsByWindow(groups, windowFilter) {
+  if (!windowFilter || windowFilter === 'all') return groups;
+  return groups.filter(g => {
+    if (!g.slot) return windowFilter === 'other';
+    return getSlotBucket(g.slot) === windowFilter;
+  });
+}
+
+/**
+ * Filter slot groups by driver tab.
+ * A group is kept if at least one of its jobs maps to the active tab.
+ */
+export function filterGroupsByTab(groups, tab) {
+  if (!tab || tab === 'all') return groups;
+  return groups.filter(g =>
+    g.jobs.some(job => {
+      const t = driverTab(job.status);
+      return t && t === tab;
+    })
+  );
+}
+
+/**
+ * Filter slot groups by text search.
+ * A group is kept if at least one job matches the query.
+ */
+export function filterGroupsBySearch(groups, query) {
+  if (!query) return groups;
+  const q = query.toLowerCase();
+  return groups.filter(g =>
+    g.jobs.some(job =>
+      job.id?.toLowerCase().includes(q) ||
+      job.product?.toLowerCase().includes(q) ||
+      job.customer_name?.toLowerCase().includes(q) ||
+      job.address?.toLowerCase().includes(q) ||
+      job.odoo_order_ref?.toLowerCase().includes(q)
+    )
+  );
+}
+
+/**
+ * Build appointment-window filter chip options from slot groups.
+ * Counts reflect total jobs in matching groups.
+ */
+export function buildWindowOptionsFromGroups(groups) {
+  const total = groups.reduce((sum, g) => sum + g.jobs.length, 0);
+  const options = [{ value: 'all', label: 'All runs', count: total }];
+
+  for (const w of DRIVER_APPOINTMENT_WINDOWS) {
+    const count = groups
+      .filter(g => g.slot && getSlotBucket(g.slot) === w.id)
+      .reduce((sum, g) => sum + g.jobs.length, 0);
+    options.push({ value: w.id, label: w.label, count });
+  }
+
+  const otherCount = groups
+    .filter(g => !g.slot || getSlotBucket(g.slot) === 'other')
+    .reduce((sum, g) => sum + g.jobs.length, 0);
+  if (otherCount > 0) {
+    options.push({ value: 'other', label: 'Other', count: otherCount });
+  }
+
+  return options;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Count stats for the stat cards — based on a date's jobs.
  */
