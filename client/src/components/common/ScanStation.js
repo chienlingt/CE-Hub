@@ -817,7 +817,7 @@ export default function ScanStation({ forcedStage }) {
     return orders.filter(o => !date || orderDate(o) === date);
   }, [orders, date]);
 
-  const { itemMap, loadingItems, updateItem } = useAllOrderItems(filteredOrders);
+  const { itemMap, loadingItems, refetchItems, updateItem } = useAllOrderItems(filteredOrders);
 
   const rows = useMemo(() => {
     const allRows = filteredOrders.flatMap(order => {
@@ -874,7 +874,7 @@ export default function ScanStation({ forcedStage }) {
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
-            <button onClick={fetchOrders}
+            <button onClick={() => { fetchOrders(); refetchItems(); }}
               className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 transition-colors" title="Refresh">
               <RefreshCw className="w-4 h-4 text-white" />
             </button>

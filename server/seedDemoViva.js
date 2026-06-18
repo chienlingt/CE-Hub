@@ -1,18 +1,21 @@
-// server/seedA5Demo.js
+// server/seedDemoViva.js
 //
-// Seeds one demo order for the Pick → Load → Unload → Delivery-Failure demo
-// (UC-04, UC-05, UC-14, UC-15 / FR-06-001..004).
+// Seeds demo orders across 3 time slots on 20 June 2026 for the FYP viva demo.
+// All 3 slots share one truck + delivery team + warehouse team.
 //
-// Order: DEMO-A5-001, scheduled 16 June 2026, 08:00-12:00
-//   Item 1 — NOVA L-Shape Sofa 3+2 Seater   assigned_serial = 'SN-LSOFA-001'
-//            (storekeeper MUST scan this exact serial to pick)
-//   Item 2 — LG GT-B372SLCN 372L Fridge     assigned_serial = (none)
-//            (any scanned serial is accepted)
+//   09:00–12:00  → DEMO-001  Sofa (assigned_serial enforced) + Fridge (no serial)
+//                  DEMO-002  Fridge only (single-item order)
+//   13:00–17:00  → DEMO-003  Sofa only (single-item order)
+//   19:00–21:00  → DEMO-004  Fridge only (single-item order)
 //
-// Safe to re-run — removes prior DEMO-A5-* orders first.
+// Truck      : HS0823 (1 tonne)
+// Delivery   : HS Delivery Team
+// Warehouse  : HS Warehouse/Storekeeper Team
 //
-// Usage:  node seedA5Demo.js
-//         npm run seed:a5
+// Safe to re-run — removes prior DEMO-* orders first.
+//
+// Usage:  node seedDemoViva.js
+//         npm run seed:viva
 
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
@@ -29,6 +32,11 @@ const ADMIN_EMAIL     = 'testerAdmin@gmail.com';
 const SALESPERSON_NAME  = 'Salesperson Tan';
 const SALESPERSON_PHONE = '01172293772';
 const CUSTOMER_PHONE    = '01172293772';
+
+const TRUCK_PLATE         = 'HS0823';
+const TRUCK_TONE          = 1;
+const DELIVERY_TEAM_TYPE  = 'HS Delivery Team';
+const WAREHOUSE_TEAM_TYPE = 'HS Warehouse/Storekeeper Team';
 
 async function cleanup() {
   const orders = await prisma.orders.findMany({
@@ -53,8 +61,46 @@ async function cleanup() {
   console.log(`[seed] Cleaned ${ids.length} prior ${DEMO_PREFIX} order(s)`);
 }
 
+// ── Truck / Team helpers (shared, not deleted on re-run) ───────────────────
+
+async function upsertTruck({ plateNo, tone }) {
+  let truck = await prisma.trucks.findFirst({ where: { plate_no: plateNo } });
+  if (!truck) {
+    truck = await prisma.trucks.create({ data: { plate_no: plateNo, tone, created_at: new Date() } });
+  } else if (truck.tone !== tone) {
+    truck = await prisma.trucks.update({ where: { id: truck.id }, data: { tone } });
+  }
+  return truck;
+}
+
+async function upsertTeam(teamType) {
+  let team = await prisma.teams.findFirst({ where: { team_type: teamType } });
+  if (!team) {
+    team = await prisma.teams.create({ data: { team_type: teamType, available_flag: true } });
+  }
+  return team;
+}
+
+async function createSlot({ timeStart, timeEnd, deliveryTeamId, warehouseTeamId, truckId }) {
+  const slot = await prisma.time_slots.create({
+    data: {
+      date:               SLOT_DATE,
+      time_window_start:  timeStart,
+      time_window_end:    timeEnd,
+      delivery_team_id:   deliveryTeamId,
+      warehouse_team_id:  warehouseTeamId,
+      truck_id:           truckId,
+      slot_status:        'scheduled',
+      available_flag:     true,
+      created_at:         new Date(),
+    },
+  });
+  console.log(`[seed] Slot created: ${SLOT_DATE} ${timeStart}–${timeEnd} (id: ${slot.id})`);
+  return slot;
+}
+
 async function main() {
-  console.log('\n=== A5 Demo Seed (Pick → Load → Unload → Delivery Failure) ===\n');
+  console.log('\n=== Viva Demo Seed (3 time slots, 4 orders) ===\n');
 
   await cleanup();
 
@@ -85,9 +131,11 @@ async function main() {
     });
   }
 
-  // Pick any available delivery team
-  const team = await prisma.teams.findFirst({ where: { available_flag: true } });
-  if (!team) throw new Error('No delivery team found — run seedDriverTestData.js first');
+  // ── Truck + teams (shared across all 3 slots) ──────────────────────────────
+  const truck        = await upsertTruck({ plateNo: TRUCK_PLATE, tone: TRUCK_TONE });
+  const deliveryTeam  = await upsertTeam(DELIVERY_TEAM_TYPE);
+  const warehouseTeam = await upsertTeam(WAREHOUSE_TEAM_TYPE);
+  console.log(`[seed] Truck: ${truck.plate_no} (${truck.tone}T) | Delivery: ${DELIVERY_TEAM_TYPE} | Warehouse: ${WAREHOUSE_TEAM_TYPE}`);
 
   // ── Products ──────────────────────────────────────────────────────────────
   const sofa = await prisma.products.findFirst({ where: { product_name: 'NOVA L-Shape Sofa 3+2 Seater' } })
@@ -124,91 +172,102 @@ async function main() {
       state:     'Selangor',
     }});
 
-  // ── Time slot: 16 June 2026, 08:00–12:00 ──────────────────────────────────
-  const slot = await prisma.time_slots.create({
-    data: {
-      date:               SLOT_DATE,
-      time_window_start:  '08:00',
-      time_window_end:    '12:00',
-      delivery_team_id:   team.id,
-      slot_status:        'scheduled',
-      available_flag:     true,
-      created_at:         new Date(),
-    },
-  });
-  console.log(`[seed] Slot created: ${SLOT_DATE} 08:00–12:00 (id: ${slot.id})`);
+  // ── Time slots: 09:00–12:00, 13:00–17:00, 19:00–21:00 — all on SLOT_DATE ───
+  const slot9to12  = await createSlot({ timeStart: '09:00', timeEnd: '12:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
+  const slot13to17 = await createSlot({ timeStart: '13:00', timeEnd: '17:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
+  const slot19to21 = await createSlot({ timeStart: '19:00', timeEnd: '21:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
 
-  // ── Order ─────────────────────────────────────────────────────────────────
-  const order = await prisma.orders.create({
-    data: {
-      odoo_order_ref:            `${DEMO_PREFIX}-001`,
-      order_status:              'Scheduled',
-      employee_id:               driver.id,
-      customer_id:               customer.id,
-      time_slot_id:              slot.id,
-      scheduled_start_date_time: new Date(`${SLOT_DATE}T08:00:00+08:00`),
-      scheduled_end_date_time:   new Date(`${SLOT_DATE}T12:00:00+08:00`),
-      delivery_address:          customer.address,
-      delivery_city:             customer.city,
-      delivery_postcode:         customer.postcode,
-      delivery_state:            customer.state,
-      delivery_notes:            '[DEMO] Sofa (serial enforced) + Fridge (any scan) — pick → load → unload → report failure',
-      assignment_status:         'approved',
-      salesperson_name:          SALESPERSON_NAME,
-      salesperson_phone:         SALESPERSON_PHONE,
-      created_at:                new Date(),
-      updated_at:                new Date(),
-    },
-  });
-  console.log(`[seed] Order created: ${order.odoo_order_ref} (id: ${order.id})`);
+  // ── Order helper ─────────────────────────────────────────────────────────
+  async function createOrder({ ref, slot, startTime, endTime, notes }) {
+    const order = await prisma.orders.create({
+      data: {
+        odoo_order_ref:            ref,
+        order_status:              'Scheduled',
+        employee_id:               driver.id,
+        customer_id:               customer.id,
+        time_slot_id:              slot.id,
+        scheduled_start_date_time: new Date(`${SLOT_DATE}T${startTime}:00+08:00`),
+        scheduled_end_date_time:   new Date(`${SLOT_DATE}T${endTime}:00+08:00`),
+        delivery_address:          customer.address,
+        delivery_city:             customer.city,
+        delivery_postcode:         customer.postcode,
+        delivery_state:            customer.state,
+        delivery_notes:            notes,
+        assignment_status:         'approved',
+        salesperson_name:          SALESPERSON_NAME,
+        salesperson_phone:         SALESPERSON_PHONE,
+        created_at:                new Date(),
+        updated_at:                new Date(),
+      },
+    });
+    console.log(`[seed] Order created: ${order.odoo_order_ref} (id: ${order.id})`);
+    return order;
+  }
 
-  // ── Item 1: Sofa — assigned_serial enforced ───────────────────────────────
-  const item1 = await prisma.order_products.create({
-    data: {
-      order_id:        order.id,
-      product_id:      sofa.id,
-      quantity:        1,
-      picking_status:  'pending',
-      assigned_serial: 'SN-LSOFA-001',   // storekeeper MUST scan this exact serial
-      service_type:    'delivery_only',
-    },
-  });
+  async function addItem(orderId, product, assignedSerial) {
+    return prisma.order_products.create({
+      data: {
+        order_id:        orderId,
+        product_id:      product.id,
+        quantity:        1,
+        picking_status:  'pending',
+        assigned_serial: assignedSerial,
+        service_type:    'delivery_only',
+      },
+    });
+  }
 
-  // ── Item 2: Fridge — no assigned_serial (any scan accepted) ───────────────
-  const item2 = await prisma.order_products.create({
-    data: {
-      order_id:        order.id,
-      product_id:      fridge.id,
-      quantity:        1,
-      picking_status:  'pending',
-      assigned_serial: null,             // no restriction — accept whatever is scanned
-      service_type:    'delivery_only',
-    },
+  // ── 09:00–12:00 — DEMO-001: Sofa (serial enforced) + Fridge (no serial) ────
+  const order1 = await createOrder({
+    ref: `${DEMO_PREFIX}-001`, slot: slot9to12, startTime: '09:00', endTime: '12:00',
+    notes: '[DEMO] Sofa (serial enforced) + Fridge (any scan) — pick → load → unload → report failure',
   });
+  const item1 = await addItem(order1.id, sofa,   'SN-LSOFA-001');
+  const item2 = await addItem(order1.id, fridge, null);
+
+  // ── 09:00–12:00 — DEMO-002: single-item order (Fridge only) ────────────────
+  const order2 = await createOrder({
+    ref: `${DEMO_PREFIX}-002`, slot: slot9to12, startTime: '09:00', endTime: '12:00',
+    notes: '[DEMO] Single-item order — Fridge only',
+  });
+  const item3 = await addItem(order2.id, fridge, null);
+
+  // ── 13:00–17:00 — DEMO-003: single-item order (Sofa only) ───────────────────
+  const order3 = await createOrder({
+    ref: `${DEMO_PREFIX}-003`, slot: slot13to17, startTime: '13:00', endTime: '17:00',
+    notes: '[DEMO] Single-item order — Sofa only',
+  });
+  const item4 = await addItem(order3.id, sofa, null);
+
+  // ── 19:00–21:00 — DEMO-004: single-item order (Fridge only) ─────────────────
+  const order4 = await createOrder({
+    ref: `${DEMO_PREFIX}-004`, slot: slot19to21, startTime: '19:00', endTime: '21:00',
+    notes: '[DEMO] Single-item order — Fridge only',
+  });
+  const item5 = await addItem(order4.id, fridge, null);
 
   // ── Summary ───────────────────────────────────────────────────────────────
   console.log('\n--- Demo details ---');
-  console.log(`  Order ref   : ${order.odoo_order_ref}`);
-  console.log(`  Order id    : ${order.id}`);
-  console.log(`  Date / slot : ${SLOT_DATE}  08:00–12:00`);
+  console.log(`  Date        : ${SLOT_DATE}`);
+  console.log(`  Truck       : ${truck.plate_no} (${truck.tone}T)`);
+  console.log(`  Delivery    : ${DELIVERY_TEAM_TYPE}`);
+  console.log(`  Warehouse   : ${WAREHOUSE_TEAM_TYPE}`);
   console.log(`  Storekeeper : ${WAREHOUSE_EMAIL} / Driver@123  (Scan Station → Picking)`);
   console.log(`  Driver      : ${DRIVER_EMAIL} / Driver@123  (Scan Station → Loading/Unloading, Leave Warehouse)`);
   console.log(`  Admin       : ${ADMIN_EMAIL} / Admin@123  (Cases → Order Issues)`);
   console.log(`  Customer    : ${customer.full_name} / ${customer.phone}`);
   console.log(`  Salesperson : ${SALESPERSON_NAME} / ${SALESPERSON_PHONE}`);
   console.log('');
-  console.log(`  Item 1  ${sofa.product_name}`);
-  console.log(`          order_products.id = ${item1.id}`);
-  console.log('          assigned_serial = SN-LSOFA-001');
-  console.log('          → Storekeeper must scan exactly "SN-LSOFA-001" to pick');
-  console.log('');
-  console.log(`  Item 2  ${fridge.product_name}`);
-  console.log(`          order_products.id = ${item2.id}`);
-  console.log('          assigned_serial = (none)');
-  console.log('          → Any QR/barcode scan is accepted');
+  console.log('  09:00–12:00');
+  console.log(`    ${order1.odoo_order_ref}  Sofa (assigned_serial = SN-LSOFA-001, must scan exactly) + Fridge (any scan)`);
+  console.log(`    ${order2.odoo_order_ref}  Fridge only (any scan)`);
+  console.log('  13:00–17:00');
+  console.log(`    ${order3.odoo_order_ref}  Sofa only (any scan)`);
+  console.log('  19:00–21:00');
+  console.log(`    ${order4.odoo_order_ref}  Fridge only (any scan)`);
 
   console.log('\n--- Browser console: trigger delivery failure (FR-06-001..004) ---');
-  console.log(`fetch('http://localhost:4000/api/orders/${order.id}/issue', {`);
+  console.log(`fetch('http://localhost:4000/api/orders/${order1.id}/issue', {`);
   console.log(`  method: 'PATCH',`);
   console.log(`  headers: { 'Content-Type': 'application/json' },`);
   console.log(`  body: JSON.stringify({`);
