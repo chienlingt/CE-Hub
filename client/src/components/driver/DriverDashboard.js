@@ -22,6 +22,7 @@ import DeliveryEvidenceModal from './DeliveryEvidenceModal';
 import ContactReportModal from './ContactReportModal';
 import DateCalendarModal from './DateCalendarModal';
 import SlotOrderGroup from './SlotOrderGroup';
+import FailDeliveryModal from './FailDeliveryModal';
 
 /** Build a 7-day strip centred around today (or selectedDate if given). */
 function buildDateStrip(selectedDate) {
@@ -59,6 +60,7 @@ export default function DriverDashboard() {
   const [updateTarget, setUpdateTarget] = useState(null);
   const [evidenceTarget, setEvidenceTarget] = useState(null);
   const [reportTarget, setReportTarget] = useState(null);
+  const [failTarget, setFailTarget] = useState(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
 
   const { jobs, slots, loading, error, refresh } = useDriverJobs(employeeId);
@@ -270,6 +272,7 @@ export default function DriverDashboard() {
             onUpdate={j => setUpdateTarget(j)}
             onViewEvidence={j => setEvidenceTarget(j)}
             onReport={j => setReportTarget(j)}
+            onFail={j => setFailTarget(j)}
             onDeparted={refresh}
           />
         ))}
@@ -299,6 +302,15 @@ export default function DriverDashboard() {
           employeeId={employeeId}
           onClose={() => setReportTarget(null)}
           onSuccess={handleJobReported}
+        />
+      )}
+
+      {failTarget && (
+        <FailDeliveryModal
+          order={failTarget}
+          employeeId={employeeId}
+          onClose={() => setFailTarget(null)}
+          onSuccess={() => { setFailTarget(null); refresh(); }}
         />
       )}
 

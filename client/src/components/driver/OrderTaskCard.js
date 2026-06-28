@@ -1,6 +1,6 @@
 // client/src/components/driver/OrderTaskCard.js
-import { Phone, MessageCircle, RefreshCw, Flag, MapPin, User, Clock, Image, Package } from 'lucide-react';
-import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus } from '../../utils/driverStatusMap';
+import { Phone, MessageCircle, RefreshCw, Flag, MapPin, User, Clock, Image, Package, XCircle } from 'lucide-react';
+import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus, DELIVERING_STATUSES } from '../../utils/driverStatusMap';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
 import { onTheWayTemplate } from '../../utils/templateMessages';
 
@@ -10,16 +10,20 @@ import { onTheWayTemplate } from '../../utils/templateMessages';
  *   onUpdate: (job: object) => void,
  *   onReport: (job: object) => void,
  *   onViewEvidence: (job: object) => void,
+ *   onFail: (job: object) => void,
  * }}
  */
-export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence }) {
+export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence, onFail }) {
   const badge        = statusBadge(job.status);
   const terminal     = isTerminal(job.status);
   const showEvidence = isCompletedEvidenceMode(job.status);
-  const isEscalation = job.issue_reason === 'Driver Escalation';
-  // Report is always enabled for escalations (driver can add follow-ups).
-  // For non-escalation cases, disable once complaint submitted.
-  const reportDisabled = job.is_complaint_submitted && !isEscalation;
+  const isScheduled  = isScheduledStatus(job.status);
+  // Report button is always enabled — first report or follow-up via ContactReportModal
+  const reportDisabled = false;
+  // Show "Mark as Failed" only when the driver is actively delivering this order
+  const canFail = DELIVERING_STATUSES.includes(job.status);
+  // Hide Update button on Scheduled/Loaded; Update only useful while Delivering/In Progress
+  const showUpdate = !isScheduled && !terminal && !showEvidence;
 
   // Option A: loading badge — only shown on Scheduled-tab orders
   const showLoadingBadge = isScheduledStatus(job.status) && job.loading_total > 0;
@@ -136,13 +140,24 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
         {/* Report — contact/escalation menu */}
         <button
           onClick={() => onReport(job)}
-          disabled={reportDisabled}
-          title={reportDisabled ? 'Already escalated to admin' : isEscalation ? 'Contact or add follow-up' : 'Contact or report'}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed"
+          title={job.is_complaint_submitted ? 'Contact or add follow-up' : 'Contact or report'}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg text-red-600 hover:bg-red-50"
         >
           <Flag className="w-3.5 h-3.5" />
-          {isEscalation ? 'Follow-up' : 'Report'}
+          {job.is_complaint_submitted ? 'Follow-up' : 'Report'}
         </button>
+
+        {/* Mark as Failed — only visible during active delivery */}
+        {canFail && (
+          <button
+            onClick={() => onFail(job)}
+            title="Mark as failed delivery"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-red-300 bg-red-50 rounded-lg text-red-700 hover:bg-red-100 transition-colors"
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            Failed
+          </button>
+        )}
 
         {showEvidence ? (
           <button
@@ -153,17 +168,16 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence 
             <Image className="w-3.5 h-3.5" />
             POD
           </button>
-        ) : (
+        ) : showUpdate ? (
           <button
             onClick={() => onUpdate(job)}
-            disabled={terminal}
-            title={terminal ? 'Order is complete' : 'Update status'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Update status"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             Update
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );

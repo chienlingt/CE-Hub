@@ -6,7 +6,7 @@ const { extractBuildingName, normalizeBuildingName } = require('../utils/address
 const { scheduleOrders, updateTimeslotResources } = require('../services/scheduler');
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
-const { sendDeliveryFailureNotifications } = require('../services/notificationService');
+
 const { markOrderDelivering, markOrderDelivered } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
 const upload = require('../middleware/upload');
@@ -1642,16 +1642,62 @@ router.post('/:id/approve', async (req, res) => {
   }
 });
 
-router.patch('/:id/issue', async (req, res) => {
+const { confirmFailure } = require('../services/deliveryFailureService');
+
+// PATCH /:id/issue — two paths:
+//   1. confirm_failure: true  → A5 driver failure confirmation (deliveryFailureService)
+//   2. no flag               → admin triage: update issue_status / item statuses (no A6)
+router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
+  const orderId = req.params.id;
+
+  // ── Path 1: A5 driver failure confirmation ─────────────────────────────────
+  const rawBody = req.body.confirm_failure;
+  const isConfirmFailure = rawBody === true || rawBody === 'true';
+
+  if (isConfirmFailure) {
+    try {
+      const {
+        issue_reason,
+        issue_desc,
+        order_products_status: rawItems,
+        employee_id,
+      } = req.body;
+
+      // order_products_status may arrive as a JSON string when sent as FormData
+      let order_products_status = rawItems;
+      if (typeof rawItems === 'string') {
+        try { order_products_status = JSON.parse(rawItems); } catch { order_products_status = []; }
+      }
+
+      const evidence_paths = (req.files || []).map(f => {
+        return `/uploads/orders/del/status/${orderId}/${f.filename}`;
+      });
+
+      const order = await confirmFailure(orderId, {
+        issue_reason,
+        issue_desc,
+        order_products_status: order_products_status || [],
+        employee_id: employee_id || undefined,
+        evidence_paths,
+      });
+
+      return res.json({ success: true, order });
+    } catch (err) {
+      const status = err.statusCode || 500;
+      console.error(`[A5] confirm_failure error (${err.code || 'ERR'}):`, err.message);
+      return res.status(status).json({ error: err.message, code: err.code });
+    }
+  }
+
+  // ── Path 2: admin triage update (no A6, no Odoo write) ────────────────────
   try {
     const {
       issue_status,
       issue_reason,
       issue_desc,
-      order_products_status, // optional array: [{ id, item_delivery_status }]
+      order_products_status,
     } = req.body;
 
-    // Update order issue fields
     const data = {};
     if (issue_status !== undefined) data.issue_status = issue_status;
     if (issue_reason !== undefined) data.issue_reason = issue_reason;
@@ -1659,11 +1705,10 @@ router.patch('/:id/issue', async (req, res) => {
     data.updated_at = new Date();
 
     const order = await prisma.orders.update({
-      where: { id: req.params.id },
+      where: { id: orderId },
       data,
     });
 
-    // Update individual item delivery statuses if provided
     if (Array.isArray(order_products_status) && order_products_status.length > 0) {
       const allowed = ['pending', 'delivered', 'failed'];
       for (const item of order_products_status) {
@@ -1672,24 +1717,6 @@ router.patch('/:id/issue', async (req, res) => {
           where: { id: parseInt(item.id) },
           data:  { item_delivery_status: item.item_delivery_status },
         });
-      }
-    }
-
-    // A6 — fire failure notifications when a failure reason is first set
-    const isNewFailure = issue_reason && issue_reason.trim().length > 0;
-    if (isNewFailure) {
-      sendDeliveryFailureNotifications(req.params.id).catch(err =>
-        console.error('[A6] sendDeliveryFailureNotifications error:', err.message)
-      );
-
-      if (order.odoo_order_ref && process.env.ODOO_URL) {
-        try {
-          const { writeOdooDeliveryStatus } = require('../services/odooService');
-          await writeOdooDeliveryStatus(order.odoo_order_ref, 'Failed');
-          console.log(`[A6] failed status written to Odoo for ${order.odoo_order_ref}`);
-        } catch (odooErr) {
-          console.warn('[Issue] Odoo write-back failed (non-fatal):', odooErr.message);
-        }
       }
     }
 

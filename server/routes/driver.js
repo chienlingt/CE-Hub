@@ -169,109 +169,6 @@ router.get('/jobs', async (req, res) => {
   }
 });
 
-// ─── PUT /api/driver/jobs/:orderId/status ────────────────────────────────────
-// Status updates from the driver dashboard: → Issue only.
-// Completion (→ Completed/Delivered) must go through POST /api/orders/:id/deliver with POD.
-// Moving to Delivering is now done via POST /api/time-slots/:id/depart (Option A — Leave warehouse).
-router.put('/jobs/:orderId/status', upload.array('files', 5), async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { employee_id, status, delivery_notes, issue_priority_level, issue_reason, issue_desc } = req.body;
-
-    // Option A: Delivering is no longer a valid manual status — use slot depart instead.
-    if (status === 'Delivering') {
-      return res.status(410).json({
-        error: 'Setting status to Delivering directly is no longer supported. Use POST /api/time-slots/:id/depart (Leave warehouse) instead.',
-        code:  'USE_SLOT_DEPART',
-      });
-    }
-
-    const ALLOWED = ['Issue'];
-    if (!status || !ALLOWED.includes(status)) {
-      return res.status(400).json({
-        error: `Invalid status. Allowed: ${ALLOWED.join(', ')}. To complete an order use POST /api/orders/:id/deliver`,
-      });
-    }
-
-    const order = await prisma.orders.findFirst({ where: { id: orderId } });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    const isIssueEdit = order.order_status === 'Issue' && status === 'Issue';
-
-    // Issue-specific validation
-    if (status === 'Issue') {
-      if (!issue_reason) {
-        return res.status(400).json({ error: 'issue_reason is required when reporting an issue' });
-      }
-      if (!issue_desc || issue_desc.trim().length < 1) {
-        return res.status(400).json({ error: 'issue_desc must be at least 1 characters' });
-      }
-      if (!isIssueEdit && (!req.files || req.files.length === 0)) {
-        return res.status(400).json({ error: 'At least one evidence photo is required' });
-      }
-    }
-
-    const now  = new Date();
-    const data = { order_status: status, updated_at: now };
-
-    if (status === 'Issue') {
-      if (issue_priority_level !== undefined) data.issue_priority_level = issue_priority_level;
-      if (issue_reason         !== undefined) data.issue_reason         = issue_reason;
-      if (issue_desc           !== undefined) data.issue_desc           = issue_desc;
-      // Marks this as a driver order report → visible in Cases → Delivery Issues
-      data.is_complaint_submitted = true;
-
-      if (req.files?.length) {
-        const subDir = resolveEvidenceSubDir(req);
-        const existing = order.issue_evidence || [];
-        data.issue_evidence = [
-          ...existing,
-          ...req.files.map(f => evidenceFilePath(orderId, subDir, f.filename)),
-        ];
-      }
-    } else if (req.files?.length) {
-      const subDir = resolveEvidenceSubDir(req);
-      const existing = order.delivery_evidence || [];
-      data.delivery_evidence = [
-        ...existing,
-        ...req.files.map(f => evidenceFilePath(orderId, subDir, f.filename)),
-      ];
-    }
-
-    if (delivery_notes !== undefined) data.delivery_notes = delivery_notes;
-
-    const updated = await prisma.orders.update({ where: { id: orderId }, data });
-
-    // Notify admins when driver first reports an issue (Cases → Delivery Issues)
-    if (status === 'Issue' && !isIssueEdit) {
-      const orderRef = order.odoo_order_ref || orderId.slice(0, 8).toUpperCase();
-      const notifMessage = `Driver reported delivery issue — Order #${orderRef} | Reason: ${issue_reason}`;
-      const admins = await prisma.employees.findMany({
-        where: { active_flag: true, role: { name: { equals: 'admin', mode: 'insensitive' } } },
-      });
-      await Promise.all(
-        admins.map(admin => createInAppNotification(admin.id, notifMessage, 'error', orderId))
-      );
-    }
-
-    // Customer notification
-    if (order.customer_id) {
-      await prisma.notifications.create({
-        data: {
-          user_id: order.customer_id,
-          message: `Order #${orderId.slice(0, 8).toUpperCase()} status updated to ${status}.`,
-          type:    status === 'Issue' ? 'error' : 'info',
-        },
-      }).catch(() => {});
-    }
-
-    res.json({ success: true, order: updated });
-  } catch (err) {
-    console.error('PUT /api/driver/jobs/:orderId/status error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 // ─── PUT /api/driver/jobs/:orderId/delivery-evidence ─────────────────────────
 // Append POD photos, update notes, or replace signature on completed orders.
 router.put('/jobs/:orderId/delivery-evidence', upload.array('photos', 10), async (req, res) => {
@@ -400,14 +297,15 @@ router.put('/jobs/:orderId/report', upload.array('files', 5), async (req, res) =
 });
 
 // ─── POST /api/driver/jobs/:orderId/admin-escalation ─────────────────────────
-// Escalation via Report → Notify Admin.  Mandatory message is stored as a
-// structured driver escalation in issue_reason/issue_desc so it surfaces in
-// Cases → Delivery Issues (Escalations section).
-// Follow-up calls append to issue_desc with a timestamp separator.
+// Escalation via Report → Notify Admin.
+// First report: requires issue_reason (one of 10 operational reasons) + message.
+// Follow-up: only message required; detected by is_complaint_submitted already true.
+// Stores reason in issue_reason, notes in issue_desc (timestamped append on follow-up).
+// Surfaces in Cases → Delivery Issues.
 router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { message, employee_id } = req.body;
+    const { message, issue_reason, employee_id } = req.body;
 
     if (!message || message.trim().length < 1) {
       return res.status(400).json({ error: 'A message is required when escalating to admin' });
@@ -427,11 +325,17 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
     const driverName   = order.employees?.display_name || order.employees?.name || 'Driver';
     const trimmedMsg   = message.trim();
 
-    const isFirstEscalation = order.issue_reason !== 'Driver Escalation';
+    // Follow-up when this order already has a complaint submitted
+    const isFollowUp = !!order.is_complaint_submitted;
+
+    // For first report: require a reason
+    if (!isFollowUp && (!issue_reason || !issue_reason.trim())) {
+      return res.status(400).json({ error: 'A reason is required when reporting to admin for the first time' });
+    }
 
     // Build or append issue_desc
     let newIssueDesc;
-    if (isFirstEscalation) {
+    if (!isFollowUp) {
       newIssueDesc = trimmedMsg;
     } else {
       const timestamp = new Date().toLocaleString('en-MY', {
@@ -441,11 +345,13 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
       newIssueDesc = `${order.issue_desc || ''}\n---\n[${timestamp}] ${trimmedMsg}`;
     }
 
+    const displayReason = isFollowUp ? (order.issue_reason || issue_reason || '') : issue_reason;
     const parts = [
       `Order #${orderRef} escalated by driver ${driverName}.`,
       `Customer: ${customerName}`,
+      displayReason ? `Reason: ${displayReason}` : null,
       `Note: ${trimmedMsg}`,
-    ];
+    ].filter(Boolean);
     const notifMessage = parts.join(' | ');
 
     const admins = await prisma.employees.findMany({
@@ -469,7 +375,7 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
             adminName:        admin.display_name || admin.name || 'Admin',
             customerName,
             orderRef,
-            reason:           'Driver Escalation',
+            reason:           displayReason || 'Driver Report',
             driverName,
             address:          order.delivery_address || '',
             salespersonName:  order.salesperson_name  || 'N/A',
@@ -481,22 +387,27 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
       // WhatsApp failure is non-fatal
     }
 
+    const dataToUpdate = {
+      is_complaint_submitted:     true,
+      is_escalation_acknowledged: false,
+      issue_desc:                 newIssueDesc,
+      updated_at:                 new Date(),
+    };
+    // Only set reason on first report; never overwrite on follow-ups
+    if (!isFollowUp && issue_reason) {
+      dataToUpdate.issue_reason = issue_reason.trim();
+    }
+
     const updated = await prisma.orders.update({
       where: { id: orderId },
-      data: {
-        is_complaint_submitted:     true,
-        is_escalation_acknowledged: false,
-        issue_reason:               'Driver Escalation',
-        issue_desc:                 newIssueDesc,
-        updated_at:                 new Date(),
-      },
+      data:  dataToUpdate,
     });
 
     res.json({
-      success:          true,
-      message:          'Admin notified',
-      is_first:         isFirstEscalation,
-      issue_desc:       updated.issue_desc,
+      success:    true,
+      message:    'Admin notified',
+      is_first:   !isFollowUp,
+      issue_desc: updated.issue_desc,
     });
   } catch (err) {
     console.error('POST /api/driver/jobs/:orderId/admin-escalation error:', err);
