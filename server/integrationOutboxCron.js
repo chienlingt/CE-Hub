@@ -8,6 +8,8 @@
 //
 // Handlers:
 //   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus
+//                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed')
+//                             RETURN_DO_CREATE (A5.5 stub) → logs until ERP API confirmed
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp + email
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
@@ -68,6 +70,37 @@ async function handleOdoo(row) {
 
   await writeOdooDeliveryStatus(odooRef, status);
   console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}`);
+}
+
+// ── A5.3: ORDER_FAILED handler — write Failed status to Odoo ──────────────
+
+async function handleOrderFailed(row) {
+  if (!process.env.ODOO_URL) {
+    console.log('[OutboxWorker] ODOO_URL not set — skipping ORDER_FAILED:', row.id);
+    return;
+  }
+
+  const { odooRef, orderId } = row.payload || {};
+  if (!odooRef) {
+    // No Odoo ref — mark processed silently (nothing to sync)
+    console.log(`[OutboxWorker] ORDER_FAILED skipped (no odooRef) for order ${orderId}`);
+    return;
+  }
+
+  await writeOdooDeliveryStatus(odooRef, 'Failed');
+  console.log(`[OutboxWorker] ORDER_FAILED: wrote Failed to Odoo for ${odooRef}`);
+}
+
+// ── A5.5 stub: RETURN_DO_CREATE — deferred until Odoo Return DO API confirmed ──
+
+async function handleReturnDoCreate(row) {
+  const { orderId, odooRef } = row.payload || {};
+  console.log(
+    `[OutboxWorker] RETURN_DO_CREATE stub — order ${orderId} (${odooRef || 'no odooRef'}). ` +
+    'Return DO creation deferred until Odoo API is confirmed (Phase 2).'
+  );
+  // Mark as processed so it does not block the queue.
+  // Phase 2 will replace this stub with the actual Odoo stock.picking return call.
 }
 
 // ── Customer notification handler ─────────────────────────────────────────────
@@ -256,6 +289,10 @@ async function dispatchRow(row) {
     case 'SLOT_STATUS_CHANGED':
       if (row.target === 'odoo') return handleOdoo(row);
       break;
+    case 'ORDER_FAILED':
+      return handleOrderFailed(row);
+    case 'RETURN_DO_CREATE':
+      return handleReturnDoCreate(row);
     case 'CUSTOMER_ON_THE_WAY':
       return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':

@@ -235,6 +235,7 @@ model orders {
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
+  delivery_failure_events   delivery_failure_events[]
   buildings                 buildings?              @relation(fields: [building_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   customers                 customers?              @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   employees                 employees?              @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -426,6 +427,22 @@ model notifications {
   created_at DateTime? @default(now()) @db.Timestamp(6)
 }
 
+// A.5.12: Immutable audit trail for every delivery failure confirmation.
+// One row per failure event (per delivery attempt). Survives order re-entry.
+model delivery_failure_events {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id       String    @db.Uuid
+  // Four FR-05-001 reasons only
+  failure_reason String    @db.VarChar(255)
+  failure_desc   String?
+  evidence_urls  String[]
+  // employee_id of the driver who confirmed, or null for admin desk entry
+  confirmed_by   String?   @db.Uuid
+  odoo_sync_status String? @default("pending") @db.VarChar(20)
+  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  orders         orders    @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
 // A.3.0: Integration outbox for reliable async delivery to external systems.
 // Idempotency key convention:
 //   slot:{timeSlotId}:depart         — slot departure event
@@ -433,6 +450,7 @@ model notifications {
 //   order:{orderId}:odoo:{status}    — per-order Odoo status sync
 //   order:{orderId}:on_the_way       — customer on-the-way notification
 //   order:{orderId}:d1_reminder      — D-1 customer reminder
+//   order:{orderId}:odoo:Failed      — A5.3 failure sync to Odoo (outbox-first)
 model integration_outbox {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   event_type      String    @db.VarChar(60)

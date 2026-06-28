@@ -1,11 +1,13 @@
 // client/src/components/driver/ContactReportModal.js
 // Driver contact / escalation menu: call or WhatsApp salesperson/warehouse,
-// or send a lightweight admin escalation notification.
+// or send a report escalation to admin with a mandatory reason + note.
 import { useState } from 'react';
 import { X, Phone, MessageCircle, AlertTriangle, ChevronRight, CheckCircle } from 'lucide-react';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
 import { salespersonIssueTemplate, warehouseIssueTemplate } from '../../utils/templateMessages';
+import { ESCALATION_REASONS, ESCALATION_REASON_STYLES } from '../../utils/escalationReasons';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
 }
@@ -21,13 +23,14 @@ function apiUrl(path) {
 export default function ContactReportModal({ job, employeeId, onClose, onSuccess }) {
   // 'menu' | 'admin'
   const [view, setView] = useState('menu');
+  const [adminReason, setAdminReason] = useState('');
   const [adminMessage, setAdminMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
 
-  const isEscalation = job.issue_reason === 'Driver Escalation';
-  const isFollowUp   = isEscalation;
+  // Follow-up if this order already has a report submitted (any reason)
+  const isFollowUp = !!job.is_complaint_submitted;
 
   const shortId = job.id?.slice(0, 8).toUpperCase();
 
@@ -62,7 +65,11 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
           'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': '1',
         },
-        body: JSON.stringify({ message: adminMessage.trim(), employee_id: employeeId }),
+        body: JSON.stringify({
+          issue_reason: adminReason,
+          message:      adminMessage.trim(),
+          employee_id:  employeeId,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -91,14 +98,14 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
   }
 
   if (view === 'admin') {
-    const canSend = adminMessage.trim().length >= 1;
+    const canSend = adminMessage.trim().length >= 1 && (isFollowUp || !!adminReason);
     return (
       <ModalShell onClose={onClose} title={isFollowUp ? 'Add Follow-up Note' : 'Report to Admin'}>
         <div className="flex flex-col gap-4">
           <p className="text-sm text-gray-600">
             {isFollowUp
               ? <>Add a follow-up note for order <span className="font-mono font-semibold">#{shortId}</span>. Admin will be re-notified.</>
-              : <>Send a notification to the operations admin team about order <span className="font-mono font-semibold">#{shortId}</span>.</>
+              : <>Report an issue for order <span className="font-mono font-semibold">#{shortId}</span> to the operations team.</>
             }
           </p>
 
@@ -109,9 +116,34 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
             </div>
           )}
 
+          {/* Reason picker — required for first report; hidden on follow-ups */}
+          {!isFollowUp && (
+            <div>
+              <p className="text-xs font-semibold text-gray-700 mb-2">
+                Reason <span className="text-red-500">*</span>
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ESCALATION_REASONS.map(r => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setAdminReason(r)}
+                    className={`text-xs font-medium px-2.5 py-2 rounded-lg border text-left transition-all ${
+                      adminReason === r
+                        ? (ESCALATION_REASON_STYLES[r] || 'bg-blue-100 text-blue-800') + ' ring-1 ring-current'
+                        : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              {isFollowUp ? 'Follow-up note' : 'Message'} <span className="text-red-500">*</span>
+              {isFollowUp ? 'Follow-up note' : 'Details'} <span className="text-red-500">*</span>
             </label>
             <textarea
               value={adminMessage}
@@ -235,7 +267,7 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
                   {isFollowUp ? 'Add Follow-up Note' : 'Report to Admin'}
                 </p>
                 <p className="text-xs text-red-600">
-                  {isFollowUp ? 'Send another update to the admin team' : 'Notify the operations team'}
+                  {isFollowUp ? 'Send another update to the admin team' : 'Notify the operations team with a reason'}
                 </p>
               </div>
             </div>
