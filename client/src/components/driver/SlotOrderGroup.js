@@ -32,6 +32,7 @@ function formatWindow(start, end) {
  *   onUpdate:       (job: object) => void,
  *   onViewEvidence: (job: object) => void,
  *   onReport:       (job: object) => void,
+ *   onFail:         (job: object) => void,
  *   onDeparted:     () => void,
  * }}
  */
@@ -42,6 +43,7 @@ export default function SlotOrderGroup({
   onUpdate,
   onViewEvidence,
   onReport,
+  onFail,
   onDeparted,
 }) {
   const [expanded, setExpanded]     = useState(true);
@@ -164,6 +166,7 @@ export default function SlotOrderGroup({
                 onUpdate={onUpdate}
                 onViewEvidence={onViewEvidence}
                 onReport={onReport}
+                onFail={onFail}
               />
             </div>
           ))}

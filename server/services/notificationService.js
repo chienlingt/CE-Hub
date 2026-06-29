@@ -5,6 +5,9 @@ const {
   sendDeliveryFailureAdminWhatsApp,
   isSettingEnabled,
 } = require('./whatsappService');
+const {
+  sendDeliveryFailureInternalEmail,
+} = require('./emailService');
 
 // ─── In-app notification helpers ────────────────────────────────────────────
 
@@ -193,10 +196,21 @@ async function sendDeliveryFailureNotifications(orderId) {
     }
   }
 
-  // ── 3. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
+  // ── 3. Email to admins (FR-06-002, wired A5↔A6 integration) ─────────────
+  const adminEmailAddress = process.env.EMAIL_USER;
+  if (adminEmailAddress) {
+    for (const admin of allAdmins) {
+      const recipientName = admin.name || admin.display_name || 'Admin';
+      sendDeliveryFailureInternalEmail(adminEmailAddress, recipientName, notifData).catch(err =>
+        console.warn('[NotificationService] Admin email failed (non-fatal):', err.message)
+      );
+    }
+  }
+
+  // ── 4. Post to Odoo chatter (FR-06-003) ──────────────────────────────────
   await postToOdooChatter(order.id, order.odoo_order_ref, notifData);
 
-  // ── 4. WhatsApp to admins (FR-06-001) ────────────────────────────────────
+  // ── 5. WhatsApp to admins (FR-06-001) ────────────────────────────────────
   const adminWhatsAppEnabled = await isSettingEnabled('whatsapp_admin_notification_enabled');
   if (adminWhatsAppEnabled) {
     const recipientAdmins = await getWhatsAppAdminRecipients(allAdmins);
@@ -220,7 +234,7 @@ async function sendDeliveryFailureNotifications(orderId) {
     }
   }
 
-  // ── 5. WhatsApp to salesperson in charge (FR-06-001) ─────────────────────
+  // ── 6. WhatsApp to salesperson in charge (FR-06-001) ─────────────────────
   if (salespersonPhone) {
     await sendDeliveryFailureSalespersonWhatsApp(salespersonPhone, {
       recipientName: salespersonName  || 'Salesperson',
@@ -236,7 +250,7 @@ async function sendDeliveryFailureNotifications(orderId) {
     console.warn(`[NotificationService] No salesperson phone for order ${orderRef} — skipping salesperson WhatsApp`);
   }
 
-  // ── 6. WhatsApp to customer (FR-06-004) ──────────────────────────────────
+  // ── 7. WhatsApp to customer (FR-06-004) ──────────────────────────────────
   const customerWaEnabled = await isSettingEnabled('whatsapp_customer_notification_enabled');
   if (customerPhone && customerWaEnabled) {
     await sendDeliveryFailureWhatsApp(customerPhone, {

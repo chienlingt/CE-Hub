@@ -11,7 +11,7 @@ const HIDDEN_STATUSES = ['Pending'];
 const SCHEDULED_STATUSES = ['Scheduled', 'Loaded'];
 
 /** Statuses that map to the "Delivering" driver tab */
-const DELIVERING_STATUSES = ['Delivering', 'In Progress'];
+export const DELIVERING_STATUSES = ['Delivering', 'In Progress'];
 
 /** Statuses that map to the "Completed" driver tab */
 const COMPLETED_STATUSES = ['Delivered', 'Installing', 'Completed'];
@@ -57,11 +57,12 @@ export function statusBadge(orderStatus) {
 /**
  * Returns allowed status transitions from the current status.
  * Completion (→ Completed) is handled separately via the POD modal.
+ * Issue reporting is handled via the Report button (ContactReportModal).
+ * Mark as Failed is handled via the Failed button (FailDeliveryModal).
  * Delivering is no longer a manual transition — use slot depart (Leave warehouse).
  */
 export function allowedTransitions(orderStatus) {
-  if (SCHEDULED_STATUSES.includes(orderStatus))  return ['Issue'];
-  if (DELIVERING_STATUSES.includes(orderStatus)) return ['Completed', 'Issue'];
+  if (DELIVERING_STATUSES.includes(orderStatus)) return ['Completed'];
   return [];
 }
 

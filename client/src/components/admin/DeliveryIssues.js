@@ -7,20 +7,11 @@ import {
   User, X, Truck, MapPin, BellRing,
 } from 'lucide-react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import { ESCALATION_REASON_STYLES } from '../../utils/escalationReasons';
 
-const DRIVER_ESCALATION_REASON = 'Driver Escalation';
+// Escalations = driver Report (is_complaint_submitted: true)
+// Full reports = old Issue-status orders still in the system (is_complaint_submitted: false)
 
-const REASON_STYLES = {
-  'Customer Absent':           'bg-orange-100 text-orange-800',
-  'Wrong Address':             'bg-yellow-100 text-yellow-800',
-  'Access Denied':             'bg-red-100 text-red-800',
-  'Customer Refused Delivery': 'bg-purple-100 text-purple-800',
-  'Damaged Item':              'bg-red-100 text-red-700',
-  'Incorrect Item':            'bg-amber-100 text-amber-800',
-  'Traffic Delay':             'bg-blue-100 text-blue-800',
-  'Vehicle Breakdown':         'bg-gray-100 text-gray-800',
-  'Other':                     'bg-gray-100 text-gray-700',
-};
 
 const PRIORITY_STYLES = {
   high:   'bg-red-100 text-red-700',
@@ -39,14 +30,7 @@ function formatDate(str) {
 }
 
 function ReasonBadge({ reason }) {
-  if (reason === DRIVER_ESCALATION_REASON) {
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-        <BellRing size={10} className="mr-1" /> Escalation
-      </span>
-    );
-  }
-  const style = REASON_STYLES[reason] || 'bg-gray-100 text-gray-700';
+  const style = ESCALATION_REASON_STYLES[reason] || 'bg-gray-100 text-gray-700';
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style}`}>
       {reason || 'Unknown'}
@@ -237,7 +221,8 @@ function EscalationDetail({ order, onClose, onAcknowledged }) {
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <BellRing size={18} className={isAcked ? 'text-green-600' : 'text-purple-600'} />
-              <h2 className="text-base font-bold text-gray-900">Driver Escalation — {orderRef}</h2>
+              <h2 className="text-base font-bold text-gray-900">Driver Report — {orderRef}</h2>
+              {order.issue_reason && <ReasonBadge reason={order.issue_reason} />}
               {isAcked ? (
                 <span className="flex items-center text-xs text-green-700 font-medium bg-green-100 px-2 py-0.5 rounded-full">
                   <CheckCircle size={11} className="mr-1" /> Acknowledged
@@ -361,7 +346,7 @@ function IssueTable({ issues, highlightId, isEscalation, onSelect, emptyText }) 
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Priority</th>
               )}
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                {isEscalation ? 'Type' : 'Reason'}
+                Reason
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Updated</th>
@@ -445,9 +430,9 @@ export default function DeliveryIssues() {
     }
   }, [highlightId, allIssues]);
 
-  // Partition
-  const escalations  = allIssues.filter(o => o.issue_reason === DRIVER_ESCALATION_REASON);
-  const fullReports  = allIssues.filter(o => o.issue_reason !== DRIVER_ESCALATION_REASON);
+  // Partition: escalations = Report path (is_complaint_submitted); fullReports = legacy Issue-status orders
+  const escalations  = allIssues.filter(o => !!o.is_complaint_submitted);
+  const fullReports  = allIssues.filter(o => !o.is_complaint_submitted);
 
   // Apply per-section filters
   const visibleEscalations = escalations.filter(o => {
@@ -475,7 +460,7 @@ export default function DeliveryIssues() {
     setSelectedIssue(null);
   }
 
-  const isEscalationType = selectedIssue?.issue_reason === DRIVER_ESCALATION_REASON;
+  const isEscalationType = !!selectedIssue?.is_complaint_submitted;
 
   if (loading && allIssues.length === 0) {
     return (

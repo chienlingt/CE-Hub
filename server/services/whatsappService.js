@@ -206,6 +206,16 @@ async function seedWhatsAppSettings() {
       setting_value: '[]',
       description:   'JSON array of admin employee IDs enabled for WhatsApp. Empty = all admins.',
     },
+    {
+      setting_key:   'failure_require_photo',
+      setting_value: 'true',
+      description:   'A5.2 — Require at least one evidence photo on driver failure confirmation (true/false)',
+    },
+    {
+      setting_key:   'failure_require_remark',
+      setting_value: 'true',
+      description:   'A5.2 — Require a non-empty issue_desc remark on driver failure confirmation (true/false)',
+    },
   ];
 
   for (const s of defaults) {
