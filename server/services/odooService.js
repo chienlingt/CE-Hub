@@ -129,4 +129,76 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   return callModel('sale.order', 'write', [[odooOrders[0].id], { x_delivery_status: odooStatus }]);
 }
 
-module.exports = { authenticate, callModel, pushDeliveryStatus, writeOdooDeliveryStatus, getConfirmedOrders };
+/**
+ * Find confirmed sale orders whose delivery commitment date falls on a given
+ * calendar day (used by the 5PM "next day" fallback sync — A1.4).
+ *
+ * @param {string} dateStr - 'YYYY-MM-DD', the target delivery day
+ * @returns {Promise<Array<{id:number, name:string}>>}
+ */
+async function getOrdersForDeliveryDate(dateStr) {
+  const domain = [
+    ['state', '=', 'sale'],
+    ['commitment_date', '>=', `${dateStr} 00:00:00`],
+    ['commitment_date', '<=', `${dateStr} 23:59:59`],
+  ];
+  return callModel('sale.order', 'search_read', [domain], { fields: ['id', 'name'], limit: 200 });
+}
+
+/**
+ * Fully resolve one Odoo sale.order into the same shape as the webhook
+ * payload (server/routes/webhooks.js POST /odoo/order) — partner/shipping
+ * address expanded, order lines expanded with product name + serial.
+ *
+ * @param {number} odooId - Odoo sale.order integer id
+ */
+async function getOrderDetail(odooId) {
+  const [order] = await callModel('sale.order', 'read', [[odooId]], {
+    fields: ['id', 'name', 'partner_id', 'partner_shipping_id', 'order_line', 'commitment_date', 'note', 'user_id'],
+  });
+  if (!order) return null;
+
+  const [partner]  = order.partner_id
+    ? await callModel('res.partner', 'read', [[order.partner_id[0]]], { fields: ['name', 'email', 'phone'] })
+    : [null];
+  const [shipping] = order.partner_shipping_id
+    ? await callModel('res.partner', 'read', [[order.partner_shipping_id[0]]], { fields: ['street', 'city', 'zip', 'state_id'] })
+    : [null];
+  const [salesperson] = order.user_id
+    ? await callModel('res.users', 'read', [[order.user_id[0]]], { fields: ['name', 'partner_id'] })
+    : [null];
+
+  const lines = order.order_line?.length
+    ? await callModel('sale.order.line', 'read', [order.order_line], { fields: ['product_id', 'product_uom_qty', 'lot_id'] })
+    : [];
+
+  return {
+    id:                   order.id,
+    name:                 order.name,
+    partner_name:         partner?.name  || null,
+    partner_email:        partner?.email || null,
+    partner_phone:        partner?.phone || null,
+    delivery_address:     shipping?.street            || null,
+    delivery_city:        shipping?.city              || null,
+    delivery_state_name:  shipping?.state_id?.[1]      || null,
+    delivery_zip:         shipping?.zip               || null,
+    delivery_remarks:     order.note                  || null,
+    salesperson_name:     salesperson?.name            || null,
+    salesperson_phone:    null, // resolved separately if needed — res.users has no direct phone field
+    order_lines: lines.map(l => ({
+      product_name:    l.product_id?.[1]    || null,
+      product_uom_qty: l.product_uom_qty,
+      serial_number:   l.lot_id?.[1]        || null,
+    })),
+  };
+}
+
+module.exports = {
+  authenticate,
+  callModel,
+  pushDeliveryStatus,
+  writeOdooDeliveryStatus,
+  getConfirmedOrders,
+  getOrdersForDeliveryDate,
+  getOrderDetail,
+};

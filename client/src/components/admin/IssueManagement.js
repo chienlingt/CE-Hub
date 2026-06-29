@@ -196,7 +196,7 @@ function CaseDetail({ order, onClose, onResolved }) {
           </div>
 
           {/* Odoo Chatter (FR-06-003) */}
-          <div>
+          {/*<div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Odoo Chatter</p>
             {chatterLoading ? (
               <p className="text-sm text-gray-400">Loading…</p>
@@ -229,7 +229,7 @@ function CaseDetail({ order, onClose, onResolved }) {
                 </div>
               );
             })()}
-          </div>
+          </div> */}
 
           {/* Items */}
           <div>

@@ -21,6 +21,19 @@ function SyncBadge({ synced }) {
     : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><AlertTriangle size={10} /> Not in CE Hub</span>;
 }
 
+function OutboxStatusBadge({ row }) {
+  if (row.status === 'processed') {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700"><CheckCircle size={10} /> Sent OK</span>;
+  }
+  if (row.status === 'dead') {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><AlertTriangle size={10} /> Failed — gave up</span>;
+  }
+  if (row.status === 'pending' && row.attempts > 0) {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"><RefreshCw size={10} /> Retrying (#{row.attempts})</span>;
+  }
+  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Queued</span>;
+}
+
 export default function SyncMonitor() {
   const [ceHubOrders,  setCeHubOrders]  = useState([]);
   const [loading,      setLoading]      = useState(true);
@@ -29,6 +42,9 @@ export default function SyncMonitor() {
   const [syncResult,   setSyncResult]   = useState(null);
   const [filter,       setFilter]       = useState('all');
   const [parseTarget,  setParseTarget]  = useState(null); // order to parse remarks
+
+  const [outboxRows,   setOutboxRows]   = useState([]);
+  const [outboxFilter, setOutboxFilter] = useState('all');
 
   const fetchOrders = useCallback(async () => {
     setError(null);
@@ -43,11 +59,22 @@ export default function SyncMonitor() {
     }
   }, []);
 
+  const fetchOutbox = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API_BASE}/api/integration-outbox`);
+      const data = await res.json();
+      setOutboxRows(Array.isArray(data.rows) ? data.rows : []);
+    } catch (err) {
+      // non-fatal — outbox panel just shows empty
+    }
+  }, []);
+
   useEffect(() => {
     fetchOrders();
-    const timer = setInterval(fetchOrders, 30000);
+    fetchOutbox();
+    const timer = setInterval(() => { fetchOrders(); fetchOutbox(); }, 30000);
     return () => clearInterval(timer);
-  }, [fetchOrders]);
+  }, [fetchOrders, fetchOutbox]);
 
   const triggerSync = async () => {
     setSyncing(true);
@@ -82,6 +109,17 @@ export default function SyncMonitor() {
     filter === 'local'    ? localOnly  :
     filter === 'anomaly'  ? anomalies  :
     ceHubOrders;
+
+  // Outbox queue — jobs sending data TO Odoo/notifications, with retry/dead status
+  const outboxPending   = outboxRows.filter(r => r.status === 'pending');
+  const outboxDead      = outboxRows.filter(r => r.status === 'dead');
+  const outboxProcessed = outboxRows.filter(r => r.status === 'processed');
+
+  const outboxDisplay =
+    outboxFilter === 'pending'   ? outboxPending   :
+    outboxFilter === 'dead'      ? outboxDead      :
+    outboxFilter === 'processed' ? outboxProcessed :
+    outboxRows;
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
@@ -265,6 +303,82 @@ export default function SyncMonitor() {
           </table>
         </div>
       )}
+
+      {/* Integration Outbox — jobs sent TO Odoo/notifications, with retry/dead status */}
+      <div className="mt-10">
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+            <Link className="text-purple-600" size={18} />
+            Odoo Sync Queue
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Outgoing jobs to Odoo and notifications — shows what's still retrying or has permanently failed.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+          {[
+            { key: 'all',       label: 'Total Jobs',  value: outboxRows.length,       color: 'text-gray-900',  border: 'border-gray-200'  },
+            { key: 'pending',   label: 'Pending/Retrying', value: outboxPending.length,   color: 'text-amber-700', border: 'border-amber-200' },
+            { key: 'dead',      label: 'Failed (gave up)', value: outboxDead.length,      color: 'text-red-600',   border: 'border-red-200'   },
+            { key: 'processed', label: 'Sent OK',     value: outboxProcessed.length,  color: 'text-green-700', border: 'border-green-200' },
+          ].map(c => (
+            <div
+              key={c.key}
+              onClick={() => setOutboxFilter(c.key)}
+              className={`bg-white rounded-xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${c.border} ${outboxFilter === c.key ? 'ring-2 ring-blue-400' : ''}`}
+            >
+              <p className="text-xs text-gray-500 uppercase tracking-wide">{c.label}</p>
+              <p className={`text-2xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {outboxDisplay.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
+            <Link className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500 text-sm">No outbox jobs match this filter.</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-100">
+              <thead className="bg-gray-50">
+                <tr>
+                  {['Event', 'Target', 'Status', 'Attempts', 'Last Error', 'Next Retry', 'Created'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {outboxDisplay.map(row => (
+                  <tr key={row.id} className={`hover:bg-gray-50 ${row.status === 'dead' ? 'bg-red-50' : ''}`}>
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-xs font-medium text-gray-900">{row.event_type}</span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{row.target}</td>
+                    <td className="px-4 py-3"><OutboxStatusBadge row={row} /></td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{row.attempts}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title={row.last_error || ''}>
+                      {row.last_error || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500">
+                      {row.status === 'pending' ? formatDateTime(row.next_retry_at) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500">
+                      <div className="flex items-center gap-1">
+                        <Clock size={10} />
+                        {formatDateTime(row.created_at)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

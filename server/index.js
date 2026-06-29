@@ -15,7 +15,7 @@ const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 // CORS configuration - allows frontend to access API
 const defaultOrigin = process.env.CLIENT_URL || 'https://lab2.tbm2u.net';
-const localOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
+const localOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[\w-]+\.ngrok-free\.(app|dev)|[\w-]+\.ngrok\.(io|app))(:\d+)?$/;
 
 app.use(cors({
   origin(origin, callback) {
@@ -126,6 +126,7 @@ app.use('/api/outlets', require('./routes/outlets'));
 app.use('/api/webhooks',      require('./routes/webhooks'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/driver',        require('./routes/driver'));
+app.use('/api/integration-outbox', require('./routes/integrationOutbox'));
 
 // Health check
 app.get('/api/health', async (req, res) => {

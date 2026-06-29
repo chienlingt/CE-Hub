@@ -9,6 +9,9 @@ const { sendPasswordResetEmail } = require('../services/emailService');
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
   console.log(`🔐 Login attempt for email: ${email}`);
+  // TEMP DEBUG — remove after diagnosing ngrok/proxy login issue
+  console.log(`[DEBUG] raw req.body =`, JSON.stringify(req.body));
+  console.log(`[DEBUG] password length = ${password ? password.length : 'undefined'}, first char = ${password ? JSON.stringify(password[0]) : 'n/a'}, last char = ${password ? JSON.stringify(password[password.length - 1]) : 'n/a'}`);
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }

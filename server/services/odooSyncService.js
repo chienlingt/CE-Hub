@@ -1,11 +1,14 @@
 /**
  * A1.4 — Odoo Order Ingestion Polling Service
  *
- * Fallback for missed webhooks. Polls Odoo every 15 minutes for confirmed
- * sale orders and imports any that are not yet in CE Hub.
+ * Safety net for the Odoo "push" button workflow: runs once daily at 5PM MYT
+ * and makes sure every confirmed sale order delivering TOMORROW already
+ * exists in CE Hub, in case it was never pushed (or push failed) from Odoo.
+ * Only creates missing orders — does not touch orders already present
+ * (those are kept in sync via the push endpoints instead).
  */
+const dayjs  = require('dayjs');
 const prisma = require('../prismaClient');
-const { extractBuildingName } = require('../utils/addressParser');
 
 async function syncOrdersFromOdoo() {
   if (!process.env.ODOO_URL) {
@@ -14,14 +17,14 @@ async function syncOrdersFromOdoo() {
   }
 
   try {
-    const { getConfirmedOrders } = require('./odooService');
+    const { getOrdersForDeliveryDate, getOrderDetail } = require('./odooService');
+    const { pushOrder } = require('./odooOrderIngestService');
 
-    // Only fetch orders updated in the last 24h to keep the query small
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const odooOrders = await getConfirmedOrders(since);
+    const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
+    const odooOrders = await getOrdersForDeliveryDate(tomorrow);
 
     if (!odooOrders?.length) {
-      console.log('[OdooSync] No new confirmed orders from Odoo.');
+      console.log(`[OdooSync] No confirmed orders in Odoo for ${tomorrow}.`);
       return { synced: 0, skipped: 0 };
     }
 
@@ -32,57 +35,24 @@ async function syncOrdersFromOdoo() {
       const odooRef = oo.name;
       if (!odooRef) continue;
 
-      // Skip if already in CE Hub
+      // Skip if already in CE Hub — push endpoints own keeping it up to date
       const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: odooRef } });
       if (existing) { skipped++; continue; }
 
-      // Resolve partner (customer) info — Odoo returns [id, name] tuple for Many2one
-      const partnerName  = Array.isArray(oo.partner_id) ? oo.partner_id[1] : oo.partner_id;
+      const detail = await getOrderDetail(oo.id);
+      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skipped++; continue; }
 
-      // Upsert customer by Odoo partner name (no email available in search_read by default)
-      let customer = await prisma.customers.findFirst({
-        where: { full_name: { equals: partnerName, mode: 'insensitive' } },
-      });
-      if (!customer) {
-        customer = await prisma.customers.create({
-          data: { full_name: partnerName || 'Unknown', created_at: new Date() },
-        });
+      const result = await pushOrder(detail);
+      if (result.success) {
+        console.log(`[OdooSync] Imported next-day order missed by push: ${odooRef}`);
+        synced++;
+      } else {
+        console.warn(`[OdooSync] Failed to import ${odooRef}: ${result.error}`);
+        skipped++;
       }
-
-      // Resolve building
-      const buildingName = extractBuildingName(partnerName || '') || 'Unknown';
-      let building = await prisma.buildings.findFirst({
-        where: { building_name: { equals: buildingName, mode: 'insensitive' } },
-      });
-      if (!building) {
-        building = await prisma.buildings.create({
-          data: {
-            building_name:            buildingName,
-            housing_type:             'Residential',
-            access_time_window_start: '08:00',
-            access_time_window_end:   '20:00',
-            created_at:               new Date(),
-          },
-        });
-      }
-
-      await prisma.orders.create({
-        data: {
-          customer_id:       customer.id,
-          building_id:       building.id,
-          order_status:      'Pending',
-          assignment_status: 'unassigned',
-          odoo_order_ref:    odooRef,
-          created_at:        new Date(),
-          updated_at:        new Date(),
-        },
-      });
-
-      console.log(`[OdooSync] Imported missed order: ${odooRef}`);
-      synced++;
     }
 
-    console.log(`[OdooSync] Done — synced: ${synced}, skipped (already exists): ${skipped}`);
+    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
     return { synced, skipped };
   } catch (err) {
     console.error('[OdooSync] Sync failed:', err.message);
