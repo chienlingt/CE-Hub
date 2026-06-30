@@ -164,6 +164,8 @@ async function confirmFailure(orderId, {
         ...(order.issue_evidence || []),
         ...evidence_paths,
       ],
+      // Reported-failed date — stamp once; never moved by later updates.
+      ...(order.issue_reported_at ? {} : { issue_reported_at: now }),
       updated_at: now,
       // Explicitly keep is_complaint_submitted unchanged (may already be false/null)
     },

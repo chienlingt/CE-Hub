@@ -554,6 +554,8 @@ router.get('/', async (req, res) => {
       customers: true,
       employees: true,
       buildings: true,
+      // Replacement order(s) created via the Reschedule flow, if any
+      rescheduled_to: { select: { id: true, odoo_order_ref: true, order_status: true, created_at: true } },
     };
 
     if (includeProducts) {
@@ -585,7 +587,22 @@ router.get('/', async (req, res) => {
       orderBy
     });
 
-    res.json(orders);
+    // Resolve resolved_by → a display name (audit trail for the Resolved badge)
+    const resolvedByIds = [...new Set(orders.map(o => o.resolved_by).filter(Boolean))];
+    const resolvedByMap = new Map();
+    if (resolvedByIds.length) {
+      const resolvers = await prisma.employees.findMany({
+        where:  { id: { in: resolvedByIds } },
+        select: { id: true, name: true, display_name: true },
+      });
+      resolvers.forEach(e => resolvedByMap.set(e.id, e.display_name || e.name || null));
+    }
+    const result = orders.map(o => ({
+      ...o,
+      resolved_by_name: o.resolved_by ? (resolvedByMap.get(o.resolved_by) || null) : null,
+    }));
+
+    res.json(result);
   } catch (err) {
     console.error('GET /api/orders error', err);
     res.status(500).json({ error: 'Failed to fetch orders', details: err.message });
@@ -594,7 +611,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { customer, building, products, employee, service_type } = req.body;
+    const { customer, building, products, employee, service_type, rescheduled_from_order_id, resolved_by } = req.body;
 
     // Create customer (or use existing if id provided)
     let createdCustomer;
@@ -668,6 +685,7 @@ router.post('/', async (req, res) => {
         employee_id: employee || null,
         order_status: 'Pending',
         special_equipment_needed: req.body.special_equipment_needed || null,
+        rescheduled_from_order_id: rescheduled_from_order_id || null,
         created_at: new Date(),
         updated_at: new Date(),
         // Snapshot the delivery address at the time of order creation
@@ -711,6 +729,18 @@ router.post('/', async (req, res) => {
         },
       },
     });
+
+    // Reschedule link — auto-resolve the source failed case now that its
+    // replacement order has actually been created (not just navigated to).
+    if (rescheduled_from_order_id) {
+      const now = new Date();
+      await prisma.orders.update({
+        where: { id: rescheduled_from_order_id },
+        data:  { issue_status: 'resolved', resolved_by: resolved_by || null, resolved_at: now, updated_at: now },
+      }).catch(err =>
+        console.error('Failed to auto-resolve source order on reschedule:', err.message)
+      );
+    }
 
     res.status(201).json({
       success: true,
@@ -1696,13 +1726,33 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
       issue_reason,
       issue_desc,
       order_products_status,
+      resolved_by,
     } = req.body;
+
+    const existing = await prisma.orders.findUnique({
+      where: { id: orderId },
+      select: { issue_status: true, issue_reason: true, issue_reported_at: true },
+    });
 
     const data = {};
     if (issue_status !== undefined) data.issue_status = issue_status;
     if (issue_reason !== undefined) data.issue_reason = issue_reason;
     if (issue_desc   !== undefined) data.issue_desc   = issue_desc;
     data.updated_at = new Date();
+
+    // Reported-failed date — stamp once, the first time issue_reason is set,
+    // and never again. Any later update (resolve, reschedule, item edits)
+    // must not move this date.
+    if (issue_reason && !existing?.issue_reported_at) {
+      data.issue_reported_at = new Date();
+    }
+
+    // Audit trail — stamp who/when only on the transition INTO resolved,
+    // not on every subsequent save of an already-resolved case.
+    if (issue_status === 'resolved' && existing?.issue_status !== 'resolved') {
+      data.resolved_by = resolved_by || null;
+      data.resolved_at = new Date();
+    }
 
     const order = await prisma.orders.update({
       where: { id: orderId },

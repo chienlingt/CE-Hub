@@ -209,6 +209,7 @@ model orders {
   issue_reason              String?                 @db.VarChar(255)
   issue_desc                String?
   issue_evidence            String[]
+  issue_reported_at         DateTime?               @db.Timestamp(6)
   delivery_start_date_time  DateTime?               @db.Timestamp(6)
   delivery_end_date_time    DateTime?               @db.Timestamp(6)
   install_start_date_time   DateTime?               @db.Timestamp(6)
@@ -218,6 +219,8 @@ model orders {
   delivery_postcode         String?
   delivery_state            String?
   issue_status              String?
+  resolved_by               String?                 @db.Uuid
+  resolved_at               DateTime?               @db.Timestamp(6)
   odoo_order_ref            String?                 @unique @db.VarChar(100)
   is_complaint_submitted    Boolean?                @default(false)
   is_escalation_acknowledged Boolean?               @default(false)
@@ -232,6 +235,7 @@ model orders {
   remarks_driver_notes      String?
   salesperson_name          String?  @db.VarChar(255)
   salesperson_phone         String?  @db.VarChar(50)
+  rescheduled_from_order_id String?                 @db.Uuid
   complaint                 complaint[]
   installation_schedules    installation_schedules?
   order_products            order_products[]
@@ -241,6 +245,8 @@ model orders {
   employees                 employees?              @relation(fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   time_slots                time_slots?             @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rating                    rating[]
+  rescheduled_from          orders?                 @relation("OrderReschedule", fields: [rescheduled_from_order_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  rescheduled_to            orders[]                @relation("OrderReschedule")
 }
 
 model products {

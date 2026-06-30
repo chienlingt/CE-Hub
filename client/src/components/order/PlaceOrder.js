@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { ShoppingCart, Package, User, CheckCircle, AlertCircle, Plus, Minus, X, Edit2, Save, Search, RefreshCw } from 'lucide-react';
 import ResultModal from '../common/ResultModal';
 import { getAllProducts, getAllZones, addCustomer, addProduct, updateCustomer } from '../../services/informationService';
+import { useAuth } from '../../contexts/AuthContext';
 
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../utils/apiBaseUrl';
 
@@ -15,6 +16,7 @@ const SERVICE_TYPES = [
 export default function PlaceOrder() {
   const location = useLocation();
   const rescheduleState = location.state?.reschedule ? location.state : null;
+  const { employeeData } = useAuth();
 
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -540,7 +542,9 @@ export default function PlaceOrder() {
             custom_dismantle_time: item.customDismantleTime || null
           })),
           service_type: cart[0].serviceType,
-          special_equipment_needed: specialEquipment || null
+          special_equipment_needed: specialEquipment || null,
+          rescheduled_from_order_id: rescheduleState?.sourceOrderId || null,
+          resolved_by: rescheduleState?.sourceOrderId ? (employeeData?.id || null) : undefined
         })
       });
 

@@ -24,13 +24,13 @@ const bcrypt = require('bcryptjs');
 const prisma = require('./prismaClient');
 
 const DEMO_PREFIX     = 'DEMO';
-const SLOT_DATE       = '2026-06-20';
+const SLOT_DATE       = '2026-06-30';
 const DRIVER_EMAIL    = 'drivertan@gmail.com';
 const WAREHOUSE_EMAIL = 'warehousetan@gmail.com';
 const ADMIN_EMAIL     = 'testerAdmin@gmail.com';
 
 const SALESPERSON_NAME  = 'Salesperson Tan';
-const SALESPERSON_PHONE = '01156751977';
+const SALESPERSON_PHONE = '01172293772';
 const CUSTOMER_PHONE    = '01156751977';
 
 const TRUCK_PLATE         = 'HS0823';
