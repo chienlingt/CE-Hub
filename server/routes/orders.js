@@ -1808,7 +1808,7 @@ router.post('/:id/remind-driver', async (req, res) => {
     }
 
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    if (order.time_slots?.date && order.time_slots.date > today) {
+    if (order.time_slots?.date && order.time_slots.date >= today) {
       return res.status(400).json({
         error: 'Cannot remind driver — delivery slot is not overdue yet.',
         code:  'NOT_OVERDUE',

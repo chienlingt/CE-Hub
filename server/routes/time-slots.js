@@ -55,7 +55,7 @@ router.get('/active', async (req, res) => {
       const deliveredOrders = slot.orders.filter(o => o.order_status === 'Delivered').length;
       const activeOrders    = slot.orders.filter(o => o.order_status === 'Delivering').length;
       const overdueOrders   = slot.orders.filter(o =>
-        o.order_status === 'Delivering' && slot.date && slot.date <= todayKL
+        o.order_status === 'Delivering' && slot.date && slot.date < todayKL
       ).length;
 
       return {

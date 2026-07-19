@@ -18,7 +18,7 @@ async function runOverdueReminderCron() {
       where: {
         order_status: 'Delivering',
         time_slots: {
-          date: { lte: today },
+          date: { lt: today },
         },
       },
       select: {

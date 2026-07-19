@@ -10,7 +10,7 @@ import { todayLocalDateKey } from './dateKey';
 export function isOrderOverdue(order, slotDate) {
   if (order?.order_status !== 'Delivering') return false;
   if (!slotDate) return false;
-  return slotDate <= todayLocalDateKey();
+  return slotDate < todayLocalDateKey();
 }
 
 /** @param {object} trip */
