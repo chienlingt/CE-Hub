@@ -7,14 +7,14 @@
 //   out_for_delivery → completed  (endTimeSlotTrip — when all orders are terminal)
 //
 // Order terminal statuses (END_TRIP_TERMINAL_STATUSES):
-//   Delivered, Completed, Cancelled, Failed
+//   Delivered, Cancelled, Failed
 //   — Cancelled/Failed orders do NOT block end-trip and do NOT need to be loaded.
 
 const prisma = require('../prismaClient');
 
 // ─── Status constants ────────────────────────────────────────────────────────
 
-const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Completed', 'Cancelled', 'Failed'];
+const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Cancelled', 'Failed'];
 
 // Orders that must be fully loaded before Leave warehouse
 const PRE_DEPART_ORDER_STATUSES = ['Pending', 'Scheduled', 'Loaded'];
@@ -36,6 +36,25 @@ function isEndTripTerminal(orderStatus) {
  */
 function ordersBlockingEndTrip(orders) {
   return orders.filter(o => !isEndTripTerminal(o.order_status));
+}
+
+// ─── Location helper ──────────────────────────────────────────────────────────
+
+/**
+ * Upsert the driver's current location in employee_locations.
+ * Non-fatal — errors are logged, never thrown.
+ */
+async function upsertEmployeeLocation(employeeId, latitude, longitude) {
+  if (!employeeId || latitude == null || longitude == null) return;
+  try {
+    await prisma.employee_locations.upsert({
+      where:  { employee_id: employeeId },
+      create: { employee_id: employeeId, latitude, longitude, updated_at: new Date() },
+      update: { latitude, longitude, updated_at: new Date() },
+    });
+  } catch (err) {
+    console.warn('[Location] upsertEmployeeLocation failed (non-fatal):', err.message);
+  }
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -72,10 +91,11 @@ async function resolveEmployeeName(employeeId) {
 /**
  * Mark one order as Delivering and set delivery timestamps.
  * Does NOT do Odoo write-back (caller decides — routes use outbox for that).
+ * Also upserts employee_locations if lat/lng provided.
  */
-async function markOrderDelivering(orderId, { employeeId, now } = {}) {
+async function markOrderDelivering(orderId, { employeeId, now, latitude, longitude } = {}) {
   const ts = now || new Date();
-  return prisma.orders.update({
+  const updated = await prisma.orders.update({
     where: { id: orderId },
     data: {
       order_status:            'Delivering',
@@ -85,24 +105,29 @@ async function markOrderDelivering(orderId, { employeeId, now } = {}) {
       updated_at:               ts,
     },
   });
+  await upsertEmployeeLocation(employeeId, latitude, longitude);
+  return updated;
 }
 
 /**
  * Mark one order as Delivered and set delivery timestamps.
+ * Stores delivered_latitude/longitude on the order and upserts employee_locations.
  * Does NOT do Odoo write-back.
  */
-async function markOrderDelivered(orderId, { employeeId, now } = {}) {
+async function markOrderDelivered(orderId, { employeeId, now, latitude, longitude } = {}) {
   const ts = now || new Date();
-  return prisma.orders.update({
-    where: { id: orderId },
-    data: {
-      order_status:             'Delivered',
-      delivered_by:             employeeId || null,
-      delivery_end_date_time:   ts,
-      actual_arrival_date_time: ts,
-      updated_at:               ts,
-    },
-  });
+  const data = {
+    order_status:             'Delivered',
+    delivered_by:             employeeId || null,
+    delivery_end_date_time:   ts,
+    actual_arrival_date_time: ts,
+    updated_at:               ts,
+  };
+  if (latitude  != null) data.delivered_latitude  = latitude;
+  if (longitude != null) data.delivered_longitude = longitude;
+  const updated = await prisma.orders.update({ where: { id: orderId }, data });
+  await upsertEmployeeLocation(employeeId, latitude, longitude);
+  return updated;
 }
 
 // ─── A.3.1 / A.3.5: Depart slot ──────────────────────────────────────────────
@@ -158,7 +183,7 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
     throw err;
   }
 
-  // Identify active orders — exclude already-terminal (Cancelled/Failed/Delivered/Completed)
+  // Identify active orders — exclude already-terminal (Cancelled/Failed/Delivered)
   const activeOrders = slot.orders.filter(o => !isEndTripTerminal(o.order_status));
 
   // Only pre-depart orders must have every item loaded; Delivering orders are already en route
@@ -209,9 +234,6 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
     updatedOrders.push(updated);
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'deliveryLifecycleService.js:departTimeSlot',message:'Depart order transition',data:{timeSlotId,preDepartCount:preDepartOrders.length,transitioned:updatedOrders.map(o=>o.id),activeOrders:activeOrders.map(o=>({id:o.id,status:o.order_status})),skippedDelivering:activeOrders.filter(o=>o.order_status==='Delivering').map(o=>o.id)},timestamp:Date.now(),hypothesisId:'A,B',runId:'depart-fix'})}).catch(()=>{});
-  // #endregion
 
   // Safety net: re-query slot for any pre-depart orders missed in the initial snapshot
   const remainingPreDepart = await prisma.orders.findMany({
@@ -367,9 +389,6 @@ async function healStrandedOrdersOnDepartedSlots({ employeeId, deliveryTeamIds }
     healed.push(updated);
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'deliveryLifecycleService.js:healStrandedOrders',message:'Heal stranded on departed slots',data:{strandedCount:stranded.length,healed:healed.map(o=>({id:o.id,slot:o.time_slot_id})),skipped},timestamp:Date.now(),hypothesisId:'A,C,D',runId:'depart-fix'})}).catch(()=>{});
-  // #endregion
 
   if (healed.length > 0) {
     console.log(`[Lifecycle] Healed ${healed.length} stranded order(s) on departed slot(s)`);
@@ -389,6 +408,7 @@ module.exports = {
   isEndTripTerminal,
   ordersBlockingEndTrip,
   resolveEmployeeName,
+  upsertEmployeeLocation,
   // Core operations
   markOrderDelivering,
   markOrderDelivered,

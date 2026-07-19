@@ -205,9 +205,7 @@ export default function CompletedDeliveries() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">{fmt(r.completed_at)}</td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                          r.order_status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                        }`}>{r.order_status}</span>
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>
                       </td>
                       <td className="px-4 py-3">
                         <PodThumbnails evidence={r.delivery_evidence} signatureUrl={r.proof_of_delivery_url} />
@@ -244,9 +242,7 @@ export default function CompletedDeliveries() {
                     <p className="text-xs font-mono text-blue-700 truncate" title={r.id}>{r.id}</p>
                     <p className="font-semibold text-gray-800">{r.customer_name || '—'}</p>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                    r.order_status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                  }`}>{r.order_status}</span>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>
                 </div>
                 <div className="text-sm text-gray-500 space-y-1">
                   <div>

@@ -399,9 +399,6 @@ export default function Schedule() {
         await addTimeSlot(slotData);
       }
 
-      // #region agent log
-      fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'Schedule.js:handleSaveEdit',message:'Time slot saved',data:{savedDate:slotData.date,selectedDateLocal:formatDate(selectedDate),selectedDateRaw:selectedDate?.toString?.()},timestamp:Date.now(),hypothesisId:'A',runId:'date-fix'})}).catch(()=>{});
-      // #endregion
 
       // Refresh time slots to get latest data
       const refreshedSlots = await getAllTimeSlots();

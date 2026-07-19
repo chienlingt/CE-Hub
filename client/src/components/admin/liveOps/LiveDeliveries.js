@@ -4,12 +4,16 @@
 // Route: /dashboard/live-ops  (tab label: "Live Deliveries")
 // Deep-link: /dashboard/live-ops?trip=<timeSlotId>
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CheckCircle, Search } from 'lucide-react';
 import { useActiveTrips } from '../../../hooks/useActiveTrips';
 import { useTripStatus } from '../../../hooks/useTripStatus';
-import { filterTripsBySearch } from '../../../utils/liveOpsFilters';
+import {
+  filterTripsBySearch,
+  filterTripsByDate,
+  countTotalOverdueOrders,
+} from '../../../utils/liveOpsFilters';
 import LiveOpsHeader from './LiveOpsHeader';
 import LiveOpsFilters from './LiveOpsFilters';
 import ActiveTripsList from './ActiveTripsList';
@@ -26,9 +30,15 @@ export default function LiveDeliveries() {
   // Completion banner state
   const [completedBanner, setCompletedBanner] = useState(false);
 
-  const { trips, loading: listLoading, error: listError, lastUpdated, refresh } = useActiveTrips({ date: dateFilter });
+  const { trips, loading: listLoading, error: listError, lastUpdated, refresh } = useActiveTrips({ date: 'all' });
 
-  // Auto-close handler when trip ends
+  const overdueCount = useMemo(() => countTotalOverdueOrders(trips), [trips]);
+
+  const filteredTrips = useMemo(() => {
+    const byDate = filterTripsByDate(trips, dateFilter);
+    return filterTripsBySearch(byDate, searchQuery);
+  }, [trips, dateFilter, searchQuery]);
+
   const handleTripEnded = useCallback(() => {
     setSearchParams({}, { replace: true });
     setCompletedBanner(true);
@@ -59,8 +69,8 @@ export default function LiveDeliveries() {
     setSearchParams({}, { replace: true });
   }
 
-  const filteredTrips = filterTripsBySearch(trips, searchQuery);
   const hasSearchActive = searchQuery.trim().length > 0;
+  const hasFilterEmpty = !listLoading && trips.length > 0 && filteredTrips.length === 0;
 
   return (
     <div className="min-h-full bg-gray-50">
@@ -77,6 +87,7 @@ export default function LiveDeliveries() {
           onDateFilter={setDateFilter}
           searchQuery={searchQuery}
           onSearchQuery={setSearchQuery}
+          overdueCount={overdueCount}
         />
 
         {/* Trip-completed banner */}
@@ -103,8 +114,16 @@ export default function LiveDeliveries() {
           </div>
         )}
 
-        {/* Search no-match state */}
-        {!listLoading && hasSearchActive && trips.length > 0 && filteredTrips.length === 0 && (
+        {/* No-match state */}
+        {hasFilterEmpty && dateFilter === 'overdue' && !hasSearchActive && (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+            <CheckCircle className="h-10 w-10 mb-3 text-green-400" />
+            <p className="text-sm font-medium text-gray-500">No overdue deliveries right now.</p>
+            <p className="text-xs mt-1 text-gray-400">All active orders are up to date.</p>
+          </div>
+        )}
+
+        {hasFilterEmpty && hasSearchActive && (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
             <Search className="h-10 w-10 mb-3" />
             <p className="text-sm font-medium text-gray-500">No trips match your search.</p>
@@ -112,7 +131,14 @@ export default function LiveDeliveries() {
           </div>
         )}
 
-        {(!listLoading || trips.length > 0) && !(hasSearchActive && filteredTrips.length === 0) ? (
+        {hasFilterEmpty && !hasSearchActive && dateFilter !== 'overdue' && (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+            <Search className="h-10 w-10 mb-3" />
+            <p className="text-sm font-medium text-gray-500">No active trips for this date.</p>
+          </div>
+        )}
+
+        {(!listLoading || trips.length > 0) && !hasFilterEmpty ? (
           <ActiveTripsList
             trips={filteredTrips}
             onTripClick={openTrip}

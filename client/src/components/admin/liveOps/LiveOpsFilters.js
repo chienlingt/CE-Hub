@@ -1,19 +1,20 @@
-import { Search, Calendar, X } from 'lucide-react';
+import { Search, Calendar, X, AlertTriangle } from 'lucide-react';
 import { todayLocalDateKey } from '../../../utils/dateKey';
 
 /**
- * Filter bar for Live Deliveries: date chips + search input.
+ * Filter bar for Live Deliveries: date chips + overdue + search input.
  *
  * @param {{
- *   dateFilter: 'today'|'all'|string,
+ *   dateFilter: 'today'|'all'|'overdue'|string,
  *   onDateFilter: (v: string) => void,
  *   searchQuery: string,
  *   onSearchQuery: (v: string) => void,
+ *   overdueCount?: number,
  * }}
  */
-export default function LiveOpsFilters({ dateFilter, onDateFilter, searchQuery, onSearchQuery }) {
+export default function LiveOpsFilters({ dateFilter, onDateFilter, searchQuery, onSearchQuery, overdueCount = 0 }) {
   const today = todayLocalDateKey();
-  const isSpecificDate = dateFilter !== 'today' && dateFilter !== 'all';
+  const isSpecificDate = dateFilter !== 'today' && dateFilter !== 'all' && dateFilter !== 'overdue';
 
   function handleDatePick(e) {
     const val = e.target.value;
@@ -47,6 +48,26 @@ export default function LiveOpsFilters({ dateFilter, onDateFilter, searchQuery, 
           }`}
         >
           All dates
+        </button>
+        <button
+          onClick={() => onDateFilter('overdue')}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+            dateFilter === 'overdue'
+              ? 'bg-red-600 text-white border-red-600'
+              : overdueCount > 0
+                ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          Overdue
+          {overdueCount > 0 && (
+            <span className={`min-w-[1.25rem] px-1 py-0.5 rounded-full text-[10px] font-bold leading-none ${
+              dateFilter === 'overdue' ? 'bg-white/25 text-white' : 'bg-red-600 text-white'
+            }`}>
+              {overdueCount}
+            </span>
+          )}
         </button>
 
         {/* Date picker */}

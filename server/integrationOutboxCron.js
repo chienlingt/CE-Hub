@@ -10,7 +10,7 @@
 //   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus
 //                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed')
 //                             RETURN_DO_CREATE (A5.5 stub) → logs until ERP API confirmed
-//   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp + email
+//   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
 const { writeOdooDeliveryStatus } = require('./services/odooService');
@@ -19,14 +19,11 @@ const {
   markProcessed,
   recordFailure,
 } = require('./services/integrationOutboxService');
-const { sendEmail } = require('./services/emailService');
 const { sendWhatsAppMessage } = require('./services/whatsappService');
 const {
   DEFAULT_BRAND_NAME,
   TEMPLATE_ON_THE_WAY,
   TEMPLATE_D1_REMINDER,
-  SUBJECT_ON_THE_WAY,
-  SUBJECT_D1_REMINDER,
 } = require('./notificationTemplateDefaults');
 
 const prisma = require('./prismaClient');
@@ -109,7 +106,6 @@ async function handleCustomerOnTheWay(row) {
   const {
     orderId,
     phone,
-    email,
     customerName,
     slotDate,
     timeWindowStart,
@@ -121,12 +117,16 @@ async function handleCustomerOnTheWay(row) {
   const settings = await getSettingMap([
     'customer_on_the_way_notification_enabled',
     'template_on_the_way',
-    'subject_on_the_way',
     'notification_from_name',
   ]);
 
   if (settings.customer_on_the_way_notification_enabled === 'false') {
     console.log('[OutboxWorker] CUSTOMER_ON_THE_WAY disabled via settings - skipping send.');
+    return;
+  }
+
+  if (!phone) {
+    console.warn(`[OutboxWorker] CUSTOMER_ON_THE_WAY skipped — no phone for order ${orderId}`);
     return;
   }
 
@@ -141,36 +141,13 @@ async function handleCustomerOnTheWay(row) {
   };
 
   const message = applyTemplate(settings.template_on_the_way || TEMPLATE_ON_THE_WAY, vars);
-  const subject = applyTemplate(settings.subject_on_the_way || SUBJECT_ON_THE_WAY, vars);
 
-  const errors = [];
-
-  // WhatsApp via Green API
-  if (phone) {
-    try {
-      await sendWhatsAppMessage(phone, message);
-      console.log(`[OutboxWorker] On-the-way WhatsApp sent → ${phone}`);
-    } catch (e) {
-      console.warn(`[OutboxWorker] On-the-way WhatsApp failed for ${phone}:`, e.message);
-      errors.push(`WhatsApp: ${e.message}`);
-    }
-  }
-
-  // Email
-  if (email) {
-    try {
-      await sendEmail({
-        to: email,
-        subject,
-        text: message,
-        html: `<p>${message.replace(/\n/g, '<br>')}</p>`,
-        from: `"${brandName}" <${process.env.EMAIL_USER}>`,
-      });
-      console.log(`[OutboxWorker] On-the-way email sent → ${email}`);
-    } catch (e) {
-      console.warn(`[OutboxWorker] On-the-way email failed for ${email}:`, e.message);
-      errors.push(`Email: ${e.message}`);
-    }
+  try {
+    await sendWhatsAppMessage(phone, message);
+    console.log(`[OutboxWorker] On-the-way WhatsApp sent → ${phone}`);
+  } catch (e) {
+    console.warn(`[OutboxWorker] On-the-way WhatsApp failed for ${phone}:`, e.message);
+    throw e;
   }
 
   // Stamp notified_on_the_way_at
@@ -184,15 +161,6 @@ async function handleCustomerOnTheWay(row) {
       console.warn('[OutboxWorker] Failed to stamp notified_on_the_way_at:', e.message);
     }
   }
-
-  // If both channels failed, surface the error so the row gets retried
-  if (!phone && !email) {
-    throw new Error('No phone or email for customer — cannot notify');
-  }
-
-  if (errors.length === 2) {
-    throw new Error(errors.join('; '));
-  }
 }
 
 // ── D-1 reminder handler ──────────────────────────────────────────────────────
@@ -201,7 +169,6 @@ async function handleD1Reminder(row) {
   const {
     orderId,
     phone,
-    email,
     customerName,
     slotDate,
     timeWindowStart,
@@ -213,12 +180,16 @@ async function handleD1Reminder(row) {
   const settings = await getSettingMap([
     'customer_d1_reminder_notification_enabled',
     'template_d1_reminder',
-    'subject_d1_reminder',
     'notification_from_name',
   ]);
 
   if (settings.customer_d1_reminder_notification_enabled === 'false') {
     console.log('[OutboxWorker] CUSTOMER_D1_REMINDER disabled via settings - skipping send.');
+    return;
+  }
+
+  if (!phone) {
+    console.warn(`[OutboxWorker] CUSTOMER_D1_REMINDER skipped — no phone for order ${orderId}`);
     return;
   }
 
@@ -233,32 +204,13 @@ async function handleD1Reminder(row) {
   };
 
   const message = applyTemplate(settings.template_d1_reminder || TEMPLATE_D1_REMINDER, vars);
-  const subject = applyTemplate(settings.subject_d1_reminder || SUBJECT_D1_REMINDER, vars);
 
-  const errors = [];
-
-  if (phone) {
-    try {
-      await sendWhatsAppMessage(phone, message);
-      console.log(`[OutboxWorker] D-1 WhatsApp sent → ${phone}`);
-    } catch (e) {
-      errors.push(`WhatsApp: ${e.message}`);
-    }
-  }
-
-  if (email) {
-    try {
-      await sendEmail({
-        to: email,
-        subject,
-        text: message,
-        html: `<p>${message.replace(/\n/g, '<br>')}</p>`,
-        from: `"${brandName}" <${process.env.EMAIL_USER}>`,
-      });
-      console.log(`[OutboxWorker] D-1 email sent → ${email}`);
-    } catch (e) {
-      errors.push(`Email: ${e.message}`);
-    }
+  try {
+    await sendWhatsAppMessage(phone, message);
+    console.log(`[OutboxWorker] D-1 WhatsApp sent → ${phone}`);
+  } catch (e) {
+    console.warn(`[OutboxWorker] D-1 WhatsApp failed for ${phone}:`, e.message);
+    throw e;
   }
 
   if (orderId) {
@@ -271,9 +223,6 @@ async function handleD1Reminder(row) {
       console.warn('[OutboxWorker] Failed to stamp notified_d1_at:', e.message);
     }
   }
-
-  if (!phone && !email) throw new Error('No phone or email — cannot send reminder');
-  if (errors.length === 2) throw new Error(errors.join('; '));
 }
 
 // ── Internal event handler (logging only) ─────────────────────────────────────

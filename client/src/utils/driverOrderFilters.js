@@ -110,7 +110,7 @@ export function filterByAppointmentWindow(jobs, windowFilter) {
 }
 
 /**
- * Filter jobs to a specific driver tab ('all', 'Scheduled', 'Delivering', 'Completed', 'Issue').
+ * Filter jobs to a specific driver tab ('all', 'Scheduled', 'Delivering', 'Delivered', 'Issue').
  * Hidden-status orders are never shown.
  */
 export function filterByTab(jobs, tab) {
@@ -287,7 +287,7 @@ export function buildWindowOptionsFromGroups(groups) {
  */
 export function computeStats(jobs) {
   const scheduled = jobs.filter(j => ['Scheduled', 'Loaded'].includes(j.status)).length;
-  const completed = jobs.filter(j => ['Delivered', 'Installing', 'Completed'].includes(j.status)).length;
+  const completed = jobs.filter(j => ['Delivered', 'Installing'].includes(j.status)).length;
   const issue     = jobs.filter(j => driverTab(j.status) === 'Issue').length;
   return { scheduled, completed, issue, total: jobs.length };
 }

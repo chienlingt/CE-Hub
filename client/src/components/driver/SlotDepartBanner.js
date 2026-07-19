@@ -39,9 +39,6 @@ export default function SlotDepartBanner({ slots, employeeId, selectedDate, wind
     return true;
   });
 
-  // #region agent log
-  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'SlotDepartBanner.js:filter',message:'Leave warehouse banner filter',data:{windowFilter,selectedDate,totalSlots:slots.length,slots:slots.map(s=>({id:s.id,date:s.date,dateKey:slotDateKey(s.date),ready_to_depart:s.ready_to_depart,slot_status:s.slot_status,all_orders_loaded:s.all_orders_loaded,dateMatch:slotDateKey(s.date)===selectedDate})),readySlotCount:readySlots.length,readySlotIds:readySlots.map(s=>s.id)},timestamp:Date.now(),hypothesisId:'C,D,I'})}).catch(()=>{});
-  // #endregion
 
   if (readySlots.length === 0) return null;
 

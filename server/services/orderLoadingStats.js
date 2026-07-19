@@ -3,7 +3,7 @@
 // Shared helpers for computing per-order and per-slot item loading progress.
 // Used by GET /api/driver/jobs (Option A) and GET /api/orders/:id/loading-status.
 
-const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Completed', 'Cancelled', 'Failed'];
+const END_TRIP_TERMINAL_STATUSES = ['Delivered', 'Cancelled', 'Failed'];
 
 /** Orders that must be fully loaded before Leave warehouse (excludes already-Delivering). */
 const PRE_DEPART_ORDER_STATUSES = ['Pending', 'Scheduled', 'Loaded'];
@@ -95,9 +95,6 @@ function buildSlotSummaries(orders) {
     });
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'orderLoadingStats.js:buildSlotSummaries',message:'Slot depart readiness',data:{slotCount:result.length,slots:result.map(s=>{const preDepart=orders.filter(o=>o.time_slot_id===s.id&&PRE_DEPART_ORDER_STATUSES.includes(o.order_status));return{id:s.id,date:s.date,slot_status:s.slot_status,ready_to_depart:s.ready_to_depart,all_orders_loaded:s.all_orders_loaded,order_count:s.order_count,preDepartCount:preDepart.length,preDepartOrders:preDepart.map(o=>({id:o.id,status:o.order_status,all_loaded:o.all_loaded}))};})},timestamp:Date.now(),hypothesisId:'A,B,E,F',runId:'post-fix'})}).catch(()=>{});
-  // #endregion
 
   return result;
 }

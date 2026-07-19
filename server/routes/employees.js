@@ -125,7 +125,7 @@ router.delete('/:id', async (req, res) => {
   try {
     // Step 1: Re-verify deletability before proceeding
     const pendingOrderCount = await prisma.orders.count({
-      where: { employee_id: employeeId, order_status: { notIn: ['Completed', 'Cancelled'] } },
+      where: { employee_id: employeeId, order_status: { notIn: ['Delivered', 'Cancelled'] } },
     });
     if (pendingOrderCount > 0) {
       return res.status(400).json({ error: `This employee is assigned to ${pendingOrderCount} pending order(s). Please reassign them.` });
@@ -180,7 +180,7 @@ router.get('/:id/deletability', async (req, res) => {
       where: {
         employee_id: employeeId,
         order_status: {
-          notIn: ['Completed', 'Cancelled'],
+          notIn: ['Delivered', 'Cancelled'],
         },
       },
     });

@@ -2,7 +2,7 @@
 // A.5.1 — Driver failure confirmation modal.
 // Separate from UpdateOrderModal (Issue path). Calls PATCH /api/orders/:id/issue
 // with confirm_failure: true per partner A6 documentation.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import PhotoPicker from './PhotoPicker';
 import { FAILURE_REASONS, FAILURE_REASON_STYLES } from '../../utils/failureReasons';
@@ -35,6 +35,17 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
   const [submitting,   setSubmitting]   = useState(false);
   const [error,        setError]        = useState(null);
   const [confirmOpen,  setConfirmOpen]  = useState(false);
+
+  // Location — captured best-effort on modal open
+  const locationRef = useRef(null);
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => { locationRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }; },
+      () => { /* silently ignore — location is optional */ },
+      { timeout: 8000, maximumAge: 30000 }
+    );
+  }, []);
 
   // Load order products
   useEffect(() => {
@@ -75,6 +86,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
     setSubmitting(true);
     setError(null);
     try {
+      const loc = locationRef.current;
       const formData = new FormData();
       formData.append('confirm_failure', 'true');
       formData.append('issue_reason', reason);
@@ -86,6 +98,10 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
         JSON.stringify(items.map(i => ({ id: i.id, item_delivery_status: i.outcome })))
       );
       photoFiles.forEach(f => formData.append('files', f));
+      if (loc) {
+        formData.append('latitude',  String(loc.latitude));
+        formData.append('longitude', String(loc.longitude));
+      }
 
       const res = await fetch(apiUrl(`orders/${order.id}/issue`), {
         method: 'PATCH',

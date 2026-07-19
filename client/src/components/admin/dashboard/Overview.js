@@ -90,7 +90,7 @@ const ActivityItem = ({ icon: Icon, title, description, time, status, deliveredD
         }
         {status && (
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-            status === 'resolved' || status === 'Completed'
+            status === 'resolved' || status === 'Completed' || status === 'Delivered'
               ? 'bg-green-100 text-green-800'
               : status === 'pending' || status === 'Pending'
               ? 'bg-yellow-100 text-yellow-800'
@@ -158,7 +158,7 @@ export default function Overview() {
   const getReportStatus = (r) => r.status ?? '';
 
   const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
-  const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
+  const isCompletedStatus = (status) => ['completed', 'delivered'].includes(normalizeStatus(status));
   const isPendingStatus = (status) => ['pending'].includes(normalizeStatus(status));
 
   // Order created date from schema field
@@ -351,7 +351,7 @@ export default function Overview() {
 
   // Order status distribution for selected month
   const statusData = {
-    labels: ['Completed', 'Pending', 'Other'],
+    labels: ['Delivered', 'Pending', 'Other'],
     datasets: [{
       data: [
         scopedCompleted,
@@ -393,7 +393,7 @@ export default function Overview() {
     labels: monthLabels,
     datasets: [
       {
-        label: 'Completed',
+        label: 'Delivered',
         data: completedOrdersData,
         backgroundColor: 'rgba(16, 185, 129, 0.8)',
         borderColor: '#10B981',

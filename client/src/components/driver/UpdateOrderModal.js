@@ -2,7 +2,7 @@
 // A.4.1 / FR-04-001: Driver status update + POD gate for completion.
 // Issue reporting is now via the Report button (ContactReportModal).
 // Mark as Failed is now via the Failed button (FailDeliveryModal).
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, Camera, PenLine, CheckCircle } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import PhotoPicker from './PhotoPicker';
@@ -37,7 +37,18 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
   const [error,         setError]         = useState(null);
   const [successResult, setSuccessResult] = useState(null);
 
-  const isCompletion = selectedStatus === 'Completed';
+  // Location — captured best-effort on modal open
+  const locationRef = useRef(null);
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => { locationRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }; },
+      () => { /* silently ignore — location is optional */ },
+      { timeout: 8000, maximumAge: 30000 }
+    );
+  }, []);
+
+  const isCompletion = selectedStatus === 'Delivered';
   const noUpdates    = transitions.length === 0;
 
   const podOk    = !isCompletion || (
@@ -65,6 +76,7 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
     setSubmitting(true);
     setError(null);
     try {
+      const loc = locationRef.current;
       if (isCompletion) {
         const form = new FormData();
         form.append('employee_id', employeeId || '');
@@ -72,6 +84,10 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
         for (const f of photoFiles) form.append('photos', f);
         if (podMode === 'signature' && signatureDataUrl) {
           form.append('signature_data_url', signatureDataUrl);
+        }
+        if (loc) {
+          form.append('latitude',  String(loc.latitude));
+          form.append('longitude', String(loc.longitude));
         }
 
         const res = await fetch(apiUrl(`orders/${order.id}/deliver`), {
@@ -89,6 +105,10 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
         form.append('employee_id', employeeId || '');
         form.append('status', selectedStatus);
         if (notes) form.append('delivery_notes', notes);
+        if (loc) {
+          form.append('latitude',  String(loc.latitude));
+          form.append('longitude', String(loc.longitude));
+        }
 
         const res = await fetch(apiUrl(`driver/jobs/${order.id}/status`), {
           method: 'PUT',
@@ -257,7 +277,7 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
             {submitting
               ? 'Saving…'
               : isCompletion
-                ? 'Mark as Completed'
+                ? 'Mark as Delivered'
                 : `Update to ${selectedStatus}`}
           </button>
         )}
@@ -269,7 +289,7 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
             <p className="font-semibold text-gray-800 text-center">Confirm update?</p>
             <p className="text-sm text-gray-500 text-center">
               {isCompletion
-                ? 'This will mark the order as completed and cannot be undone.'
+                ? 'This will mark the order as delivered and cannot be undone.'
                 : `Order will be moved to "${selectedStatus}".`}
             </p>
             <div className="flex gap-3">

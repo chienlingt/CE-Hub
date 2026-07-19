@@ -2,7 +2,7 @@
 // Maps CE-Hub order_status values to the simplified driver display model.
 
 /** Driver tab identifiers */
-export const DRIVER_TABS = ['all', 'Scheduled', 'Delivering', 'Completed', 'Issue'];
+export const DRIVER_TABS = ['all', 'Scheduled', 'Delivering', 'Delivered', 'Issue'];
 
 /** Statuses to hide from the driver view entirely */
 const HIDDEN_STATUSES = ['Pending'];
@@ -13,14 +13,14 @@ const SCHEDULED_STATUSES = ['Scheduled', 'Loaded'];
 /** Statuses that map to the "Delivering" driver tab */
 export const DELIVERING_STATUSES = ['Delivering', 'In Progress'];
 
-/** Statuses that map to the "Completed" driver tab */
-const COMPLETED_STATUSES = ['Delivered', 'Installing', 'Completed'];
+/** Statuses that map to the "Delivered" driver tab */
+const COMPLETED_STATUSES = ['Delivered', 'Installing'];
 
 /** Statuses that map to the "Issue" driver tab */
 const ISSUE_STATUSES = ['Issue', 'Failed', 'Cancelled'];
 
 /** Terminal statuses — Update button disabled */
-export const TERMINAL_STATUSES = ['Delivered', 'Completed', 'Failed', 'Cancelled'];
+export const TERMINAL_STATUSES = ['Delivered', 'Failed', 'Cancelled'];
 
 /**
  * Returns the driver-facing tab name for a given CE-Hub order_status.
@@ -28,10 +28,10 @@ export const TERMINAL_STATUSES = ['Delivered', 'Completed', 'Failed', 'Cancelled
  */
 export function driverTab(orderStatus) {
   if (!orderStatus) return null;
-  if (HIDDEN_STATUSES.includes(orderStatus))   return null;
+  if (HIDDEN_STATUSES.includes(orderStatus))    return null;
   if (SCHEDULED_STATUSES.includes(orderStatus)) return 'Scheduled';
   if (DELIVERING_STATUSES.includes(orderStatus)) return 'Delivering';
-  if (COMPLETED_STATUSES.includes(orderStatus)) return 'Completed';
+  if (COMPLETED_STATUSES.includes(orderStatus)) return 'Delivered';
   if (ISSUE_STATUSES.includes(orderStatus))     return 'Issue';
   return null;
 }
@@ -43,26 +43,23 @@ export function driverTab(orderStatus) {
 export function statusBadge(orderStatus) {
   const tab = driverTab(orderStatus);
   const map = {
-    Scheduled:  { label: 'Scheduled',  color: 'bg-blue-100 text-blue-800'   },
+    Scheduled:  { label: 'Scheduled',  color: 'bg-blue-100 text-blue-800'    },
     Delivering: { label: 'Delivering', color: 'bg-yellow-100 text-yellow-800' },
-    Completed:  {
-      label: orderStatus === 'Delivered' ? 'Delivered' : 'Completed',
-      color: 'bg-green-100 text-green-800',
-    },
-    Issue:      { label: 'Issue',      color: 'bg-red-100 text-red-800'     },
+    Delivered:  { label: 'Delivered',  color: 'bg-green-100 text-green-800'   },
+    Issue:      { label: 'Issue',      color: 'bg-red-100 text-red-800'       },
   };
   return map[tab] || { label: orderStatus || 'Unknown', color: 'bg-gray-100 text-gray-800' };
 }
 
 /**
  * Returns allowed status transitions from the current status.
- * Completion (→ Completed) is handled separately via the POD modal.
+ * Completion (→ Delivered) is handled separately via the POD modal.
  * Issue reporting is handled via the Report button (ContactReportModal).
  * Mark as Failed is handled via the Failed button (FailDeliveryModal).
  * Delivering is no longer a manual transition — use slot depart (Leave warehouse).
  */
 export function allowedTransitions(orderStatus) {
-  if (DELIVERING_STATUSES.includes(orderStatus)) return ['Completed'];
+  if (DELIVERING_STATUSES.includes(orderStatus)) return ['Delivered'];
   return [];
 }
 
@@ -80,9 +77,9 @@ export function isIssueEditMode(orderStatus) {
   return orderStatus === 'Issue';
 }
 
-/** Completed/delivered orders — driver can view or add delivery evidence. */
+/** Delivered orders — driver can view or add delivery evidence. */
 export function isCompletedEvidenceMode(orderStatus) {
-  return orderStatus === 'Completed' || orderStatus === 'Delivered';
+  return orderStatus === 'Delivered';
 }
 
 /** Whether the order is in the Scheduled tab (used for loading badge visibility). */

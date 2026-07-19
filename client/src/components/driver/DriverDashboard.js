@@ -44,7 +44,7 @@ const TAB_LABELS = {
   all:        'All',
   Scheduled:  'Scheduled',
   Delivering: 'Delivering',
-  Completed:  'Completed',
+  Delivered:  'Delivered',
   Issue:      'Issue',
 };
 
@@ -72,9 +72,6 @@ export default function DriverDashboard() {
   const dateJobsRaw = useMemo(
     () => {
       const filtered = jobs.filter(j => j.assigned_date === date);
-      // #region agent log
-      fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'DriverDashboard.js:dateFilter',message:'Date filter applied',data:{selectedDate:date,totalJobs:jobs.length,dateJobCount:filtered.length,allAssignedDates:[...new Set(jobs.map(j=>j.assigned_date))],slotDates:[...new Set(jobs.map(j=>j.slot_date).filter(Boolean))],filteredIds:filtered.map(j=>({id:j.id,assigned:j.assigned_date,slot:j.slot_date}))},timestamp:Date.now(),hypothesisId:'A,B,D',runId:'date-fix'})}).catch(()=>{});
-      // #endregion
       return filtered;
     },
     [jobs, date]
@@ -145,7 +142,7 @@ export default function DriverDashboard() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard icon={<LayoutList className="w-4 h-4" />} label="Total"     value={stats.total}     />
           <StatCard icon={<Truck className="w-4 h-4" />}      label="Scheduled" value={stats.scheduled}  />
-          <StatCard icon={<CheckCircle2 className="w-4 h-4" />} label="Completed" value={stats.completed} />
+          <StatCard icon={<CheckCircle2 className="w-4 h-4" />} label="Delivered" value={stats.completed} />
           <StatCard icon={<AlertTriangle className="w-4 h-4" />} label="Issue"   value={stats.issue}     />
         </div>
       </div>

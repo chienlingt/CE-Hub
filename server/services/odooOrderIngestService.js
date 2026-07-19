@@ -7,7 +7,7 @@
 const prisma = require('../prismaClient');
 const { extractBuildingName } = require('../utils/addressParser');
 
-const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Completed', 'Cancelled'];
+const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Cancelled'];
 
 async function resolveBuilding(address, zip, fallbackName = '') {
   const buildingName = extractBuildingName(address || fallbackName || '') || 'Unknown';

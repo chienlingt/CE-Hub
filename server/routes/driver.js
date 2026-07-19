@@ -45,9 +45,6 @@ router.get('/jobs', async (req, res) => {
     // Sync orders assigned to already-departed slots (e.g. rescheduled after depart)
     await healStrandedOrdersOnDepartedSlots({ employeeId: employee_id, deliveryTeamIds });
 
-    // #region agent log
-    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:teamLookup',message:'Driver team lookup',data:{employee_id,deliveryTeamIds,allAssignments:allAssignments.map(a=>({teamId:a.team?.id,teamType:a.team?.team_type}))},timestamp:Date.now(),hypothesisId:'B,C',runId:'post-fix'})}).catch(()=>{});
-    // #endregion
 
     // Build where: employee_id match OR slot delivery_team match (any assigned delivery team)
     const whereConditions = [{ employee_id }];
@@ -80,9 +77,6 @@ router.get('/jobs', async (req, res) => {
       orderBy: { scheduled_start_date_time: 'asc' },
     });
 
-    // #region agent log
-    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:queryResult',message:'Driver jobs query result',data:{employee_id,deliveryTeamIds,orderCount:orders.length,orders:orders.map(o=>({id:o.id,status:o.order_status,employee_id:o.employee_id,time_slot_id:o.time_slot_id,slotDeliveryTeamId:o.time_slots?.delivery_team_id,scheduledStart:o.scheduled_start_date_time?.toISOString?.()??null}))},timestamp:Date.now(),hypothesisId:'A,B',runId:'post-fix'})}).catch(()=>{});
-    // #endregion
 
     // Augment each order with computed loading stats
     const ordersWithLoading = orders.map(o => ({
@@ -158,9 +152,6 @@ router.get('/jobs', async (req, res) => {
       time_slots:   o.time_slots,
     })));
 
-    // #region agent log
-    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'driver.js:jobs:slots',message:'Slots returned to client',data:{slots:slots.map(s=>({id:s.id,date:s.date,ready_to_depart:s.ready_to_depart,slot_status:s.slot_status,all_orders_loaded:s.all_orders_loaded}))},timestamp:Date.now(),hypothesisId:'A,B,F'})}).catch(()=>{});
-    // #endregion
 
     res.json({ jobs, slots });
   } catch (err) {
@@ -179,10 +170,9 @@ router.put('/jobs/:orderId/delivery-evidence', upload.array('photos', 10), async
     const order = await prisma.orders.findFirst({ where: { id: orderId } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    const ALLOWED = ['Completed', 'Delivered'];
-    if (!ALLOWED.includes(order.order_status)) {
+    if (order.order_status !== 'Delivered') {
       return res.status(400).json({
-        error: 'Delivery evidence can only be edited on completed or delivered orders',
+        error: 'Delivery evidence can only be edited on delivered orders',
       });
     }
 

@@ -115,7 +115,7 @@ async function enqueueSlotEndTripSideEffects(timeSlotId, slotOrders) {
   });
 
   for (const order of slotOrders) {
-    if (order.odoo_order_ref && ['Delivered', 'Completed'].includes(order.order_status)) {
+    if (order.odoo_order_ref && order.order_status === 'Delivered') {
       await enqueue({
         eventType:      'SLOT_STATUS_CHANGED',
         target:         'odoo',

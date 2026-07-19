@@ -17,25 +17,23 @@ const {
   DEFAULT_BRAND_NAME,
   TEMPLATE_ON_THE_WAY,
   TEMPLATE_D1_REMINDER,
-  SUBJECT_ON_THE_WAY,
-  SUBJECT_D1_REMINDER,
 } = require('./notificationTemplateDefaults');
 
 const A3_SETTINGS = [
   {
     key:   'template_on_the_way',
     value: TEMPLATE_ON_THE_WAY,
-    description: 'WhatsApp/email body for CUSTOMER_ON_THE_WAY notification. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
+    description: 'WhatsApp body for CUSTOMER_ON_THE_WAY notification. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'template_d1_reminder',
     value: TEMPLATE_D1_REMINDER,
-    description: 'WhatsApp/email body for the D-1 reminder. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
+    description: 'WhatsApp body for the D-1 reminder. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'notification_from_name',
     value: DEFAULT_BRAND_NAME,
-    description: 'Sender display name used in customer notification emails.',
+    description: 'Brand name used as {brandName} in WhatsApp delivery update templates.',
   },
   {
     key:   'customer_on_the_way_notification_enabled',
@@ -46,16 +44,6 @@ const A3_SETTINGS = [
     key:   'customer_d1_reminder_notification_enabled',
     value: 'true',
     description: 'Master toggle for CUSTOMER_D1_REMINDER notifications.',
-  },
-  {
-    key:   'subject_on_the_way',
-    value: SUBJECT_ON_THE_WAY,
-    description: 'Email subject for CUSTOMER_ON_THE_WAY notifications. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
-  },
-  {
-    key:   'subject_d1_reminder',
-    value: SUBJECT_D1_REMINDER,
-    description: 'Email subject for CUSTOMER_D1_REMINDER notifications. Placeholders: {customerName}, {orderRef}, {slotDate}, {timeWindow}, {address}, {brandName}.',
   },
   {
     key:   'outbox_max_attempts',
