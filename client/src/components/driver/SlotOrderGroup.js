@@ -2,7 +2,7 @@
 // Groups all orders belonging to one time_slot_id into a collapsible box.
 // Absorbs the "Leave warehouse" departure action from SlotDepartBanner.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Truck, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import OrderTaskCard from './OrderTaskCard';
@@ -50,6 +50,17 @@ export default function SlotOrderGroup({
   const [departing, setDeparting]   = useState(false);
   const [departError, setDepartError] = useState(null);
 
+  // Location — captured best-effort; refreshed each render attempt
+  const locationRef = useRef(null);
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => { locationRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }; },
+      () => { /* silently ignore */ },
+      { timeout: 8000, maximumAge: 30000 }
+    );
+  }, []);
+
   const windowLabel = slot ? (formatWindow(slot.time_window_start, slot.time_window_end) || 'Slot') : 'Unassigned';
   const { label: statusLabel, cls: statusCls } = slotStatusBadge(slot?.slot_status);
   const orderCount = jobs.length;
@@ -60,6 +71,12 @@ export default function SlotOrderGroup({
     setDeparting(true);
     setDepartError(null);
 
+    const loc = locationRef.current;
+    const body = {
+      employee_id: employeeId,
+      ...(loc && { latitude: loc.latitude, longitude: loc.longitude }),
+    };
+
     try {
       const res = await fetch(
         `${API_BASE.replace(/\/$/, '')}/api/time-slots/${slot.id}/depart`,
@@ -69,7 +86,7 @@ export default function SlotOrderGroup({
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': '1',
           },
-          body: JSON.stringify({ employee_id: employeeId }),
+          body: JSON.stringify(body),
         }
       );
       const json = await res.json();

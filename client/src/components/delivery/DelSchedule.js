@@ -202,7 +202,7 @@ export default function DeliverySchedule() {
   // Filter orders for delivery (scheduled orders only)
   const deliveryOrders = orders.filter(order => {
     const status = field.orderStatus(order);
-    return ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Delivered', 'Completed'].includes(status);
+    return ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Delivered'].includes(status);
   });
 
   // Filter orders by selected date
@@ -251,8 +251,7 @@ export default function DeliverySchedule() {
     switch (status) {
       case 'Delivering': return 'bg-blue-100 text-blue-800';
       case 'Loaded': return 'bg-indigo-100 text-indigo-800';
-      case 'Delivered': return 'bg-teal-100 text-teal-800';
-      case 'Completed': return 'bg-green-100 text-green-800';
+      case 'Delivered': return 'bg-green-100 text-green-800';
       case 'In Progress': return 'bg-blue-100 text-blue-800';
       case 'Pending': return 'bg-yellow-100 text-yellow-800';
       case 'Failed': return 'bg-red-100 text-red-800';
@@ -299,7 +298,7 @@ export default function DeliverySchedule() {
 
   // A.3.6a: End Trip — calls POST /api/time-slots/:id/end-trip
   const endTrip = async (timeSlotId, slotOrders) => {
-    const nonTerminal = slotOrders.filter(o => !['Delivered','Completed','Cancelled','Failed'].includes(field.orderStatus(o)));
+    const nonTerminal = slotOrders.filter(o => !['Delivered','Cancelled','Failed'].includes(field.orderStatus(o)));
     if (nonTerminal.length > 0) {
       alert(`Cannot end trip — ${nonTerminal.length} order(s) are still in progress.`);
       return;
@@ -409,7 +408,7 @@ export default function DeliverySchedule() {
             Object.entries(groupedOrders).map(([timeSlotId, timeSlotOrders]) => {
               const timeSlot = timeSlots.find(ts => field.timeSlotId(ts) === timeSlotId);
               const totalTime = getTotalEstimatedTime(timeSlotOrders);
-              const completedOrders = timeSlotOrders.filter(o => field.orderStatus(o) === 'Completed').length;
+              const completedOrders = timeSlotOrders.filter(o => field.orderStatus(o) === 'Delivered').length;
 
               // Get team and truck info from timeslot
               const deliveryTeam = timeSlot ? teams.find(t => field.teamId(t) === field.timeSlotDeliveryTeamId(timeSlot)) : null;
@@ -642,7 +641,7 @@ export default function DeliverySchedule() {
                             </div>
 
                             {/* A2 — Loading Checklist (read-only progress) + Unloading Checklist (at customer) */}
-                            {field.orderId(order) && !['Completed'].includes(status) && (
+                            {field.orderId(order) && !['Delivered'].includes(status) && (
                               <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
                                 {/* Loading stage — read-only; departure via DriverDashboard Leave warehouse */}
                                 {!['Delivering', 'Delivered'].includes(status) && (
@@ -716,7 +715,7 @@ export default function DeliverySchedule() {
                             )}
 
                             {/* Additional Info for Completed Orders */}
-                            {field.orderStatus(order) === 'Completed' && field.orderRating(order) && (
+                            {field.orderStatus(order) === 'Delivered' && field.orderRating(order) && (
                               <div className="mt-4 pt-4 border-t border-gray-100">
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center">

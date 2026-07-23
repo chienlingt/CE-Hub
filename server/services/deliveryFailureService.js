@@ -105,9 +105,9 @@ async function confirmFailure(orderId, {
     throw err;
   }
 
-  // ── 6. Configurable photo / remark gates (A5.2) ────────────────────────────
+  // ── 6. Configurable photo gates (A5.2) ────────────────────────────────────
   const settings = await prisma.system_settings.findMany({
-    where: { setting_key: { in: ['failure_require_photo', 'failure_require_remark'] } },
+    where: { setting_key: { in: ['failure_require_photo'] } },
   });
   const settingMap = Object.fromEntries(settings.map(s => [s.setting_key, s.setting_value]));
 
@@ -117,14 +117,10 @@ async function confirmFailure(orderId, {
     err.code = 'PHOTO_REQUIRED';
     throw err;
   }
-  // Description is mandatory when reason is "Other", regardless of system setting
-  const remarkRequired = issue_reason === 'Other' || settingMap.failure_require_remark !== 'false';
+  // Description is mandatory when reason is "Other"
+  const remarkRequired = issue_reason === 'Other';
   if (remarkRequired && (!issue_desc || issue_desc.trim().length === 0)) {
-    const err = new Error(
-      issue_reason === 'Other'
-        ? 'A description is required when the failure reason is "Other".'
-        : 'A description (remark) is required for failure confirmation.'
-    );
+    const err = new Error('A description is required when the failure reason is "Other".');
     err.statusCode = 400;
     err.code = 'REMARK_REQUIRED';
     throw err;

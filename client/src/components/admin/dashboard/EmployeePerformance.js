@@ -91,7 +91,7 @@ export default function EmployeePerformance() {
   const getEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
 
   const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
-  const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
+  const isCompletedStatus = (status) => ['completed', 'delivered'].includes(normalizeStatus(status));
 
   const getRoleLabel = (employee) => {
     const role = employee?.role;

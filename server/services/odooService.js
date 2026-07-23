@@ -64,13 +64,12 @@ async function callModel(model, method, args = [], kwargs = {}) {
  * Adjust the field name to match your Odoo configuration.
  *
  * @param {number} odooOrderId - Odoo sale.order integer id
- * @param {string} localStatus - e.g. 'Delivering', 'Delivered', 'Completed'
+ * @param {string} localStatus - e.g. 'Delivering', 'Delivered'
  */
 async function pushDeliveryStatus(odooOrderId, localStatus) {
   const statusMap = {
     Delivering: 'in_transit',
     Delivered:  'delivered',
-    Completed:  'completed',
   };
 
   const odooStatus = statusMap[localStatus];
@@ -104,7 +103,7 @@ async function getConfirmedOrders(sinceDate = null) {
  * Safe to call from any route — returns null instead of throwing if Odoo is unreachable.
  *
  * @param {string} odooOrderRef - sale.order name, e.g. 'S00042'
- * @param {'Delivering'|'Delivered'|'Completed'|'Failed'} localStatus
+ * @param {'Delivering'|'Delivered'|'Failed'} localStatus
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
@@ -112,7 +111,6 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   const statusMap = {
     Delivering: 'in_transit',
     Delivered:  'delivered',
-    Completed:  'completed',
     Failed:     'failed',
   };
 

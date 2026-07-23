@@ -2,7 +2,7 @@
 const express = require('express');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
-const { departTimeSlot, endTimeSlotTrip } = require('../services/deliveryLifecycleService');
+const { departTimeSlot, endTimeSlotTrip, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const {
   enqueueSlotDepartureSideEffects,
   enqueueSlotEndTripSideEffects,
@@ -42,6 +42,7 @@ router.get('/active', async (req, res) => {
             id: true,
             order_status: true,
             odoo_order_ref: true,
+            overdue_reminder_sent_at: true,
             customers: { select: { full_name: true } },
           },
         },
@@ -51,27 +52,34 @@ router.get('/active', async (req, res) => {
 
     const result = activeSlots.map(slot => {
       const totalOrders     = slot.orders.length;
-      const deliveredOrders = slot.orders.filter(o => ['Delivered', 'Completed'].includes(o.order_status)).length;
+      const deliveredOrders = slot.orders.filter(o => o.order_status === 'Delivered').length;
       const activeOrders    = slot.orders.filter(o => o.order_status === 'Delivering').length;
+      const overdueOrders   = slot.orders.filter(o =>
+        o.order_status === 'Delivering' && slot.date && slot.date < todayKL
+      ).length;
 
       return {
-        id:               slot.id,
-        date:             slot.date,
-        time_window_start: slot.time_window_start,
-        time_window_end:  slot.time_window_end,
-        slot_status:      slot.slot_status,
-        departed_at:      slot.departed_at,
-        truck_plate:      slot.truck?.plate_no || null,
-        delivery_team:    slot.delivery_team   || null,
+        id:                 slot.id,
+        date:               slot.date,
+        time_window_start:  slot.time_window_start,
+        time_window_end:    slot.time_window_end,
+        slot_status:        slot.slot_status,
+        departed_at:        slot.departed_at,
+        truck_plate:        slot.truck?.plate_no || null,
+        delivery_team:      slot.delivery_team   || null,
         orders: {
           total:     totalOrders,
           delivering: activeOrders,
           delivered: deliveredOrders,
           remaining: totalOrders - deliveredOrders,
+          overdue:   overdueOrders,
         },
         order_summaries: slot.orders.map(o => ({
-          odoo_order_ref: o.odoo_order_ref || null,
-          customer_name:  o.customers?.full_name || null,
+          id:                       o.id,
+          odoo_order_ref:           o.odoo_order_ref || null,
+          customer_name:            o.customers?.full_name || null,
+          order_status:             o.order_status,
+          overdue_reminder_sent_at: o.overdue_reminder_sent_at || null,
         })),
       };
     });
@@ -119,6 +127,7 @@ router.get('/:id/status', async (req, res) => {
             order_status: true,
             delivery_address: true,
             odoo_order_ref: true,
+            overdue_reminder_sent_at: true,
             customers: { select: { full_name: true, phone: true } },
           },
           orderBy: { truck_loading_sequence: 'asc' },
@@ -170,7 +179,7 @@ router.get('/:id/status', async (req, res) => {
     });
 
     const totalOrders     = slot.orders.length;
-    const deliveredOrders = slot.orders.filter(o => ['Delivered', 'Completed'].includes(o.order_status)).length;
+    const deliveredOrders = slot.orders.filter(o => o.order_status === 'Delivered').length;
 
     res.json({
       id:               slot.id,
@@ -189,12 +198,13 @@ router.get('/:id/status', async (req, res) => {
         delivered: deliveredOrders,
         remaining: totalOrders - deliveredOrders,
         items: slot.orders.map(o => ({
-          id:               o.id,
-          order_status:     o.order_status,
-          delivery_address: o.delivery_address,
-          odoo_order_ref:   o.odoo_order_ref || null,
-          customer_name:    o.customers?.full_name || null,
-          customer_phone:   o.customers?.phone || null,
+          id:                        o.id,
+          order_status:              o.order_status,
+          delivery_address:          o.delivery_address,
+          odoo_order_ref:            o.odoo_order_ref || null,
+          overdue_reminder_sent_at:  o.overdue_reminder_sent_at || null,
+          customer_name:             o.customers?.full_name || null,
+          customer_phone:            o.customers?.phone || null,
         })),
       },
     });
@@ -230,13 +240,18 @@ router.post('/', async (req, res) => {
 // Trigger: warehouse confirms truck has departed with all items loaded.
 // Side effects: enqueues Odoo sync + customer on-the-way notifications.
 router.post('/:id/depart', async (req, res) => {
-  const { employee_id } = req.body || {};
+  const { employee_id, latitude, longitude } = req.body || {};
 
   try {
     const { timeSlot, ordersUpdated, lorryTrip, activeOrders } = await departTimeSlot(
       req.params.id,
       { employeeId: employee_id }
     );
+
+    // Upsert driver location on depart (best-effort)
+    const lat = latitude  != null ? parseFloat(latitude)  : null;
+    const lng = longitude != null ? parseFloat(longitude) : null;
+    upsertEmployeeLocation(employee_id, lat, lng).catch(() => {});
 
     // Enqueue Odoo sync for each dispatched order (non-blocking)
     enqueueSlotDepartureSideEffects(timeSlot.id, activeOrders).catch(e =>

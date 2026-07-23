@@ -226,6 +226,14 @@ app.listen(port, async () => {
     cron.schedule(reminderSchedule, () => { runD1ReminderCron(); }, { timezone: 'Asia/Kuala_Lumpur' });
     console.log(`[D1Reminder] Cron registered — ${reminderSchedule} MYT.`);
   }
+
+  // Daily overdue delivery check — 23:59 MYT
+  {
+    const cron = require('node-cron');
+    const { runOverdueReminderCron } = require('./overdueReminderCron');
+    cron.schedule('59 23 * * *', () => { runOverdueReminderCron(); }, { timezone: 'Asia/Kuala_Lumpur' });
+    console.log('[OverdueCron] Cron registered — 23:59 MYT daily.');
+  }
 });
 
 process.on('SIGINT', async () => {

@@ -87,7 +87,18 @@ async function isSettingEnabled(key) {
  */
 function normalizePhone(phone) {
   if (!phone) return null;
-  return phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
+  // Remove spaces, dashes, parentheses
+  const clean = phone.replace(/[^\d+]/g, '');
+  if (clean.startsWith('+')) {
+    return clean;
+  }
+  if (clean.startsWith('60')) {
+    return `+${clean}`;
+  }
+  if (clean.startsWith('0')) {
+    return `+60${clean.slice(1)}`;
+  }
+  return `+60${clean}`;
 }
 
 async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, reason }) {
@@ -163,11 +174,7 @@ async function sendWhatsAppMessage(phone, message) {
  */
 async function sendWhatsAppDirect(phone, message) {
   if (!phone) throw new Error('Phone number is required');
-
-  const normalized = phone.startsWith('+')
-    ? phone
-    : `+60${phone.replace(/^0/, '')}`;
-
+  const normalized = normalizePhone(phone);
   return sendViaGreenApi(normalized, message);
 }
 
@@ -235,4 +242,5 @@ module.exports = {
   sendWhatsAppMessage,
   seedWhatsAppSettings,
   isSettingEnabled,
+  normalizePhone,
 };

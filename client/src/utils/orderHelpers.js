@@ -73,7 +73,6 @@ export function getOrderStatusBadge(status) {
     'Scheduled':  { color: 'text-blue-800',   bgColor: 'bg-blue-100',   label: 'Scheduled'  },
     'Delivering': { color: 'text-orange-800', bgColor: 'bg-orange-100', label: 'Delivering' },
     'Delivered':  { color: 'text-green-800',  bgColor: 'bg-green-100',  label: 'Delivered'  },
-    'Completed':  { color: 'text-green-800',  bgColor: 'bg-green-100',  label: 'Completed'  },
     'Installing': { color: 'text-purple-800', bgColor: 'bg-purple-100', label: 'Installing' },
     'Issue':      { color: 'text-red-800',    bgColor: 'bg-red-100',    label: 'Issue'      },
     'Failed':     { color: 'text-red-800',    bgColor: 'bg-red-100',    label: 'Failed'     },

@@ -208,7 +208,7 @@ const InstallationSchedule = () => {
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'In Progress':
         return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'Completed':
+      case 'Delivered':
         return 'bg-green-100 text-green-800 border-green-200';
       case 'Cancelled':
         return 'bg-red-100 text-red-800 border-red-200';
@@ -229,7 +229,7 @@ const InstallationSchedule = () => {
         return <Calendar className="w-4 h-4" />;
       case 'In Progress':
         return <Clock className="w-4 h-4" />;
-      case 'Completed':
+      case 'Delivered':
         return <CheckCircle className="w-4 h-4" />;
       case 'Cancelled':
         return <AlertTriangle className="w-4 h-4" />;
@@ -403,8 +403,8 @@ const InstallationSchedule = () => {
               const installTeam = installSchedule ? teams.find(t => field.teamId(t) === field.installScheduleTeamId(installSchedule)) : null;
               const estArrival = installSchedule ? field.installScheduleEstArrival(installSchedule) : null;
               const orderStatus = field.orderStatus(order);
-              const installStatus = orderStatus === 'Completed'
-                ? 'Completed'
+              const installStatus = orderStatus === 'Delivered'
+                ? 'Delivered'
                 : (installSchedule ? field.installScheduleStatus(installSchedule) : orderStatus);
               const requiresInstaller = orderRequiresInstaller(order);
 
@@ -445,7 +445,7 @@ const InstallationSchedule = () => {
                     )}
                     {requiresInstaller && orderStatus === 'Installing' && (
                       <button
-                        onClick={() => updateOrderStatus(field.orderId(order), 'Completed')}
+                        onClick={() => updateOrderStatus(field.orderId(order), 'Delivered')}
                         className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                         title="Mark Installation Completed"
                       >

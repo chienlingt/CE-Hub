@@ -74,7 +74,7 @@ export default function OrderPerformance() {
   };
 
   const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
-  const isCompletedStatus = (status) => ['completed'].includes(normalizeStatus(status));
+  const isCompletedStatus = (status) => ['completed', 'delivered'].includes(normalizeStatus(status));
 
   // Robust getOrderCreatedDate: returns Date object or null if no valid date found.
   const getOrderCreatedDate = (order) => {

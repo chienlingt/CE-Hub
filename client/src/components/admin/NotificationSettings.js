@@ -18,10 +18,8 @@ const PROACTIVE_DEFAULTS = {
   notification_from_name: 'TBM Delivery',
   template_on_the_way:
     'Hi {customerName},\n\nYour order {orderRef} is on the way with TBM Delivery.\n\nDate: {slotDate}\nTime: {timeWindow}\nDelivery Address: {address}\n\nPlease ensure someone is available to receive the delivery. Our driver will contact you if needed.\n\n— {brandName}',
-  subject_on_the_way: 'Your TBM delivery is on the way — {orderRef}',
   template_d1_reminder:
     'Hi {customerName},\n\nFriendly reminder: your TBM delivery for order {orderRef} is scheduled for tomorrow.\n\nDate: {slotDate}\nTime: {timeWindow}\nDelivery Address: {address}\n\nPlease ensure someone is available to sign for the delivery. Reply to this message if you need to reschedule.\n\n— {brandName}',
-  subject_d1_reminder: 'Reminder: delivery tomorrow — {orderRef}',
   customer_on_the_way_notification_enabled: 'true',
   customer_d1_reminder_notification_enabled: 'true',
 };
@@ -346,9 +344,7 @@ export default function NotificationSettings() {
 
   const fromName        = settings.notification_from_name ?? PROACTIVE_DEFAULTS.notification_from_name;
   const onTheWayTemplate = settings.template_on_the_way ?? PROACTIVE_DEFAULTS.template_on_the_way;
-  const onTheWaySubject  = settings.subject_on_the_way ?? PROACTIVE_DEFAULTS.subject_on_the_way;
   const d1Template       = settings.template_d1_reminder ?? PROACTIVE_DEFAULTS.template_d1_reminder;
-  const d1Subject          = settings.subject_d1_reminder ?? PROACTIVE_DEFAULTS.subject_d1_reminder;
 
   if (loading) {
     return (
@@ -406,7 +402,7 @@ export default function NotificationSettings() {
             onToggle={null}
           >
             <p className="text-xs text-gray-500">
-              Used as the email sender display name and as {'{brandName}'} in proactive templates.
+              Used as {'{brandName}'} in WhatsApp delivery update templates.
             </p>
             <input
               type="text"
@@ -434,7 +430,7 @@ export default function NotificationSettings() {
               checked={onTheWayEnabled}
               onToggle={() => toggleSetting('customer_on_the_way_notification_enabled')}
             >
-              <p className="text-xs text-gray-500">Sent when a slot departs (WhatsApp + email).</p>
+              <p className="text-xs text-gray-500">Sent when a slot departs (WhatsApp).</p>
               <TemplateEditor
                 value={onTheWayTemplate}
                 onChange={v => setSettings(p => ({ ...p, template_on_the_way: v }))}
@@ -443,17 +439,7 @@ export default function NotificationSettings() {
                 disabled={!onTheWayEnabled}
                 color="#16a34a"
                 placeholders={PROACTIVE_PLACEHOLDERS}
-                label="Message template"
-              />
-              <TemplateEditor
-                value={onTheWaySubject}
-                onChange={v => setSettings(p => ({ ...p, subject_on_the_way: v }))}
-                onSave={() => saveSetting('subject_on_the_way', onTheWaySubject)}
-                saving={saving.subject_on_the_way}
-                disabled={!onTheWayEnabled}
-                color="#16a34a"
-                placeholders={PROACTIVE_PLACEHOLDERS}
-                label="Email subject"
+                label="WhatsApp message template"
               />
             </NotifCard>
 
@@ -465,7 +451,7 @@ export default function NotificationSettings() {
               checked={d1ReminderEnabled}
               onToggle={() => toggleSetting('customer_d1_reminder_notification_enabled')}
             >
-              <p className="text-xs text-gray-500">Sent for tomorrow&apos;s scheduled orders (WhatsApp + email).</p>
+              <p className="text-xs text-gray-500">Sent for tomorrow&apos;s scheduled orders (WhatsApp).</p>
               <TemplateEditor
                 value={d1Template}
                 onChange={v => setSettings(p => ({ ...p, template_d1_reminder: v }))}
@@ -474,17 +460,7 @@ export default function NotificationSettings() {
                 disabled={!d1ReminderEnabled}
                 color="#2563eb"
                 placeholders={PROACTIVE_PLACEHOLDERS}
-                label="Message template"
-              />
-              <TemplateEditor
-                value={d1Subject}
-                onChange={v => setSettings(p => ({ ...p, subject_d1_reminder: v }))}
-                onSave={() => saveSetting('subject_d1_reminder', d1Subject)}
-                saving={saving.subject_d1_reminder}
-                disabled={!d1ReminderEnabled}
-                color="#2563eb"
-                placeholders={PROACTIVE_PLACEHOLDERS}
-                label="Email subject"
+                label="WhatsApp message template"
               />
             </NotifCard>
           </div>

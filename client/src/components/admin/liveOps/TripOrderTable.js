@@ -7,7 +7,7 @@ export default function TripOrderTable({ items, trip }) {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm min-w-[640px]">
+      <table className="w-full text-sm min-w-[800px]">
         <thead>
           <tr className="border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
             <th className="py-2 pl-4 pr-2 text-left w-8">#</th>
@@ -16,7 +16,7 @@ export default function TripOrderTable({ items, trip }) {
             <th className="py-2 pr-3 text-left">Customer</th>
             <th className="py-2 pr-3 text-left">Address</th>
             <th className="py-2 pr-3 text-left">Contact</th>
-            <th className="py-2 pr-4 text-right">Status</th>
+            <th className="py-2 pr-4 text-right min-w-[11rem]">Status / Overdue</th>
           </tr>
         </thead>
         <tbody>

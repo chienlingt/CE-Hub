@@ -1,7 +1,7 @@
 const express             = require('express');
 const router              = express.Router();
 const prisma              = require('../prismaClient');
-const { sendWhatsAppDirect } = require('../services/whatsappService');
+const { sendWhatsAppDirect, normalizePhone } = require('../services/whatsappService');
 
 // ── Per-user notifications ────────────────────────────────────────────────────
 
@@ -119,7 +119,7 @@ router.post('/whatsapp/:orderId', async (req, res) => {
       .replace('{reason}',       reason);
 
     // 3. Send directly — bypasses the enabled toggle (admin manual send)
-    const normalized = phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
+    const normalized = normalizePhone(phone);
     const result     = await sendWhatsAppDirect(phone, body);
 
     console.log(`[WhatsApp] Manual send to ${normalized}:`, result);

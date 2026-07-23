@@ -7,7 +7,7 @@ const { scheduleOrders, updateTimeslotResources } = require('../services/schedul
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
 
-const { markOrderDelivering, markOrderDelivered } = require('../services/deliveryLifecycleService');
+const { markOrderDelivering, markOrderDelivered, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
 const upload = require('../middleware/upload');
 const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
@@ -288,7 +288,7 @@ router.get('/completed-deliveries', async (req, res) => {
     const { date_from, date_to, sync_status } = req.query;
 
     const where = {
-      order_status: { in: ['Delivered', 'Completed'] },
+      order_status: { in: ['Delivered'] },
     };
 
     if (date_from || date_to) {
@@ -329,10 +329,7 @@ router.get('/completed-deliveries', async (req, res) => {
     const outboxRows = orderIds.length
       ? await prisma.integration_outbox.findMany({
           where: {
-            idempotency_key: { in: [
-              ...orders.map(o => `order:${o.id}:odoo:Delivered`),
-              ...orders.map(o => `order:${o.id}:odoo:Completed`),
-            ]},
+            idempotency_key: { in: orders.map(o => `order:${o.id}:odoo:Delivered`) },
           },
           orderBy: { created_at: 'desc' },
         })
@@ -906,11 +903,14 @@ router.put('/:id', async (req, res) => {
 // PATCH /:id/status - Update order_status only (shared by warehouse/delivery/installer)
 router.patch('/:id/status', async (req, res) => {
   try {
-    const { order_status } = req.body || {};
+    const { order_status, employee_id, latitude, longitude } = req.body || {};
 
     if (!order_status || typeof order_status !== 'string') {
       return res.status(400).json({ error: 'order_status is required' });
     }
+
+    // Treat incoming 'Completed' as 'Delivered' (statuses merged)
+    const canonicalStatus = order_status === 'Completed' ? 'Delivered' : order_status;
 
     const now = new Date();
     const existingOrder = await prisma.orders.findUnique({
@@ -919,7 +919,8 @@ router.patch('/:id/status', async (req, res) => {
         delivery_start_date_time: true,
         delivery_end_date_time: true,
         install_start_date_time: true,
-        install_end_date_time: true
+        install_end_date_time: true,
+        employee_id: true,
       }
     });
 
@@ -928,38 +929,36 @@ router.patch('/:id/status', async (req, res) => {
     }
 
     const data = {
-      order_status,
+      order_status: canonicalStatus,
       updated_at: now
     };
 
-    if (order_status === 'Delivering') {
+    if (canonicalStatus === 'Delivering') {
       data.delivery_start_date_time = now;
       data.actual_start_date_time = now;
     }
 
-    if (order_status === 'Delivered') {
+    if (canonicalStatus === 'Delivered') {
       data.delivery_end_date_time = now;
       data.actual_arrival_date_time = now;
+      if (latitude  != null) data.delivered_latitude  = parseFloat(latitude);
+      if (longitude != null) data.delivered_longitude = parseFloat(longitude);
     }
 
-    if (order_status === 'Installing') {
+    if (canonicalStatus === 'Installing') {
       data.install_start_date_time = now;
-    }
-
-    if (order_status === 'Completed') {
-      if (!existingOrder.delivery_end_date_time) {
-        data.delivery_end_date_time = now;
-        data.actual_arrival_date_time = now;
-      }
-      if (existingOrder.install_start_date_time && !existingOrder.install_end_date_time) {
-        data.install_end_date_time = now;
-      }
     }
 
     const updatedOrder = await prisma.orders.update({
       where: { id: req.params.id },
       data
     });
+
+    // Upsert driver location on every status change (best-effort)
+    const driverId = employee_id || existingOrder.employee_id;
+    const lat = latitude  != null ? parseFloat(latitude)  : null;
+    const lng = longitude != null ? parseFloat(longitude) : null;
+    await upsertEmployeeLocation(driverId, lat, lng);
 
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
@@ -1232,9 +1231,6 @@ router.patch('/:id', async (req, res) => {
     }
 
     const slotAfterUpdate = await prisma.time_slots.findUnique({ where: { id: time_slot_id }, select: { delivery_team_id: true, date: true } });
-    // #region agent log
-    fetch('http://127.0.0.1:7869/ingest/bb893903-e6fa-49ce-bc0f-08c7f79bdc83',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'008708'},body:JSON.stringify({sessionId:'008708',location:'orders.js:PATCH:scheduled',message:'Order scheduled via admin PATCH',data:{orderId:req.params.id,orderStatus:updatedOrder.order_status,employee_id:updatedOrder.employee_id,time_slot_id:updatedOrder.time_slot_id,slotDeliveryTeamId:slotAfterUpdate?.delivery_team_id,slotDate:slotAfterUpdate?.date,scheduledStart:updatedOrder.scheduled_start_date_time?.toISOString?.()??null},timestamp:Date.now(),hypothesisId:'A,B,D',runId:'post-fix'})}).catch(()=>{});
-    // #endregion
 
     console.log(`Order ${req.params.id} reassigned to timeslot ${time_slot_id}`);
     return res.json({ success: true, order: updatedOrder });
@@ -1459,13 +1455,16 @@ router.post('/:id/deliver', upload.fields([
   { name: 'signature', maxCount: 1  },
 ]), async (req, res) => {
   try {
-    const { employee_id, delivery_notes, signature_data_url } = req.body;
+    const { employee_id, delivery_notes, signature_data_url, latitude, longitude } = req.body;
 
     const photoFiles   = req.files?.photos    || [];
     const sigFiles     = req.files?.signature || [];
 
     // Determine if this is a driver web completion (has POD) or a legacy warehouse tablet call
     const hasAnyPod = photoFiles.length > 0 || sigFiles.length > 0 || !!signature_data_url;
+
+    const lat = latitude  != null ? parseFloat(latitude)  : null;
+    const lng = longitude != null ? parseFloat(longitude) : null;
 
     if (hasAnyPod) {
       // A.4 path — driver web dashboard with full POD + completion chain
@@ -1476,6 +1475,8 @@ router.post('/:id/deliver', upload.fields([
         deliveryNotes:    delivery_notes || null,
         photoFiles,
         signatureDataUrl,
+        latitude:         lat,
+        longitude:        lng,
       });
 
       return res.json({
@@ -1505,7 +1506,7 @@ router.post('/:id/deliver', upload.fields([
     }
 
     const now     = new Date();
-    const updated = await markOrderDelivered(req.params.id, { employeeId: employee_id, now });
+    const updated = await markOrderDelivered(req.params.id, { employeeId: employee_id, now, latitude: lat, longitude: lng });
 
     let deliveredByName = null;
     if (employee_id) {
@@ -1691,6 +1692,8 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
         issue_desc,
         order_products_status: rawItems,
         employee_id,
+        latitude,
+        longitude,
       } = req.body;
 
       // order_products_status may arrive as a JSON string when sent as FormData
@@ -1710,6 +1713,11 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
         employee_id: employee_id || undefined,
         evidence_paths,
       });
+
+      // Upsert driver location on failure confirmation (best-effort)
+      const lat = latitude  != null ? parseFloat(latitude)  : null;
+      const lng = longitude != null ? parseFloat(longitude) : null;
+      await upsertEmployeeLocation(employee_id, lat, lng);
 
       return res.json({ success: true, order });
     } catch (err) {
@@ -1777,6 +1785,67 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
   }
 });
 
+// POST /:id/remind-driver — Admin manually triggers a WhatsApp reminder to the driver
+// for an overdue order (still Delivering past the current day's end-of-day cut-off).
+router.post('/:id/remind-driver', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({
+      where:   { id: req.params.id },
+      include: {
+        employees:  { select: { name: true, display_name: true, contact_number: true } },
+        time_slots: { select: { date: true } },
+        customers:  { select: { full_name: true } },
+      },
+    });
+
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.order_status !== 'Delivering') {
+      return res.status(400).json({
+        error: `Cannot remind driver — order status is "${order.order_status}", expected "Delivering".`,
+        code:  'NOT_DELIVERING',
+      });
+    }
+
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (order.time_slots?.date && order.time_slots.date >= today) {
+      return res.status(400).json({
+        error: 'Cannot remind driver — delivery slot is not overdue yet.',
+        code:  'NOT_OVERDUE',
+      });
+    }
+
+    const driverPhone = order.employees?.contact_number;
+    if (!driverPhone) {
+      return res.status(400).json({
+        error: 'Driver has no contact number on record — cannot send WhatsApp reminder.',
+        code:  'NO_DRIVER_PHONE',
+      });
+    }
+
+    const driverName   = order.employees?.display_name || order.employees?.name || 'Driver';
+    const customerName = order.customers?.full_name || 'customer';
+    const orderRef     = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+    const address      = order.delivery_address || '';
+
+    const message = `Hi ${driverName}, please update the delivery status for order #${orderRef} (${customerName} — ${address}). If the delivery could not be completed, mark it as Failed Delivery before end of day.`;
+
+    const { sendWhatsAppDirect } = require('../services/whatsappService');
+    await sendWhatsAppDirect(driverPhone, message);
+
+    const updatedOrder = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  { overdue_reminder_sent_at: new Date() },
+    });
+
+    console.log(`[Overdue] Reminder sent to driver ${driverName} for order ${req.params.id}`);
+    return res.json({ success: true, order: updatedOrder });
+  } catch (err) {
+    console.error('POST /api/orders/:id/remind-driver error', err);
+    res.status(500).json({ error: 'Failed to send driver reminder', details: err.message });
+  }
+});
+
 // DELETE /api/orders/:id/scan-session — A2: admin resets all scan progress for an order
 router.delete('/:id/scan-session', async (req, res) => {
   try {
@@ -1786,7 +1855,7 @@ router.delete('/:id/scan-session', async (req, res) => {
     });
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    const lockedStatuses = ['Delivered', 'Completed', 'Failed', 'Cancelled'];
+    const lockedStatuses = ['Delivered', 'Failed', 'Cancelled'];
     if (lockedStatuses.includes(order.order_status)) {
       return res.status(400).json({
         error: `Cannot reset scans for an order with status '${order.order_status}'`,

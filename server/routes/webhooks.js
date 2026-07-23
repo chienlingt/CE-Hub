@@ -156,9 +156,9 @@ router.post('/odoo/order-cancel', verifySecret, async (req, res) => {
       return res.status(404).json({ error: `Order not found for ref: ${odoo_order_ref}` });
     }
 
-    if (['Delivered', 'Completed'].includes(order.order_status)) {
+    if (order.order_status === 'Delivered') {
       return res.status(409).json({
-        error: 'Cannot cancel an order that is already delivered or completed',
+        error: 'Cannot cancel an order that is already delivered.',
       });
     }
 

@@ -3,8 +3,8 @@
 // A.4 Delivery Completion Processing
 //
 // Called when a driver marks an order as delivered via the driver web dashboard.
-// Enforces the scan/unload gate, captures POD, resolves final status
-// (Delivered vs Completed), enqueues Odoo sync, and auto-closes the slot trip.
+// Enforces the scan/unload gate, captures POD, sets final status to Delivered,
+// enqueues Odoo sync, and auto-closes the slot trip.
 
 const prisma = require('../prismaClient');
 const {
@@ -12,6 +12,7 @@ const {
   isEndTripTerminal,
   ordersBlockingEndTrip,
   departTimeSlot,
+  upsertEmployeeLocation,
 } = require('./deliveryLifecycleService');
 const {
   enqueue,
@@ -137,7 +138,7 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
  *   - POD present (FR-04-003): at least one photo file OR signature data-URL
  *
  * Then:
- *   - Resolves final status: Delivered (install required) or Completed
+ *   - Sets final status to Delivered
  *   - Persists completion fields
  *   - Enqueues Odoo sync via outbox
  *   - Attempts auto-close of the slot trip
@@ -149,6 +150,8 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
  *   deliveryNotes?: string,
  *   photoFiles?: Array<Express.Multer.File>,
  *   signatureDataUrl?: string,   // base64 data:image/png;base64,...
+ *   latitude?: number,
+ *   longitude?: number,
  * }} options
  * @returns {{ order, finalStatus, slotAutoClosed, autoDeparted, odooEnqueued }}
  */
@@ -157,6 +160,8 @@ async function processDeliveryCompletion(orderId, {
   deliveryNotes,
   photoFiles = [],
   signatureDataUrl,
+  latitude,
+  longitude,
 } = {}) {
 
   // ── Step 1: Load order with products ──────────────────────────────────────
@@ -197,11 +202,8 @@ async function processDeliveryCompletion(orderId, {
     throw err;
   }
 
-  // ── Step 4: Resolve final status ──────────────────────────────────────────
-  const requiresInstaller = order.order_products.some(
-    op => op.products?.installer_team_required_flag === true
-  );
-  const finalStatus = requiresInstaller ? 'Delivered' : 'Completed';
+  // ── Step 4: Final status — always Delivered (delivery + installation done simultaneously) ──
+  const finalStatus = 'Delivered';
 
   // ── Step 5: Persist ───────────────────────────────────────────────────────
   const now = new Date();
@@ -223,6 +225,8 @@ async function processDeliveryCompletion(orderId, {
     updated_at:               now,
     delivery_evidence:        [...existingEvidence, ...newPhotoPaths],
     proof_of_delivery_url:    proofUrl,
+    ...(latitude  != null && { delivered_latitude:  latitude  }),
+    ...(longitude != null && { delivered_longitude: longitude }),
   };
 
   if (deliveryNotes !== undefined && deliveryNotes !== null) {
@@ -233,6 +237,9 @@ async function processDeliveryCompletion(orderId, {
     where: { id: orderId },
     data:  updateData,
   });
+
+  // Upsert driver's current location (non-fatal)
+  await upsertEmployeeLocation(employeeId, latitude, longitude);
 
   // ── Step 6: Odoo sync via outbox (A.4.4) ─────────────────────────────────
   let odooEnqueued = false;
@@ -263,7 +270,7 @@ async function processDeliveryCompletion(orderId, {
     await prisma.notifications.create({
       data: {
         user_id: order.customers.id,
-        message: `Your delivery for order #${orderId.slice(0, 8).toUpperCase()} has been ${finalStatus === 'Delivered' ? 'delivered' : 'completed'}.`,
+        message: `Your delivery for order #${orderId.slice(0, 8).toUpperCase()} has been delivered.`,
         type:    'success',
       },
     }).catch(e => console.error('[A4] Notification create failed:', e.message));

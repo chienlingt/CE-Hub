@@ -202,7 +202,7 @@ const WarehouseLoadingSchedule = () => {
       // Find orders for this timeslot
       const slotOrders = orders.filter(o => field.orderTimeSlotId(o) === field.timeSlotId(ts));
       const status = slotOrders.length === 0 ? 'Scheduled' :
-                     slotOrders.every(o => field.orderStatus(o) === 'Completed') ? 'Completed' :
+                     slotOrders.every(o => field.orderStatus(o) === 'Delivered') ? 'Delivered' :
                      slotOrders.some(o => field.orderStatus(o) === 'In Progress') ? 'Loading' : 'Scheduled';
 
       return {
@@ -402,7 +402,7 @@ const WarehouseLoadingSchedule = () => {
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'Loading':
         return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'Completed':
+      case 'Delivered':
         return 'bg-green-100 text-green-800 border-green-200';
       case 'Ready for Loading':
         return 'bg-purple-100 text-purple-800 border-purple-200';
@@ -423,8 +423,6 @@ const WarehouseLoadingSchedule = () => {
         return <Calendar className="w-4 h-4" />;
       case 'Loading':
         return <RotateCcw className="w-4 h-4" />;
-      case 'Completed':
-        return <CheckCircle className="w-4 h-4" />;
       case 'Ready for Loading':
         return <Package className="w-4 h-4" />;
       case 'Loading in Progress':
