@@ -59,14 +59,14 @@ router.get('/active', async (req, res) => {
       ).length;
 
       return {
-        id:               slot.id,
-        date:             slot.date,
-        time_window_start: slot.time_window_start,
-        time_window_end:  slot.time_window_end,
-        slot_status:      slot.slot_status,
-        departed_at:      slot.departed_at,
-        truck_plate:      slot.truck?.plate_no || null,
-        delivery_team:    slot.delivery_team   || null,
+        id:                 slot.id,
+        date:               slot.date,
+        time_window_start:  slot.time_window_start,
+        time_window_end:    slot.time_window_end,
+        slot_status:        slot.slot_status,
+        departed_at:        slot.departed_at,
+        truck_plate:        slot.truck?.plate_no || null,
+        delivery_team:      slot.delivery_team   || null,
         orders: {
           total:     totalOrders,
           delivering: activeOrders,
