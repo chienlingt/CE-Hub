@@ -811,9 +811,9 @@ router.put('/:id', async (req, res) => {
 
     // If products array is provided, update order_products
     if (products && Array.isArray(products)) {
-      // Delete existing order_products
+      // Only delete CE Hub-managed lines — Odoo-sourced lines have no product_id so are preserved
       await prisma.order_products.deleteMany({
-        where: { order_id: req.params.id }
+        where: { order_id: req.params.id, NOT: { product_id: null } }
       });
 
       // Update order with new products

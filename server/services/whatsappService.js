@@ -87,7 +87,8 @@ async function isSettingEnabled(key) {
  */
 function normalizePhone(phone) {
   if (!phone) return null;
-  return phone.startsWith('+') ? phone : `+60${phone.replace(/^0/, '')}`;
+  const digits = phone.replace(/[\s\-()]/g, '');
+  return digits.startsWith('+') ? digits : `+60${digits.replace(/^0/, '')}`;
 }
 
 async function sendDeliveryFailureWhatsApp(toPhone, { customerName, orderRef, reason }) {

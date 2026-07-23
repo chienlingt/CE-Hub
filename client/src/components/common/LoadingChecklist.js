@@ -38,7 +38,7 @@ function ItemStatusRow({ item, stage, idx }) {
   const isPending = status === 'pending';
   const isWaiting = stage === 'driver' && isPending;
 
-  const name = item.products?.product_name || `Item #${item.id}`;
+  const name = item.products?.product_name || item.odoo_product_name || `Item #${item.id}`;
 
   const isUnloaded = status === 'unloaded';
 

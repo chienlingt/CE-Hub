@@ -106,6 +106,7 @@ export function formatDateTime(dateTime) {
   if (!dateTime) return '-';
   const date = new Date(dateTime);
   return date.toLocaleString('en-MY', {
+    timeZone: 'Asia/Kuala_Lumpur',
     year: 'numeric',
     month: 'short',
     day: '2-digit',

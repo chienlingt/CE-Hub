@@ -333,7 +333,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
             ) : (
               <div className="space-y-2">
                 {items.map(item => {
-                  const name   = item.products?.product_name || `Item #${item.id}`;
+                  const name   = item.products?.product_name || item.odoo_product_name || `Item #${item.id}`;
                   const status = item.item_delivery_status || 'pending';
                   const cfg    = ITEM_STATUS[status] || ITEM_STATUS.pending;
 

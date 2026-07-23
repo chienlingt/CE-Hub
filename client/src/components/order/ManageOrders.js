@@ -380,40 +380,52 @@ export default function ManageOrders() {
 
       {/* Orders Table */}
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
+        <table className="w-full table-fixed">
+          <colgroup>
+            <col className="w-36" />
+            <col />
+            <col className="w-16" />
+            <col className="w-24" />
+            <col className="w-24" />
+            <col className="w-28" />
+            <col className="w-44" />
+            <col className="w-28" />
+          </colgroup>
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Order #
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Customer
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Items
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Status
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Created
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Preferred
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Scheduled (MYT)
+              </th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredOrders.length === 0 ? (
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Order #
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Customer
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Products
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Created
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Scheduled
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
+                <td colSpan="8" className="px-4 py-8 text-center text-gray-500">
+                  No orders found
+                </td>
               </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredOrders.length === 0 ? (
-                <tr>
-                  <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
-                    No orders found
-                  </td>
-                </tr>
               ) : (
                 filteredOrders.map((order) => (
                   <OrderRow
@@ -429,7 +441,6 @@ export default function ManageOrders() {
               )}
             </tbody>
           </table>
-        </div>
       </div>
 
       {/* Edit Modal */}
@@ -490,31 +501,36 @@ function OrderRow({ order, isExpanded, onView, onEdit, onAssignTimeslot, editDea
 
   return (
     <>
-      <tr className="hover:bg-gray-50">
-        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-          {order.id.substring(0, 8)}...
+      <tr className="hover:bg-gray-50 transition-colors">
+        <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || order.id}>
+          {order.odoo_order_ref || `${order.id.substring(0, 8)}...`}
         </td>
-        <td className="px-6 py-4 whitespace-nowrap">
-          <div className="text-sm font-medium text-gray-900">
+        <td className="px-4 py-3 min-w-0">
+          <div className="text-sm font-medium text-gray-900 truncate">
             {order.customers?.full_name || 'N/A'}
           </div>
-          <div className="text-sm text-gray-500">{order.customers?.phone || ''}</div>
+          <div className="text-xs text-gray-400 truncate">{order.customers?.phone || ''}</div>
         </td>
-        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-          {productCount} {productCount === 1 ? 'item' : 'items'}
+        <td className="px-4 py-3 text-sm text-gray-500">
+          {productCount}
         </td>
-        <td className="px-6 py-4 whitespace-nowrap">
-          <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusBadge.bgColor} ${statusBadge.color}`}>
+        <td className="px-4 py-3">
+          <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${statusBadge.bgColor} ${statusBadge.color}`}>
             {statusBadge.label}
           </span>
         </td>
-        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
           {formatDate(order.created_at)}
         </td>
-        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+          {order.preferred_delivery_time_start
+            ? `${order.preferred_delivery_time_start}–${order.preferred_delivery_time_end || ''}`
+            : '-'}
+        </td>
+        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
           {order.scheduled_start_date_time ? formatDateTime(order.scheduled_start_date_time) : '-'}
         </td>
-        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+        <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
           <button
             onClick={() => onView(order.id)}
             className="text-blue-600 hover:text-blue-900 mr-3"
@@ -559,7 +575,7 @@ function ExpandedOrderDetails({ order, editDeadlineHours }) {
 
   return (
     <tr>
-      <td colSpan="7" className="px-6 py-4 bg-gray-50">
+      <td colSpan="8" className="px-4 py-4 bg-gray-50">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Customer Info */}
           <div>
@@ -633,16 +649,23 @@ function ExpandedOrderDetails({ order, editDeadlineHours }) {
             <div className="space-y-2">
               {order.order_products?.map((op, idx) => (
                 <div key={idx} className="bg-white p-3 rounded border border-gray-200 text-sm">
-                  <div className="flex justify-between">
-                    <span className="font-medium">{op.products?.product_name || 'Unknown Product'}</span>
-                    <span className="text-gray-600">Qty: {op.quantity}</span>
+                  <div className="flex justify-between items-start">
+                    <span className="font-medium text-gray-900">
+                      {op.products?.product_name || op.odoo_product_name || 'Unknown Product'}
+                    </span>
+                    <span className="text-gray-600 ml-2 shrink-0">Qty: {op.quantity}</span>
                   </div>
-                  <div className="mt-1 text-gray-600">
+                  {op.assigned_serial && (
+                    <div className="mt-1 text-gray-500">
+                      S/N: <span className="font-mono">{op.assigned_serial}</span>
+                    </div>
+                  )}
+                  <div className="mt-1 text-gray-500">
                     <span className="mr-4">Service: {getServiceTypeLabel(op.service_type)}</span>
                     {op.dismantle_required && <span className="text-orange-600">Dismantle Required</span>}
                   </div>
                   {(op.custom_installation_time_min || op.custom_installation_time_max) && (
-                    <div className="mt-1 text-gray-600">
+                    <div className="mt-1 text-gray-500">
                       Installation Time: {op.custom_installation_time_min || 0}-{op.custom_installation_time_max || 0} min
                     </div>
                   )}
@@ -765,16 +788,18 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
         setCustomers(Array.isArray(customersData) ? customersData : []);
         setAllProducts(Array.isArray(productsData) ? productsData : []);
 
-        // Initialize cart from order_products
-        const initialCart = (order.order_products || []).map(op => ({
-          product: op.products,
-          quantity: op.quantity || 1,
-          serviceType: op.service_type || 'delivery',
-          dismantleRequired: op.dismantle_required || false,
-          customInstallTime: (op.custom_installation_time_min || op.custom_installation_time_max)
-            ? { min: op.custom_installation_time_min, max: op.custom_installation_time_max }
-            : null
-        }));
+        // Initialize cart from order_products — Odoo-sourced lines (no product_id) are read-only and excluded
+        const initialCart = (order.order_products || [])
+          .filter(op => op.products)
+          .map(op => ({
+            product: op.products,
+            quantity: op.quantity || 1,
+            serviceType: op.service_type || 'delivery',
+            dismantleRequired: op.dismantle_required || false,
+            customInstallTime: (op.custom_installation_time_min || op.custom_installation_time_max)
+              ? { min: op.custom_installation_time_min, max: op.custom_installation_time_max }
+              : null
+          }));
         setCart(initialCart);
       } catch (err) {
         console.error('Error loading data:', err);
@@ -793,7 +818,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
   ];
 
   const filteredProducts = allProducts.filter(p =>
-    !cart.find(c => c.product.id === p.id) &&
+    !cart.find(c => c.product?.id === p.id) &&
     p.product_name?.toLowerCase().includes(productSearch.toLowerCase())
   );
 
@@ -856,11 +881,6 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
         setFormErrors(errors);
         setError('Please fill in all required customer fields.');
         return;
-    }
-
-    if (cart.length === 0) {
-      setError('At least one product is required');
-      return;
     }
 
     setSaving(true);
@@ -929,7 +949,14 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
         <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
           <div>
             <h2 className="text-xl font-bold text-gray-800">Edit Order</h2>
-            <p className="text-sm text-gray-600 mt-1">Order ID: {order.id.substring(0, 8)}...</p>
+            {order.odoo_order_ref ? (
+              <div className="text-sm text-gray-600 mt-1 space-y-0.5">
+                <p>DO: <span className="font-mono font-medium">{order.odoo_order_ref}</span></p>
+                {order.odoo_sales_ref && <p>SO: <span className="font-mono font-medium">{order.odoo_sales_ref}</span></p>}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 mt-1">Order ID: {order.id.substring(0, 8)}...</p>
+            )}
             {remainingTime && !remainingTime.expired && (
               <p className="text-sm text-green-600 mt-1">
                 Time remaining: {remainingTime.hours}h {remainingTime.minutes}m
@@ -1071,6 +1098,25 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
               </div>
             </div>
           </div>
+
+          {/* Odoo-sourced lines — read-only, managed by Odoo sync */}
+          {order.order_products?.some(op => !op.products) && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">Products from Odoo</h3>
+              <p className="text-xs text-gray-400 mb-3">These lines are managed by Odoo and cannot be edited here.</p>
+              <div className="space-y-2">
+                {order.order_products.filter(op => !op.products).map((op, idx) => (
+                  <div key={idx} className="border border-blue-100 bg-blue-50 rounded-lg px-4 py-3 flex justify-between items-center text-sm">
+                    <span className="font-medium text-gray-800">{op.odoo_product_name || 'Unknown Product'}</span>
+                    <div className="text-gray-500 text-right">
+                      <div>Qty: {op.quantity}</div>
+                      {op.assigned_serial && <div className="font-mono text-xs">S/N: {op.assigned_serial}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Products in Cart */}
           <div className="mt-6">
@@ -1235,7 +1281,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
             </button>
             <button
               type="submit"
-              disabled={saving || cart.length === 0 || Object.keys(formErrors).length > 0}
+              disabled={saving || (cart.length === 0 && !order.order_products?.length) || Object.keys(formErrors).length > 0}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               {saving ? 'Saving...' : 'Save Changes'}

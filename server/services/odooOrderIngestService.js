@@ -31,44 +31,34 @@ async function resolveBuilding(address, zip, fallbackName = '') {
 
 /**
  * Diff an order's existing order_products against a fresh set of Odoo order
- * lines. Lines removed from Odoo are deleted UNLESS the item already has
- * progress (picked/loaded/unloaded) or has been delivered — those are kept
- * and logged, never silently destroyed. Lines still pending are safe to
- * update in place; lines with progress are left untouched even if their
- * qty/serial differs from the new payload.
+ * lines. Lines are matched by odoo_line_id (Odoo sale.order.line ID).
+ * Lines removed from Odoo are deleted UNLESS the item already has progress
+ * (picked/loaded/unloaded) — those are kept and logged, never silently destroyed.
  */
 async function mergeOrderLines(orderId, newLines = []) {
   const existing = await prisma.order_products.findMany({ where: { order_id: orderId } });
 
-  const resolvedIncoming = [];
-  for (const line of newLines) {
-    if (!line.product_name) continue;
-    const product = await prisma.products.findFirst({
-      where: { product_name: { contains: line.product_name, mode: 'insensitive' }, available_flag: true },
-    });
-    if (!product) {
-      console.warn(`[Odoo push] No local product matched: "${line.product_name}" — line skipped`);
-      continue;
-    }
-    resolvedIncoming.push({
-      product_id:      product.id,
-      quantity:        Number(line.product_uom_qty) || 1,
-      assigned_serial: line.serial_number || null,
-    });
-  }
+  const incoming = newLines
+    .filter(l => l.product_name && l.order_line_id)
+    .map(l => ({
+      odoo_line_id:     l.order_line_id,
+      odoo_product_name: l.product_name,
+      quantity:         Number(l.product_uom_qty) || 1,
+      assigned_serial:  l.serial_number || null,
+    }));
 
-  const incomingProductIds = new Set(resolvedIncoming.map(l => l.product_id));
+  const incomingIds = new Set(incoming.map(l => l.odoo_line_id));
 
   let created = 0, updated = 0, deleted = 0, protectedCount = 0;
 
   // Lines that disappeared from the Odoo payload
   for (const ex of existing) {
-    if (incomingProductIds.has(ex.product_id)) continue;
+    if (!ex.odoo_line_id || incomingIds.has(ex.odoo_line_id)) continue;
 
     const hasProgress = ex.item_delivery_status === 'delivered' || ex.picking_status !== 'pending';
     if (hasProgress) {
       protectedCount++;
-      console.warn(`[Odoo push] Line for product ${ex.product_id} removed in Odoo but already in progress/delivered locally (order ${orderId}) — kept, not deleted.`);
+      console.warn(`[Odoo push] Line ${ex.odoo_line_id} removed in Odoo but already in progress/delivered (order ${orderId}) — kept.`);
       continue;
     }
 
@@ -76,18 +66,19 @@ async function mergeOrderLines(orderId, newLines = []) {
     deleted++;
   }
 
-  // Lines present in the new payload — create new ones, update untouched ones
-  for (const inc of resolvedIncoming) {
-    const match = existing.find(ex => ex.product_id === inc.product_id);
+  // Lines present in the new payload
+  for (const inc of incoming) {
+    const match = existing.find(ex => ex.odoo_line_id === inc.odoo_line_id);
 
     if (!match) {
       await prisma.order_products.create({
         data: {
-          order_id:        orderId,
-          product_id:      inc.product_id,
-          quantity:        inc.quantity,
-          assigned_serial: inc.assigned_serial,
-          service_type:    'delivery',
+          order_id:          orderId,
+          odoo_line_id:      inc.odoo_line_id,
+          odoo_product_name: inc.odoo_product_name,
+          quantity:          inc.quantity,
+          assigned_serial:   inc.assigned_serial,
+          service_type:      'delivery',
         },
       });
       created++;
@@ -97,11 +88,14 @@ async function mergeOrderLines(orderId, newLines = []) {
     if (match.picking_status === 'pending') {
       await prisma.order_products.update({
         where: { id: match.id },
-        data:  { quantity: inc.quantity, assigned_serial: inc.assigned_serial },
+        data:  {
+          odoo_product_name: inc.odoo_product_name,
+          quantity:          inc.quantity,
+          assigned_serial:   inc.assigned_serial,
+        },
       });
       updated++;
     }
-    // else: already picked/loaded/unloaded — leave untouched even if qty/serial differ
   }
 
   return { created, updated, deleted, protected: protectedCount };
@@ -116,6 +110,7 @@ async function mergeOrderLines(orderId, newLines = []) {
 async function pushOrder(payload) {
   const {
     name: odoo_order_ref,
+    sales_order_name: odoo_sales_ref,
     partner_name, partner_email, partner_phone,
     delivery_address, delivery_city, delivery_state_name, delivery_zip, delivery_remarks,
     salesperson_name, salesperson_phone,
@@ -142,6 +137,7 @@ async function pushOrder(payload) {
     const changes = { updated_at: new Date() };
     const addressChanged = delivery_address && delivery_address !== existing.delivery_address;
 
+    if (odoo_sales_ref)       changes.odoo_sales_ref    = odoo_sales_ref;
     if (delivery_address)    changes.delivery_address  = delivery_address;
     if (delivery_city)       changes.delivery_city     = delivery_city;
     if (delivery_state_name) changes.delivery_state    = delivery_state_name;
@@ -196,24 +192,16 @@ async function pushOrder(payload) {
 
   const building = await resolveBuilding(delivery_address, delivery_zip, partner_name);
 
-  const productLines = [];
-  for (const line of order_lines) {
-    if (!line.product_name) continue;
-    const product = await prisma.products.findFirst({
-      where: { product_name: { contains: line.product_name, mode: 'insensitive' }, available_flag: true },
-    });
-    if (product) {
-      productLines.push({
-        product_id:         product.id,
-        quantity:           Number(line.product_uom_qty) || 1,
-        service_type:       'delivery',
-        dismantle_required: false,
-        assigned_serial:    line.serial_number || null,
-      });
-    } else {
-      console.warn(`[Odoo push] No local product matched: "${line.product_name}"`);
-    }
-  }
+  const productLines = order_lines
+    .filter(l => l.product_name && l.order_line_id)
+    .map(l => ({
+      odoo_line_id:      l.order_line_id,
+      odoo_product_name: l.product_name,
+      quantity:          Number(l.product_uom_qty) || 1,
+      service_type:      'delivery',
+      dismantle_required: false,
+      assigned_serial:   l.serial_number || null,
+    }));
 
   const order = await prisma.orders.create({
     data: {
@@ -227,6 +215,7 @@ async function pushOrder(payload) {
       delivery_state:            delivery_state_name || null,
       delivery_remarks:          delivery_remarks    || null,
       original_delivery_address: delivery_address    || null,
+      odoo_sales_ref:            odoo_sales_ref      || null,
       salesperson_name:          salesperson_name    || null,
       salesperson_phone:         salesperson_phone   || null,
       assignment_status:         'unassigned',

@@ -28,3 +28,6 @@ server/.env
 
 # Cursor
 .cursor/
+
+# User-uploaded runtime files (POD photos, failure evidence, etc.)
+server/uploads/
