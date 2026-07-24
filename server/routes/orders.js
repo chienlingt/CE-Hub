@@ -271,11 +271,13 @@ async function estimateTravelMinutes(fromAddress, toAddress) {
 }
 
 // POST /api/orders/sync-odoo — manually trigger Odoo sync (A1.4)
+// Optional query param: ?date=YYYY-MM-DD  overrides the default "tomorrow" target date
 router.post('/sync-odoo', async (req, res) => {
   try {
     const { syncOrdersFromOdoo } = require('../services/odooSyncService');
-    const result = await syncOrdersFromOdoo();
-    res.json({ success: true, ...result });
+    const targetDate = req.query.date || null;
+    const result = await syncOrdersFromOdoo(targetDate);
+    res.json({ success: true, date: targetDate || 'tomorrow', ...result });
   } catch (err) {
     console.error('POST /api/orders/sync-odoo error', err);
     res.status(500).json({ error: 'Sync failed', details: err.message });

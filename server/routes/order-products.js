@@ -118,6 +118,46 @@ router.patch('/:id/picking-status', async (req, res) => {
         }
       }
 
+      // Cross-order serial check: reject if this serial is already active on a different order.
+      // Two-step: fetch all items sharing this serial (excluding self), then filter by order status
+      // in JS to avoid Prisma's nested notIn generating unexpected SQL with nullable order_status.
+      const FINAL_STATUSES = ['Delivered', 'Completed', 'Cancelled', 'Failed'];
+      const sameSerialItems = await prisma.order_products.findMany({
+        where: {
+          id:  { not: item.id },
+          OR: [
+            { assigned_serial: serial_number },
+            { picked_serial:   serial_number },
+            { loaded_serial:   serial_number },
+            { unloaded_serial: serial_number },
+          ],
+        },
+        include: { orders: { select: { odoo_order_ref: true, id: true, order_status: true } } },
+      });
+
+      console.log(`[SerialCheck] serial="${serial_number}" found ${sameSerialItems.length} other item(s):`,
+        sameSerialItems.map(c => ({
+          id: c.id,
+          picked_serial: c.picked_serial,
+          assigned_serial: c.assigned_serial,
+          order_id: c.order_id,
+          order_status: c.orders?.order_status,
+        }))
+      );
+
+      const conflict = sameSerialItems.find(
+        c => c.orders && !FINAL_STATUSES.includes(c.orders.order_status)
+      );
+
+      if (conflict) {
+        const ref = conflict.orders?.odoo_order_ref || conflict.orders?.id?.substring(0, 8) || 'another order';
+        return res.status(409).json({
+          error:  `Serial number "${serial_number}" is already assigned to ${ref}. A serial cannot be substituted across orders.`,
+          code:   'SERIAL_CROSS_ORDER_CONFLICT',
+          conflict_order_ref: ref,
+        });
+      }
+
       // If no serial recorded at previous stage → accept any serial scanned
     }
 

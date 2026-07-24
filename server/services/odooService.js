@@ -65,14 +65,18 @@ async function callModel(model, method, args = [], kwargs = {}) {
  * @param {number} odooPickingId - stock.picking integer id (from push payload `id`)
  * @param {string} localStatus   - CE Hub status string
  */
-async function pushDeliveryStatus(odooPickingId, localStatus) {
-  const statusMap = {
-    Delivering: 'in_transit',
-    Delivered:  'delivered',
-    Completed:  'completed',
-  };
+// Shared CE Hub → Odoo x_delivery_status mapping.
+// Picked and Completed have no Odoo counterpart — they return null (no-op).
+const CE_HUB_STATUS_MAP = {
+  Loaded:     'loaded',
+  Unloaded:   'arrived',
+  Delivering: 'in_transit',
+  Delivered:  'delivered',
+  Failed:     'failed',
+};
 
-  const odooStatus = statusMap[localStatus];
+async function pushDeliveryStatus(odooPickingId, localStatus) {
+  const odooStatus = CE_HUB_STATUS_MAP[localStatus];
   if (!odooStatus) return null;
 
   return callModel('stock.picking', 'write', [[odooPickingId], { x_delivery_status: odooStatus }]);
@@ -84,19 +88,12 @@ async function pushDeliveryStatus(odooPickingId, localStatus) {
  * Returns null (non-fatal) if Odoo is unreachable or the picking is not found.
  *
  * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
- * @param {'Delivering'|'Delivered'|'Completed'|'Failed'} localStatus
+ * @param {string} localStatus   - CE Hub status (Loaded|Unloaded|Delivering|Delivered|Failed); Picked and Completed are no-ops
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
 
-  const statusMap = {
-    Delivering: 'in_transit',
-    Delivered:  'delivered',
-    Completed:  'completed',
-    Failed:     'failed',
-  };
-
-  const odooStatus = statusMap[localStatus];
+  const odooStatus = CE_HUB_STATUS_MAP[localStatus];
   if (!odooStatus) return null;
 
   const pickings = await callModel('stock.picking', 'search_read',
@@ -124,7 +121,7 @@ async function getOrdersForDeliveryDate(dateStr) {
 
   const domain = [
     ['picking_type_code', '=', 'outgoing'],
-    ['state', 'in', ['assigned', 'confirmed']],
+    ['state', 'in', ['assigned', 'confirmed', 'waiting']],
     ['scheduled_date', '>=', utcStart],
     ['scheduled_date', '<=', utcEnd],
   ];
@@ -227,11 +224,37 @@ async function getOrderDetail(odooPickingId) {
   };
 }
 
+/**
+ * Write CE Hub's assigned timeslot back to the Odoo Delivery Order.
+ * Field names are placeholders — replace x_scheduled_date_start / x_scheduled_date_end
+ * with the exact names once confirmed by GCA.
+ *
+ * @param {string} odooOrderRef     - DO number (orders.odoo_order_ref)
+ * @param {string} scheduledStart   - ISO datetime string (MYT)
+ * @param {string} scheduledEnd     - ISO datetime string (MYT)
+ */
+async function writeScheduledTimeslot(odooOrderRef, scheduledStart, scheduledEnd) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+
+  const pickings = await callModel('stock.picking', 'search_read',
+    [[['name', '=', odooOrderRef]]],
+    { fields: ['id'], limit: 1 }
+  );
+  if (!pickings?.length) return null;
+
+  // TODO: replace field names below once GCA confirms the exact x_ field names
+  return callModel('stock.picking', 'write', [[pickings[0].id], {
+    x_scheduled_date_start: scheduledStart || false,
+    x_scheduled_date_end:   scheduledEnd   || false,
+  }]);
+}
+
 module.exports = {
   authenticate,
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
+  writeScheduledTimeslot,
   getOrdersForDeliveryDate,
   getOrderDetail,
 };

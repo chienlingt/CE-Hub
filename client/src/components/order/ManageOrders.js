@@ -6,14 +6,20 @@ import {
   ChevronUp,
   Clock,
   Edit2,
+  GitBranch,
+  Loader2,
+  Mail,
   MapPin,
   Package,
+  Phone,
   Plus,
   Search,
+  Sparkles,
   User,
   X
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   filterOrdersByDateRange,
   formatDate,
@@ -30,6 +36,9 @@ import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 
 export default function ManageOrders() {
+  const [searchParams] = useSearchParams();
+  const expandRowRefs = useRef({});
+
   // State management
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -66,6 +75,17 @@ export default function ManageOrders() {
   useEffect(() => {
     fetchOrders();
   }, [statusFilter, sortBy]);
+
+  // Auto-expand + scroll when ?expand=<id> is in the URL
+  useEffect(() => {
+    const targetId = searchParams.get('expand');
+    if (!targetId || !orders.length) return;
+    setExpandedOrderId(targetId);
+    setTimeout(() => {
+      const el = expandRowRefs.current[targetId];
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }, [searchParams, orders]);
 
   const fetchEditDeadlineSetting = async () => {
     try {
@@ -147,6 +167,16 @@ export default function ManageOrders() {
     }
     setEditingOrder(order);
     setShowEditModal(true);
+  };
+
+  // Refresh a single order in-place after remarks are parsed
+  const handleOrderParsed = async (orderId) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}`);
+      if (!res.ok) return;
+      const updated = await res.json();
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updated } : o));
+    } catch { /* silent — stale data is fine, user can refresh */ }
   };
 
   const handleView = (orderId) => {
@@ -431,10 +461,13 @@ export default function ManageOrders() {
                   <OrderRow
                     key={order.id}
                     order={order}
+                    allOrders={orders}
                     isExpanded={expandedOrderId === order.id}
+                    rowRef={el => { expandRowRefs.current[order.id] = el; }}
                     onView={handleView}
                     onEdit={handleEdit}
                     onAssignTimeslot={handleAssignToTimeslot}
+                    onOrderParsed={handleOrderParsed}
                     editDeadlineHours={editDeadlineHours}
                   />
                 ))
@@ -493,17 +526,28 @@ function StatCard({ title, value, color, icon }) {
 }
 
 // Order Row Component (with expandable details)
-function OrderRow({ order, isExpanded, onView, onEdit, onAssignTimeslot, editDeadlineHours }) {
+function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssignTimeslot, onOrderParsed, editDeadlineHours }) {
   const statusBadge = getOrderStatusBadge(order.order_status);
   const editCheck = isOrderEditable(order, editDeadlineHours);
   const productCount = getTotalProductCount(order.order_products);
   const isPending = order.order_status === 'Pending';
 
+  // Sibling DOs: other orders sharing the same SO reference
+  const siblingDOs = order.odoo_sales_ref
+    ? allOrders.filter(o => o.id !== order.id && o.odoo_sales_ref === order.odoo_sales_ref)
+    : [];
+
   return (
     <>
-      <tr className="hover:bg-gray-50 transition-colors">
+      <tr ref={rowRef} className="hover:bg-gray-50 transition-colors">
         <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || order.id}>
-          {order.odoo_order_ref || `${order.id.substring(0, 8)}...`}
+          <div className="truncate">{order.odoo_order_ref || `${order.id.substring(0, 8)}...`}</div>
+          {siblingDOs.length > 0 && (
+            <div className="flex items-center gap-1 mt-0.5 text-xs text-indigo-500">
+              <GitBranch className="w-3 h-3" />
+              <span className="truncate">{order.odoo_sales_ref}</span>
+            </div>
+          )}
         </td>
         <td className="px-4 py-3 min-w-0">
           <div className="text-sm font-medium text-gray-900 truncate">
@@ -561,150 +605,312 @@ function OrderRow({ order, isExpanded, onView, onEdit, onAssignTimeslot, editDea
           </button>
         </td>
       </tr>
-      {isExpanded && <ExpandedOrderDetails order={order} editDeadlineHours={editDeadlineHours} />}
+      {isExpanded && <ExpandedOrderDetails order={order} siblingDOs={siblingDOs} onOrderParsed={onOrderParsed} />}
     </>
   );
 }
 
 // Expanded Order Details Component
-function ExpandedOrderDetails({ order, editDeadlineHours }) {
-  const editCheck = isOrderEditable(order, editDeadlineHours);
-  const remainingTime = order.scheduled_start_date_time
-    ? getRemainingEditTime(order.scheduled_start_date_time, editDeadlineHours)
+function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
+  const [showSiblings, setShowSiblings] = useState(false);
+  const [parseStatus, setParseStatus] = useState('idle'); // 'idle' | 'parsing' | 'done' | 'error'
+
+  // Auto-parse remarks on expand if remarks exist and not yet parsed
+  useEffect(() => {
+    if (!order.delivery_remarks) return;
+    if (order.remarks_delivery_address !== null && order.remarks_delivery_address !== undefined) return;
+    if (parseStatus !== 'idle') return;
+
+    const run = async () => {
+      setParseStatus('parsing');
+      try {
+        const parseRes = await fetch(`${API_BASE}/api/orders/${order.id}/parse-remarks`, { method: 'POST' });
+        const parseData = await parseRes.json();
+        if (!parseData.success) throw new Error(parseData.error || 'Parse failed');
+
+        const { parsed } = parseData;
+        const applyRes = await fetch(`${API_BASE}/api/orders/${order.id}/apply-parsed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            // Only pass values the LLM actually found in the remarks — never fall back to SO defaults
+            delivery_address: parsed.has_address ? parsed.delivery_address : null,
+            phone:            parsed.has_phone   ? parsed.phone            : null,
+            contact_name:     parsed.contact_name  || null,
+            driver_notes:     parsed.driver_notes  || null,
+          }),
+        });
+        const applyData = await applyRes.json();
+        if (!applyData.success) throw new Error(applyData.error || 'Apply failed');
+
+        setParseStatus('done');
+        onOrderParsed?.(order.id);
+      } catch (err) {
+        console.error('[ParseRemarks] auto-parse failed:', err);
+        setParseStatus('error');
+      }
+    };
+
+    run();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeAddress = order.remarks_delivery_address || order.delivery_address;
+  const cityLine = [order.delivery_city, order.delivery_state, order.delivery_postcode].filter(Boolean).join(', ');
+  const prefTime = order.customers?.preferred_delivery_time_start
+    ? `${order.customers.preferred_delivery_time_start}–${order.customers.preferred_delivery_time_end || ''}`
     : null;
 
   return (
     <tr>
-      <td colSpan="8" className="px-4 py-4 bg-gray-50">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Customer Info */}
-          <div>
-            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <User className="w-4 h-4" />
-              Customer Information
-            </h4>
-            <div className="space-y-1 text-sm">
-              <p><span className="font-medium">Name:</span> {order.customers?.full_name || 'N/A'}</p>
-              <p><span className="font-medium">Email:</span> {order.customers?.email || 'N/A'}</p>
-              {/* Customer phone */}
-              <div className="flex items-center gap-2">
-                <span className="font-medium">Phone:</span>
-                <span>{order.customers?.phone || 'N/A'}</span>
-              </div>
-              {/* Contact person phone from remarks */}
-              {order.remarks_contact_phone && (
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">Contact at Site:</span>
-                  <span className="text-blue-700 font-medium">{order.remarks_contact_phone}</span>
-                  {order.remarks_contact_name && (
-                    <span className="text-blue-600">({order.remarks_contact_name})</span>
-                  )}
-                  <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">from remarks</span>
-                </div>
-              )}
-            </div>
-          </div>
+      <td colSpan="8" className="px-5 py-4 bg-gray-50 border-t border-gray-100">
 
-          {/* Delivery Address */}
-          <div>
-            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <MapPin className="w-4 h-4" />
-              Delivery Address
-            </h4>
-            <div className="space-y-2 text-sm">
-              {/* Active address — remarks takes priority */}
-              {order.remarks_delivery_address ? (
-                <>
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
-                    <p className="text-xs font-semibold text-blue-600 mb-0.5">From Remarks (active)</p>
-                    <p className="text-blue-800 font-medium">{order.remarks_delivery_address}</p>
-                  </div>
-                  {order.original_delivery_address && (
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                      <p className="text-xs font-semibold text-gray-400 mb-0.5">Original SO Address</p>
-                      <p className="text-gray-400 line-through text-xs">{order.original_delivery_address}</p>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
-                  <p className="text-xs font-semibold text-gray-500 mb-0.5">Delivery Address</p>
-                  <p className="text-gray-700">{order.delivery_address || order.customers?.address || 'N/A'}</p>
-                </div>
-              )}
-              {order.delivery_notes && (
-                <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200">
-                  <span className="font-medium">Driver notes:</span> {order.delivery_notes}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Products */}
-          <div className="md:col-span-2">
-            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <Package className="w-4 h-4" />
-              Products ({order.order_products?.length || 0})
-            </h4>
-            <div className="space-y-2">
-              {order.order_products?.map((op, idx) => (
-                <div key={idx} className="bg-white p-3 rounded border border-gray-200 text-sm">
-                  <div className="flex justify-between items-start">
-                    <span className="font-medium text-gray-900">
-                      {op.products?.product_name || op.odoo_product_name || 'Unknown Product'}
-                    </span>
-                    <span className="text-gray-600 ml-2 shrink-0">Qty: {op.quantity}</span>
-                  </div>
-                  {op.assigned_serial && (
-                    <div className="mt-1 text-gray-500">
-                      S/N: <span className="font-mono">{op.assigned_serial}</span>
-                    </div>
-                  )}
-                  <div className="mt-1 text-gray-500">
-                    <span className="mr-4">Service: {getServiceTypeLabel(op.service_type)}</span>
-                    {op.dismantle_required && <span className="text-orange-600">Dismantle Required</span>}
-                  </div>
-                  {(op.custom_installation_time_min || op.custom_installation_time_max) && (
-                    <div className="mt-1 text-gray-500">
-                      Installation Time: {op.custom_installation_time_min || 0}-{op.custom_installation_time_max || 0} min
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Special Equipment */}
-          {order.special_equipment_needed && (
-            <div className="md:col-span-2">
-              <h4 className="font-semibold text-gray-700 mb-2">Special Equipment</h4>
-              <p className="text-sm text-gray-600">{order.special_equipment_needed}</p>
-            </div>
+        {/* ── Chips row ── */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {order.odoo_order_ref && (
+            <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-1 text-xs font-mono font-semibold">
+              <Package className="w-3 h-3" />
+              {order.odoo_order_ref}
+            </span>
           )}
 
-          {/* Edit Deadline Info */}
-          {order.scheduled_start_date_time && (
-            <div className="md:col-span-2">
-              <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                <Clock className="w-4 h-4" />
-                Edit Deadline
-              </h4>
-              <div className="text-sm">
-                {editCheck.editable ? (
-                  remainingTime && !remainingTime.expired ? (
-                    <p className="text-green-600">
-                      Can edit for {remainingTime.hours}h {remainingTime.minutes}m
-                    </p>
-                  ) : (
-                    <p className="text-green-600">Order is editable</p>
-                  )
-                ) : (
-                  <p className="text-red-600">{editCheck.reason}</p>
-                )}
-              </div>
-            </div>
+          {/* SO chip — clickable when siblings exist */}
+          {order.odoo_sales_ref && (
+            <button
+              onClick={() => siblingDOs.length > 0 && setShowSiblings(s => !s)}
+              className={`inline-flex items-center gap-1.5 border rounded-full px-3 py-1 text-xs font-mono font-semibold transition-colors
+                ${siblingDOs.length > 0
+                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 cursor-pointer'
+                  : 'bg-gray-50 text-gray-500 border-gray-200 cursor-default'}`}
+            >
+              <GitBranch className="w-3 h-3" />
+              {order.odoo_sales_ref}
+              {siblingDOs.length > 0 && (
+                <>
+                  <span className="bg-indigo-200 text-indigo-800 rounded-full px-1.5 py-0.5 text-xs font-sans">
+                    {siblingDOs.length + 1} DOs
+                  </span>
+                  {showSiblings
+                    ? <ChevronUp className="w-3 h-3" />
+                    : <ChevronDown className="w-3 h-3" />}
+                </>
+              )}
+            </button>
+          )}
+
+          {prefTime && (
+            <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-3 py-1 text-xs font-semibold">
+              <Clock className="w-3 h-3" />
+              {prefTime}
+            </span>
+          )}
+
+          {/* Parse status chip */}
+          {parseStatus === 'parsing' && (
+            <span className="inline-flex items-center gap-1.5 bg-violet-50 text-violet-600 border border-violet-200 rounded-full px-3 py-1 text-xs font-semibold">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Parsing remarks…
+            </span>
+          )}
+          {parseStatus === 'done' && (
+            <span className="inline-flex items-center gap-1.5 bg-green-50 text-green-600 border border-green-200 rounded-full px-3 py-1 text-xs font-semibold">
+              <Sparkles className="w-3 h-3" />
+              Remarks parsed
+            </span>
+          )}
+          {parseStatus === 'error' && (
+            <span className="inline-flex items-center gap-1.5 bg-red-50 text-red-500 border border-red-200 rounded-full px-3 py-1 text-xs font-semibold">
+              <AlertCircle className="w-3 h-3" />
+              Parse failed
+            </span>
           )}
         </div>
+
+        {/* ── Sibling DOs table (toggled by SO chip) ── */}
+        {showSiblings && (
+          <div className="mb-4 overflow-x-auto rounded border border-indigo-100">
+            <table className="w-full text-sm">
+              <thead className="bg-indigo-50 text-indigo-600 text-xs">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">DO</th>
+                  <th className="px-3 py-2 text-left font-medium">Customer</th>
+                  <th className="px-3 py-2 text-center font-medium w-14">Items</th>
+                  <th className="px-3 py-2 text-left font-medium">Status</th>
+                  <th className="px-3 py-2 text-left font-medium">Scheduled</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-indigo-50">
+                {/* Current DO */}
+                <tr className="bg-indigo-50/40">
+                  <td className="px-3 py-1.5 font-mono text-indigo-800 font-semibold">
+                    {order.odoo_order_ref || order.id.substring(0, 8)}
+                    <span className="ml-1.5 text-xs bg-indigo-200 text-indigo-700 px-1.5 py-0.5 rounded font-sans">this</span>
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-700">{order.customers?.full_name || '—'}</td>
+                  <td className="px-3 py-1.5 text-center text-gray-700">{getTotalProductCount(order.order_products)}</td>
+                  <td className="px-3 py-1.5">
+                    {(() => { const b = getOrderStatusBadge(order.order_status); return (
+                      <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${b.bgColor} ${b.color}`}>{b.label}</span>
+                    ); })()}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-700">
+                    {order.scheduled_start_date_time ? formatDateTime(order.scheduled_start_date_time) : '—'}
+                  </td>
+                </tr>
+                {/* Siblings */}
+                {siblingDOs.map(sib => {
+                  const b = getOrderStatusBadge(sib.order_status);
+                  return (
+                    <tr key={sib.id} className="hover:bg-indigo-50/30">
+                      <td className="px-3 py-1.5">
+                        <Link
+                          to={`?expand=${sib.id}`}
+                          className="font-mono text-indigo-600 hover:text-indigo-800 hover:underline"
+                        >
+                          {sib.odoo_order_ref || sib.id.substring(0, 8)}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-700">{sib.customers?.full_name || '—'}</td>
+                      <td className="px-3 py-1.5 text-center text-gray-700">{getTotalProductCount(sib.order_products)}</td>
+                      <td className="px-3 py-1.5">
+                        <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${b.bgColor} ${b.color}`}>{b.label}</span>
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-700">
+                        {sib.scheduled_start_date_time ? formatDateTime(sib.scheduled_start_date_time) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── Customer / Address ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-sm">
+
+          {/* Customer */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+              <span className="font-semibold text-gray-900">{order.customers?.full_name || '—'}</span>
+            </div>
+            {order.customers?.email && (
+              <div className="flex items-center gap-2">
+                <Mail className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                <span className="text-gray-500">{order.customers.email}</span>
+              </div>
+            )}
+            {order.customers?.phone && (
+              <div className="flex items-center gap-2">
+                <Phone className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                <span className="text-gray-500">{order.customers.phone}</span>
+              </div>
+            )}
+
+            {/* Parsed site contact — visually separated from customer's own phone */}
+            {order.remarks_contact_phone && (
+              <div className="mt-2 pt-2 border-t border-violet-100">
+                <div className="flex items-center gap-2">
+                  <Phone className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                  <span className="font-semibold text-gray-900">{order.remarks_contact_phone}</span>
+                  {order.remarks_contact_name && (
+                    <span className="text-gray-600">· {order.remarks_contact_name}</span>
+                  )}
+                </div>
+                <p className="text-xs text-violet-500 mt-0.5 ml-5 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" /> site contact from remarks
+                </p>
+              </div>
+            )}
+
+            {(order.salesperson_name || order.salesperson_phone) && (
+              <div className="pt-2 mt-1 border-t border-gray-100 space-y-1">
+                {order.salesperson_name && (
+                  <div className="flex items-center gap-2">
+                    <User className="w-3.5 h-3.5 text-gray-200 shrink-0" />
+                    <span className="text-gray-400 text-xs">{order.salesperson_name}</span>
+                    <span className="text-xs text-gray-300">· sales</span>
+                  </div>
+                )}
+                {order.salesperson_phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="w-3.5 h-3.5 text-gray-200 shrink-0" />
+                    <span className="text-gray-400 text-xs">{order.salesperson_phone}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Address */}
+          <div className="space-y-2 text-sm">
+            {parseStatus === 'parsing' ? (
+              <div className="flex items-center gap-2 text-violet-400">
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                <span className="text-xs">Extracting address from remarks…</span>
+              </div>
+            ) : order.remarks_delivery_address && order.original_delivery_address &&
+                order.original_delivery_address !== order.remarks_delivery_address ? (
+              /* ── Overridden: parsed card + struck original ── */
+              <>
+                <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 space-y-0.5">
+                  <div className="flex items-start gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-violet-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-gray-900">{order.remarks_delivery_address}</p>
+                      {cityLine && <p className="text-gray-500 text-xs">{cityLine}</p>}
+                    </div>
+                  </div>
+                  <p className="text-gray-600 line-through text-xs ml-5 leading-snug">
+                    {order.original_delivery_address}
+                  </p>
+                </div>
+                {order.delivery_remarks && (
+                  <p className="text-gray-400 text-xs italic ml-1">{order.delivery_remarks}</p>
+                )}
+              </>
+            ) : (
+              /* ── Not overridden: plain address ── */
+              <>
+                {activeAddress && (
+                  <div className="flex items-start gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-gray-900">{activeAddress}</p>
+                      {cityLine && <p className="text-gray-500 text-xs">{cityLine}</p>}
+                    </div>
+                  </div>
+                )}
+                {order.delivery_remarks && (
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0 mt-0.5" />
+                    <p className="text-gray-400 text-xs italic">{order.delivery_remarks}</p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* ── Items ── */}
+        {order.order_products?.length > 0 && (
+          <div className="overflow-x-auto rounded border border-gray-200">
+            <table className="w-full text-sm">
+              <tbody className="bg-white divide-y divide-gray-100">
+                {order.order_products.map((op, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-800">
+                      {op.products?.product_name || op.odoo_product_name || '—'}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 text-right w-12 shrink-0">×{op.quantity}</td>
+                    <td className="px-3 py-2 font-mono text-gray-400 text-right">{op.assigned_serial || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
       </td>
     </tr>
   );
@@ -718,19 +924,16 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
   const [resetToPending, setResetToPending] = useState(false);
   const [formErrors, setFormErrors] = useState({});
 
-  const validate = (data) => {
+  const hasParsedPhone   = !!order.remarks_contact_phone;
+  const hasParsedAddress = !!order.remarks_delivery_address;
+
+  const [editPhone,   setEditPhone]   = useState(order.remarks_contact_phone   || order.customers?.phone   || '');
+  const [editAddress, setEditAddress] = useState(order.remarks_delivery_address || order.delivery_address   || order.customers?.address || '');
+
+  const validate = (data, phone) => {
     const errors = {};
-    if (!data.full_name) {
-        errors.full_name = "Full name is required.";
-    }
-    if (!data.email) {
-        errors.email = "Email is required.";
-    } else if (!/\S+@\S+\.\S+/.test(data.email)) {
-        errors.email = "Email is invalid.";
-    }
-    if (!data.phone) {
-        errors.phone = "Phone is required.";
-    }
+    if (!data.full_name) errors.full_name = 'Full name is required.';
+    if (!phone)          errors.phone     = 'Phone is required.';
     return errors;
   };
 
@@ -738,145 +941,33 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
     const { name, value } = e.target;
     setCustomerData(prev => {
         const newData = { ...prev, [name]: value };
-        const errors = validate(newData);
+        const errors = validate(newData, editPhone);
         setFormErrors(errors);
         return newData;
     });
   };
 
-  // Data
-  const [customers, setCustomers] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [allProducts, setAllProducts] = useState([]);
-
   // Customer info (editable)
   const [customerData, setCustomerData] = useState({
     full_name: order.customers?.full_name || '',
-    email: order.customers?.email || '',
-    phone: order.customers?.phone || '',
-    address: order.customers?.address || '',
-    city: order.customers?.city || '',
-    state: order.customers?.state || '',
-    postcode: order.customers?.postcode || ''
+    email:     order.customers?.email     || '',
+    phone:     order.customers?.phone     || '',
+    address:   order.customers?.address   || '',
+    city:      order.customers?.city      || '',
+    state:     order.customers?.state     || '',
+    postcode:  order.customers?.postcode  || '',
   });
-
-  // Products in cart
-  const [cart, setCart] = useState([]);
-
-  // Special equipment
-  const [specialEquipment, setSpecialEquipment] = useState(order.special_equipment_needed || '');
-
-  // Search
-  const [productSearch, setProductSearch] = useState('');
 
   const remainingTime = order.scheduled_start_date_time
     ? getRemainingEditTime(order.scheduled_start_date_time, editDeadlineHours)
     : null;
 
-  // Load data
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [customersRes, productsRes] = await Promise.all([
-          fetch(`${API_BASE}/api/customers`),
-          fetch(`${API_BASE}/api/products`)
-        ]);
-
-        const customersData = await customersRes.json();
-        const productsData = await productsRes.json();
-
-        setCustomers(Array.isArray(customersData) ? customersData : []);
-        setAllProducts(Array.isArray(productsData) ? productsData : []);
-
-        // Initialize cart from order_products — Odoo-sourced lines (no product_id) are read-only and excluded
-        const initialCart = (order.order_products || [])
-          .filter(op => op.products)
-          .map(op => ({
-            product: op.products,
-            quantity: op.quantity || 1,
-            serviceType: op.service_type || 'delivery',
-            dismantleRequired: op.dismantle_required || false,
-            customInstallTime: (op.custom_installation_time_min || op.custom_installation_time_max)
-              ? { min: op.custom_installation_time_min, max: op.custom_installation_time_max }
-              : null
-          }));
-        setCart(initialCart);
-      } catch (err) {
-        console.error('Error loading data:', err);
-        setError('Failed to load data');
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, [order]);
-
-  const SERVICE_TYPE_OPTIONS = [
-    { value: 'delivery', label: 'Delivery Only' },
-    { value: 'delivery_installation', label: 'Delivery + Installation' },
-    { value: 'stock_transfer', label: 'Stock Transfer' }
-  ];
-
-  const filteredProducts = allProducts.filter(p =>
-    !cart.find(c => c.product?.id === p.id) &&
-    p.product_name?.toLowerCase().includes(productSearch.toLowerCase())
-  );
-
-  const addToCart = (product) => {
-    setCart([...cart, {
-      product,
-      quantity: 1,
-      serviceType: 'delivery',
-      dismantleRequired: false,
-      customInstallTime: null
-    }]);
-    setProductSearch('');
-  };
-
-  const removeFromCart = (index) => {
-    setCart(cart.filter((_, i) => i !== index));
-  };
-
-  const updateCartQuantity = (index, quantity) => {
-    const updated = [...cart];
-    updated[index].quantity = Math.max(1, parseInt(quantity) || 1);
-    setCart(updated);
-  };
-
-  const updateCartServiceType = (index, serviceType) => {
-    const updated = [...cart];
-    updated[index].serviceType = serviceType;
-
-    // Reset installation time if not delivery_installation
-    if (serviceType !== 'delivery_installation') {
-      updated[index].customInstallTime = null;
-    }
-
-    setCart(updated);
-  };
-
-  const updateCartDismantle = (index, required) => {
-    const updated = [...cart];
-    updated[index].dismantleRequired = required;
-    setCart(updated);
-  };
-
-  const updateCartInstallTime = (index, min, max) => {
-    const updated = [...cart];
-    updated[index].customInstallTime = { min: parseInt(min) || 0, max: parseInt(max) || 0 };
-    setCart(updated);
-  };
-
-  const clearCustomInstallTime = (index) => {
-    const updated = [...cart];
-    updated[index].customInstallTime = null;
-    setCart(updated);
-  };
+  useEffect(() => { setLoading(false); }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const errors = validate(customerData);
+    const errors = validate(customerData, editPhone);
     if (Object.keys(errors).length > 0) {
         setFormErrors(errors);
         setError('Please fill in all required customer fields.');
@@ -887,25 +978,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
     setError(null);
 
     try {
-      // Prepare update data
-      const updateData = {
-        // Update customer info
-        customer: {
-          id: order.customer_id,
-          ...customerData
-        },
-        // Update products
-        products: cart.map(item => ({
-          product_id: item.product.id,
-          quantity: item.quantity,
-          dismantle_required: item.dismantleRequired,
-          service_type: item.serviceType,
-          custom_installation_time_min: item.customInstallTime?.min || null,
-          custom_installation_time_max: item.customInstallTime?.max || null
-        })),
-        // Update special equipment
-        special_equipment_needed: specialEquipment || null
-      };
+      const updateData = {};
 
       if (resetToPending) {
         updateData.order_status = 'Pending';
@@ -916,11 +989,29 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
         updateData.notified_scheduled = false;
       }
 
+      // Parsed phone/address go to the order; originals go to the customer record
+      if (hasParsedPhone) {
+        updateData.remarks_contact_phone = editPhone;
+      }
+      if (hasParsedAddress) {
+        updateData.remarks_delivery_address = editAddress;
+        updateData.delivery_address         = editAddress;
+      } else {
+        updateData.delivery_address = editAddress;
+      }
+
+      // Build customer payload — only write phone/address to customer when not overridden by parsed values
+      const customerPayload = {
+        ...customerData,
+        phone:   hasParsedPhone   ? customerData.phone   : editPhone,
+        address: hasParsedAddress ? customerData.address : editAddress,
+      };
+
       // First update customer
       await fetch(`${API_BASE}/api/customers/${order.customer_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(customerData)
+        body: JSON.stringify(customerPayload)
       });
 
       // Then update order
@@ -979,279 +1070,95 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column - Customer Info */}
+          {/* Customer info */}
+          <div className="space-y-3">
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <User className="w-5 h-5" />
-                Customer Information
-              </h3>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
-                  <input
-                    type="text"
-                    name="full_name"
-                    value={customerData.full_name}
-                    onChange={handleCustomerDataChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    required
-                  />
-                  {formErrors.full_name && <p className="text-xs text-red-500 mt-1">{formErrors.full_name}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                  <input
-                    type="email"
-                    name="email"
-                    value={customerData.email}
-                    onChange={handleCustomerDataChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    required
-                  />
-                  {formErrors.email && <p className="text-xs text-red-500 mt-1">{formErrors.email}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone *</label>
-                  <input
-                    type="tel"
-                    name="phone"
-                    value={customerData.phone}
-                    onChange={handleCustomerDataChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    required
-                  />
-                  {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
-                  <textarea
-                    name="address"
-                    value={customerData.address}
-                    onChange={handleCustomerDataChange}
-                    rows={2}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
-                    <input
-                      type="text"
-                      name="city"
-                      value={customerData.city}
-                      onChange={handleCustomerDataChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Postcode</label>
-                    <input
-                      type="text"
-                      name="postcode"
-                      value={customerData.postcode}
-                      onChange={handleCustomerDataChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                    />
-                  </div>
-                </div>
-              </div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+              <input
+                type="text"
+                name="full_name"
+                value={customerData.full_name}
+                onChange={handleCustomerDataChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                required
+              />
+              {formErrors.full_name && <p className="text-xs text-red-500 mt-1">{formErrors.full_name}</p>}
             </div>
-
-            {/* Right Column - Add Products */}
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <Package className="w-5 h-5" />
-                Add Products
-              </h3>
-              <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <label className="flex text-sm font-medium text-gray-700 mb-1 items-center gap-1.5">
+                {hasParsedPhone ? (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+                    <span className="text-violet-700">Site Contact Phone</span>
+                    <span className="text-gray-400 font-normal text-xs">(from remarks)</span>
+                    <span className="text-red-500">*</span>
+                  </>
+                ) : 'Phone *'}
+              </label>
+              <input
+                type="tel"
+                value={editPhone}
+                onChange={e => {
+                  setEditPhone(e.target.value);
+                  setFormErrors(prev => {
+                    const next = { ...prev };
+                    if (e.target.value) delete next.phone;
+                    else next.phone = 'Phone is required.';
+                    return next;
+                  });
+                }}
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 text-sm ${
+                  hasParsedPhone
+                    ? 'border-violet-300 focus:ring-violet-500 bg-violet-50'
+                    : 'border-gray-300 focus:ring-blue-500'
+                }`}
+                required
+              />
+              {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
+            </div>
+            <div>
+              <label className="flex text-sm font-medium text-gray-700 mb-1 items-center gap-1.5">
+                {hasParsedAddress ? (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+                    <span className="text-violet-700">Delivery Address</span>
+                    <span className="text-gray-400 font-normal text-xs">(from remarks)</span>
+                  </>
+                ) : 'Address'}
+              </label>
+              <textarea
+                value={editAddress}
+                onChange={e => setEditAddress(e.target.value)}
+                rows={2}
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 text-sm ${
+                  hasParsedAddress
+                    ? 'border-violet-300 focus:ring-violet-500 bg-violet-50'
+                    : 'border-gray-300 focus:ring-blue-500'
+                }`}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
                 <input
                   type="text"
-                  placeholder="Search products..."
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                  name="city"
+                  value={customerData.city}
+                  onChange={handleCustomerDataChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
                 />
               </div>
-              <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
-                {filteredProducts.length === 0 ? (
-                  <p className="text-center text-gray-500 py-4 text-sm">
-                    {productSearch ? 'No products found' : 'Search for products to add'}
-                  </p>
-                ) : (
-                  <div className="divide-y divide-gray-200">
-                    {filteredProducts.slice(0, 10).map((product) => (
-                      <div
-                        key={product.id}
-                        className="p-3 hover:bg-gray-50 cursor-pointer transition-colors"
-                        onClick={() => addToCart(product)}
-                      >
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium text-gray-900">{product.product_name}</span>
-                          <Plus className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Postcode</label>
+                <input
+                  type="text"
+                  name="postcode"
+                  value={customerData.postcode}
+                  onChange={handleCustomerDataChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                />
               </div>
             </div>
-          </div>
-
-          {/* Odoo-sourced lines — read-only, managed by Odoo sync */}
-          {order.order_products?.some(op => !op.products) && (
-            <div className="mt-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-2">Products from Odoo</h3>
-              <p className="text-xs text-gray-400 mb-3">These lines are managed by Odoo and cannot be edited here.</p>
-              <div className="space-y-2">
-                {order.order_products.filter(op => !op.products).map((op, idx) => (
-                  <div key={idx} className="border border-blue-100 bg-blue-50 rounded-lg px-4 py-3 flex justify-between items-center text-sm">
-                    <span className="font-medium text-gray-800">{op.odoo_product_name || 'Unknown Product'}</span>
-                    <div className="text-gray-500 text-right">
-                      <div>Qty: {op.quantity}</div>
-                      {op.assigned_serial && <div className="font-mono text-xs">S/N: {op.assigned_serial}</div>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Products in Cart */}
-          <div className="mt-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">
-              Products in Order ({cart.length})
-            </h3>
-            {cart.length === 0 ? (
-              <div className="text-center py-8 bg-gray-50 rounded-lg">
-                <Package className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                <p className="text-gray-500">No products in cart</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {cart.map((item, index) => (
-                  <div key={index} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                    <div className="flex justify-between items-start mb-3">
-                      <h4 className="font-medium text-gray-900 text-sm">{item.product.product_name}</h4>
-                      <button
-                        type="button"
-                        onClick={() => removeFromCart(index)}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-
-                    {/* Quantity */}
-                    <div className="mb-3">
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onChange={(e) => updateCartQuantity(index, e.target.value)}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                      />
-                    </div>
-
-                    {/* Service Type */}
-                    <div className="mb-3">
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Service Type</label>
-                      <select
-                        value={item.serviceType}
-                        onChange={(e) => updateCartServiceType(index, e.target.value)}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                      >
-                        {SERVICE_TYPE_OPTIONS.map(opt => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Dismantle */}
-                    {item.product.dismantle_required_flag && (
-                      <div className="mb-3">
-                        <label className="flex items-center text-xs">
-                          <input
-                            type="checkbox"
-                            checked={item.dismantleRequired}
-                            onChange={(e) => updateCartDismantle(index, e.target.checked)}
-                            className="mr-2"
-                          />
-                          Dismantling Required
-                        </label>
-                      </div>
-                    )}
-
-                    {/* Installation Time */}
-                    {item.serviceType === 'delivery_installation' && (
-                      <div className="bg-blue-50 rounded p-2">
-                        <p className="text-xs font-medium text-gray-700 mb-1">Installation Time:</p>
-                        {item.customInstallTime ? (
-                          <div className="space-y-2">
-                            <div className="grid grid-cols-2 gap-2">
-                              <input
-                                type="number"
-                                placeholder="Min (min)"
-                                value={item.customInstallTime.min}
-                                onChange={(e) => updateCartInstallTime(index, e.target.value, item.customInstallTime.max)}
-                                className="px-2 py-1 border border-gray-300 rounded text-xs"
-                              />
-                              <input
-                                type="number"
-                                placeholder="Max (min)"
-                                value={item.customInstallTime.max}
-                                onChange={(e) => updateCartInstallTime(index, item.customInstallTime.min, e.target.value)}
-                                className="px-2 py-1 border border-gray-300 rounded text-xs"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => clearCustomInstallTime(index)}
-                              className="text-xs text-blue-600 hover:text-blue-800"
-                            >
-                              Use product default
-                            </button>
-                          </div>
-                        ) : (
-                          <div>
-                            {item.product.estimated_installation_time_min && item.product.estimated_installation_time_max ? (
-                              <p className="text-xs text-gray-600 mb-1">
-                                Default: {item.product.estimated_installation_time_min}-{item.product.estimated_installation_time_max} min
-                              </p>
-                            ) : (
-                              <p className="text-xs text-gray-600 mb-1">No default time set</p>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => updateCartInstallTime(index, 0, 0)}
-                              className="text-xs text-blue-600 hover:text-blue-800"
-                            >
-                              Set custom time
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Special Equipment */}
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Special Equipment Needed (for entire order)
-            </label>
-            <textarea
-              value={specialEquipment}
-              onChange={(e) => setSpecialEquipment(e.target.value)}
-              rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-              placeholder="Enter any special equipment needed for this order..."
-            />
           </div>
 
           {/* Reset scheduling */}
@@ -1281,7 +1188,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
             </button>
             <button
               type="submit"
-              disabled={saving || (cart.length === 0 && !order.order_products?.length) || Object.keys(formErrors).length > 0}
+              disabled={saving || Object.keys(formErrors).length > 0}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               {saving ? 'Saving...' : 'Save Changes'}

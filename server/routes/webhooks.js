@@ -35,41 +35,6 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
 });
 
 /**
- * POST /api/webhooks/odoo/orders/bulk
- *
- * Triggered by the Odoo "Push All" / "Push Selected" button — accepts
- * multiple orders in one request and create-or-updates each independently.
- * One order failing does not abort the rest of the batch.
- *
- * Body: { "orders": [ { ...same shape as POST /odoo/order... }, ... ] }
- */
-router.post('/odoo/orders/bulk', verifySecret, async (req, res) => {
-  try {
-    const { orders } = req.body;
-    if (!Array.isArray(orders) || orders.length === 0) {
-      return res.status(400).json({ error: 'Payload must include a non-empty "orders" array' });
-    }
-
-    const results = [];
-    for (const order of orders) {
-      try {
-        const result = await pushOrder(order);
-        results.push({ name: order?.name, ...result });
-      } catch (err) {
-        results.push({ name: order?.name, success: false, error: err.message });
-      }
-    }
-
-    const succeeded = results.filter(r => r.success).length;
-    console.log(`[Odoo Webhook] Bulk push — ${succeeded}/${orders.length} succeeded`);
-    return res.json({ success: true, total: orders.length, succeeded, failed: orders.length - succeeded, results });
-  } catch (err) {
-    console.error('[Odoo Webhook] /odoo/orders/bulk error:', err);
-    return res.status(500).json({ error: 'Failed to process bulk push', details: err.message });
-  }
-});
-
-/**
  * POST /api/webhooks/odoo/order-update
  *
  * Same as POST /odoo/order, but requires the order to already exist locally

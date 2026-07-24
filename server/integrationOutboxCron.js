@@ -276,6 +276,21 @@ async function handleD1Reminder(row) {
   if (errors.length === 2) throw new Error(errors.join('; '));
 }
 
+// ── FALLBACK_POLL_COMPLETE handler ────────────────────────────────────────────
+// Signals Odoo/GCA that the 5PM fallback sync finished and all next-day DOs are
+// now in CE Hub. GCA uses this event to trigger the D-1 WhatsApp reminders.
+// TODO: replace the log with a real Odoo API call once GCA confirms the endpoint.
+
+async function handleFallbackPollComplete(row) {
+  const { date, synced, skipped } = row.payload || {};
+  console.log(
+    `[OutboxWorker] FALLBACK_POLL_COMPLETE: date=${date}, synced=${synced}, skipped=${skipped}. ` +
+    'D-1 WhatsApp trigger pending GCA API confirmation.'
+  );
+  // TODO: call Odoo endpoint here when GCA provides it, e.g.:
+  // await callModel('some.model', 'trigger_d1_whatsapp', [[]], { date });
+}
+
 // ── Internal event handler (logging only) ─────────────────────────────────────
 
 async function handleInternal(row) {
@@ -297,6 +312,8 @@ async function dispatchRow(row) {
       return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':
       return handleD1Reminder(row);
+    case 'FALLBACK_POLL_COMPLETE':
+      return handleFallbackPollComplete(row);
     case 'SLOT_DEPARTED':
     case 'SLOT_ENDED':
       return handleInternal(row);
