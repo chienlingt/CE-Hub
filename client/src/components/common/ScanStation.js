@@ -300,7 +300,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   const handleCancelScan = async (item, orderId) => {
     const stageToCancel = { picked: 'picking', loaded: 'loading', unloaded: 'unloading' };
     const stage = stageToCancel[item.picking_status];
-    if (!stage || !window.confirm(`Cancel ${stage} scan for "${item.products?.product_name}"?`)) return;
+    if (!stage || !window.confirm(`Cancel ${stage} scan for "${item.products?.product_name || item.odoo_product_name}"?`)) return;
     setCancelling(item.id);
     try {
       const res  = await fetch(`${API_BASE}/api/order-products/${item.id}/cancel-scan`, {
@@ -322,7 +322,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
     return [...rows].sort((a, b) => {
       let va, vb;
       if (sort.field === 'so')     { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
-      else if (sort.field === 'name')   { va = a.products?.product_name || ''; vb = b.products?.product_name || ''; }
+      else if (sort.field === 'name')   { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
       else if (sort.field === 'serial') {
         const displaySerial = r => tab === 'picking' ? (r.picked_serial || r.assigned_serial)
                                  : tab === 'loading' ? (r.loaded_serial || r.picked_serial)
@@ -384,7 +384,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
                     {/* Item Name */}
                     <td className="px-4 py-3">
-                      <p className="font-semibold text-gray-900">{row.products?.product_name || `Item #${row.id}`}</p>
+                      <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
                       <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
                       {/* SO inline on mobile */}
                       <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">
@@ -457,7 +457,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                     <td className="px-4 py-3">
                       {rowCam === row.id && (
                         <ScannerModal
-                          itemName={row.products?.product_name || 'Item'}
+                          itemName={row.products?.product_name || row.odoo_product_name || 'Item'}
                           onScan={v => { setRowCam(null); handleSubmit(row.id, row._orderId, v); }}
                           onClose={() => setRowCam(null)}
                         />
@@ -517,7 +517,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
   const [resetting, setResetting] = useState(null);
 
   const handleResetScan = async (row) => {
-    const name = row.products?.product_name || `Item #${row.id}`;
+    const name = row.products?.product_name || row.odoo_product_name || `Item #${row.id}`;
     if (!window.confirm(`Reset all scan progress for "${name}"? This cannot be undone.`)) return;
     setResetting(row.id);
     try {
@@ -541,7 +541,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
     return [...rows].sort((a, b) => {
       let va, vb;
       if (sort.field === 'so')        { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
-      else if (sort.field === 'name') { va = a.products?.product_name || ''; vb = b.products?.product_name || ''; }
+      else if (sort.field === 'name') { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
       else if (sort.field === 'status') {
         const o = ['pending', 'picked', 'loaded', 'unloaded'];
         va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status);
@@ -615,7 +615,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
                   <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
                     <td className="px-4 py-3">
-                      <p className="font-semibold text-gray-900">{row.products?.product_name || `Item #${row.id}`}</p>
+                      <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
                       <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
                     </td>
                     <td className="px-4 py-3">
@@ -697,12 +697,12 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
   return (
     <div className="space-y-2.5">
       {showCam && (
-        <ScannerModal itemName={nextItem?.products?.product_name || 'Next item'}
+        <ScannerModal itemName={nextItem?.products?.product_name || nextItem?.odoo_product_name || 'Next item'}
           onScan={v => { setShowCam(false); submit(v); }} onClose={() => setShowCam(false)} />
       )}
       <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5">
         <p className="text-xs text-blue-500 font-medium uppercase tracking-wide mb-0.5">Next item</p>
-        <p className="text-sm font-bold text-gray-900">{nextItem?.products?.product_name}</p>
+        <p className="text-sm font-bold text-gray-900">{nextItem?.products?.product_name || nextItem?.odoo_product_name}</p>
         {nextItem?.assigned_serial && (
           <p className="text-xs font-mono text-amber-600 mt-0.5">Serial: {nextItem.assigned_serial}</p>
         )}
@@ -813,7 +813,7 @@ export default function ScanStation({ forcedStage }) {
     if (!search) return allRows;
     const s = search.toLowerCase();
     return allRows.filter(row => {
-      const name   = row.products?.product_name?.toLowerCase() || '';
+      const name   = (row.products?.product_name || row.odoo_product_name || '').toLowerCase();
       const so     = row._order?.odoo_order_ref?.toLowerCase() || row._order?.id?.toLowerCase() || '';
       const cust   = row._order?.customers?.full_name?.toLowerCase() || '';
       const serial = [row.assigned_serial, row.picked_serial, row.loaded_serial, row.unloaded_serial]

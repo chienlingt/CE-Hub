@@ -271,11 +271,13 @@ async function estimateTravelMinutes(fromAddress, toAddress) {
 }
 
 // POST /api/orders/sync-odoo — manually trigger Odoo sync (A1.4)
+// Optional query param: ?date=YYYY-MM-DD  overrides the default "tomorrow" target date
 router.post('/sync-odoo', async (req, res) => {
   try {
     const { syncOrdersFromOdoo } = require('../services/odooSyncService');
-    const result = await syncOrdersFromOdoo();
-    res.json({ success: true, ...result });
+    const targetDate = req.query.date || null;
+    const result = await syncOrdersFromOdoo(targetDate);
+    res.json({ success: true, date: targetDate || 'tomorrow', ...result });
   } catch (err) {
     console.error('POST /api/orders/sync-odoo error', err);
     res.status(500).json({ error: 'Sync failed', details: err.message });
@@ -808,9 +810,9 @@ router.put('/:id', async (req, res) => {
 
     // If products array is provided, update order_products
     if (products && Array.isArray(products)) {
-      // Delete existing order_products
+      // Only delete CE Hub-managed lines — Odoo-sourced lines have no product_id so are preserved
       await prisma.order_products.deleteMany({
-        where: { order_id: req.params.id }
+        where: { order_id: req.params.id, NOT: { product_id: null } }
       });
 
       // Update order with new products

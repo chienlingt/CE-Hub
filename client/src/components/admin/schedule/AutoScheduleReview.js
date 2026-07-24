@@ -592,7 +592,7 @@ function ScheduledOrderRow({ order, isExpanded, onToggleExpand, getTotalProductC
                   {order.order_products?.map((op, idx) => (
                     <div key={idx} className="bg-white p-3 rounded border border-gray-200 text-sm">
                       <div className="flex justify-between">
-                        <span className="font-medium">{op.products?.product_name || 'Unknown Product'}</span>
+                        <span className="font-medium">{op.products?.product_name || op.odoo_product_name || 'Unknown Product'}</span>
                         <span className="text-gray-600">Qty: {op.quantity}</span>
                       </div>
                       <div className="mt-1 text-gray-600">

@@ -59,136 +59,194 @@ async function callModel(model, method, args = [], kwargs = {}) {
 }
 
 /**
- * Push delivery status back to Odoo.
- * Writes the custom field x_delivery_status on sale.order.
- * Adjust the field name to match your Odoo configuration.
+ * Push delivery status back to Odoo by stock.picking integer id.
+ * Field name x_delivery_status — confirm with Odoo team once custom field is added.
  *
- * @param {number} odooOrderId - Odoo sale.order integer id
- * @param {string} localStatus - e.g. 'Delivering', 'Delivered'
+ * @param {number} odooPickingId - stock.picking integer id (from push payload `id`)
+ * @param {string} localStatus   - CE Hub status string
  */
-async function pushDeliveryStatus(odooOrderId, localStatus) {
-  const statusMap = {
-    Delivering: 'in_transit',
-    Delivered:  'delivered',
-  };
+// Shared CE Hub → Odoo x_delivery_status mapping.
+// Picked and Completed have no Odoo counterpart — they return null (no-op).
+const CE_HUB_STATUS_MAP = {
+  Loaded:     'loaded',
+  Unloaded:   'arrived',
+  Delivering: 'in_transit',
+  Delivered:  'delivered',
+  Failed:     'failed',
+};
 
-  const odooStatus = statusMap[localStatus];
+async function pushDeliveryStatus(odooPickingId, localStatus) {
+  const odooStatus = CE_HUB_STATUS_MAP[localStatus];
   if (!odooStatus) return null;
 
-  return callModel('sale.order', 'write', [[odooOrderId], { x_delivery_status: odooStatus }]);
+  return callModel('stock.picking', 'write', [[odooPickingId], { x_delivery_status: odooStatus }]);
 }
 
 /**
- * Fetch confirmed sale orders from Odoo (state = 'sale').
- * Optionally filter by write_date to only get recently changed orders.
+ * Look up a stock.picking by its DO name (e.g. "002/DOO-002909") and write
+ * x_delivery_status. Called automatically on every CE Hub status change.
+ * Returns null (non-fatal) if Odoo is unreachable or the picking is not found.
  *
- * @param {Date|null} sinceDate
- */
-async function getConfirmedOrders(sinceDate = null) {
-  const domain = [['state', '=', 'sale']];
-  if (sinceDate) domain.push(['write_date', '>', sinceDate.toISOString()]);
-
-  return callModel('sale.order', 'search_read', [domain], {
-    fields: [
-      'id', 'name', 'partner_id', 'partner_shipping_id',
-      'order_line', 'amount_total', 'state', 'commitment_date', 'write_date',
-    ],
-    limit: 100,
-  });
-}
-
-/**
- * Look up a sale.order by its name (e.g. "S00042") and write x_delivery_status.
- * Accepts local CE Hub status strings — maps them to Odoo values.
- * Safe to call from any route — returns null instead of throwing if Odoo is unreachable.
- *
- * @param {string} odooOrderRef - sale.order name, e.g. 'S00042'
- * @param {'Delivering'|'Delivered'|'Failed'} localStatus
+ * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
+ * @param {string} localStatus   - CE Hub status (Loaded|Unloaded|Delivering|Delivered|Failed); Picked and Completed are no-ops
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
 
-  const statusMap = {
-    Delivering: 'in_transit',
-    Delivered:  'delivered',
-    Failed:     'failed',
-  };
-
-  const odooStatus = statusMap[localStatus];
+  const odooStatus = CE_HUB_STATUS_MAP[localStatus];
   if (!odooStatus) return null;
 
-  const odooOrders = await callModel('sale.order', 'search_read',
+  const pickings = await callModel('stock.picking', 'search_read',
     [[['name', '=', odooOrderRef]]],
     { fields: ['id'], limit: 1 }
   );
 
-  if (!odooOrders?.length) return null;
+  if (!pickings?.length) return null;
 
-  return callModel('sale.order', 'write', [[odooOrders[0].id], { x_delivery_status: odooStatus }]);
+  return callModel('stock.picking', 'write', [[pickings[0].id], { x_delivery_status: odooStatus }]);
 }
 
 /**
- * Find confirmed sale orders whose delivery commitment date falls on a given
- * calendar day (used by the 5PM "next day" fallback sync — A1.4).
+ * Find outgoing delivery orders (stock.picking) whose scheduled_date falls on
+ * a given MYT calendar day — used by the 5PM fallback sync (A1.4).
+ * Odoo stores scheduled_date in UTC; MYT is UTC+8.
  *
- * @param {string} dateStr - 'YYYY-MM-DD', the target delivery day
- * @returns {Promise<Array<{id:number, name:string}>>}
+ * @param {string} dateStr - 'YYYY-MM-DD' in MYT
+ * @returns {Promise<Array<{id:number, name:string, sale_id:any}>>}
  */
 async function getOrdersForDeliveryDate(dateStr) {
+  // Convert MYT day boundaries to UTC for the Odoo filter
+  const utcStart = new Date(`${dateStr}T00:00:00+08:00`).toISOString().replace('T', ' ').slice(0, 19);
+  const utcEnd   = new Date(`${dateStr}T23:59:59+08:00`).toISOString().replace('T', ' ').slice(0, 19);
+
   const domain = [
-    ['state', '=', 'sale'],
-    ['commitment_date', '>=', `${dateStr} 00:00:00`],
-    ['commitment_date', '<=', `${dateStr} 23:59:59`],
+    ['picking_type_code', '=', 'outgoing'],
+    ['state', 'in', ['assigned', 'confirmed', 'waiting']],
+    ['scheduled_date', '>=', utcStart],
+    ['scheduled_date', '<=', utcEnd],
   ];
-  return callModel('sale.order', 'search_read', [domain], { fields: ['id', 'name'], limit: 200 });
+  return callModel('stock.picking', 'search_read', [domain], {
+    fields: ['id', 'name', 'sale_id'],
+    limit: 200,
+  });
 }
 
 /**
- * Fully resolve one Odoo sale.order into the same shape as the webhook
- * payload (server/routes/webhooks.js POST /odoo/order) — partner/shipping
- * address expanded, order lines expanded with product name + serial.
+ * Fully resolve one stock.picking into the same shape as the Odoo → CE Hub
+ * webhook payload — customer, address, salesperson, order lines, serials.
+ * Used by the 5PM fallback sync to import orders never pushed by Odoo.
  *
- * @param {number} odooId - Odoo sale.order integer id
+ * @param {number} odooPickingId - stock.picking integer id
  */
-async function getOrderDetail(odooId) {
-  const [order] = await callModel('sale.order', 'read', [[odooId]], {
-    fields: ['id', 'name', 'partner_id', 'partner_shipping_id', 'order_line', 'commitment_date', 'note', 'user_id'],
+async function getOrderDetail(odooPickingId) {
+  // 1. Read stock.picking
+  const [picking] = await callModel('stock.picking', 'read', [[odooPickingId]], {
+    fields: ['id', 'name', 'sale_id', 'partner_id', 'scheduled_date', 'move_ids'],
   });
-  if (!order) return null;
+  if (!picking) return null;
 
-  const [partner]  = order.partner_id
-    ? await callModel('res.partner', 'read', [[order.partner_id[0]]], { fields: ['name', 'email', 'phone'] })
-    : [null];
-  const [shipping] = order.partner_shipping_id
-    ? await callModel('res.partner', 'read', [[order.partner_shipping_id[0]]], { fields: ['street', 'city', 'zip', 'state_id'] })
-    : [null];
-  const [salesperson] = order.user_id
-    ? await callModel('res.users', 'read', [[order.user_id[0]]], { fields: ['name', 'partner_id'] })
+  // 2. Read sale.order for SO name, salesperson, delivery remarks
+  const [saleOrder] = picking.sale_id
+    ? await callModel('sale.order', 'read', [[picking.sale_id[0]]], {
+        fields: ['name', 'user_id', 'note'],
+      })
     : [null];
 
-  const lines = order.order_line?.length
-    ? await callModel('sale.order.line', 'read', [order.order_line], { fields: ['product_id', 'product_uom_qty', 'lot_id'] })
+  // 3. Resolve salesperson partner id (res.users → partner_id → res.partner.phone)
+  const [spUser] = saleOrder?.user_id
+    ? await callModel('res.users', 'read', [[saleOrder.user_id[0]]], { fields: ['partner_id'] })
+    : [null];
+  const salespersonPartnerId = spUser?.partner_id?.[0] || null;
+
+  // 4. Batch read customer + salesperson res.partner in one call
+  const partnerIds = [picking.partner_id?.[0], salespersonPartnerId].filter(Boolean);
+  const partners = partnerIds.length
+    ? await callModel('res.partner', 'read', [partnerIds], {
+        fields: ['id', 'name', 'phone', 'mobile', 'email', 'street', 'city', 'zip', 'state_id'],
+      })
     : [];
 
+  const customerPartner    = partners.find(p => p.id === picking.partner_id?.[0]) || null;
+  const salespersonPartner = salespersonPartnerId
+    ? partners.find(p => p.id === salespersonPartnerId)
+    : null;
+
+  // 5. Read stock.move for order lines — sale_line_id gives odoo_line_id directly
+  const moves = picking.move_ids?.length
+    ? await callModel('stock.move', 'read', [picking.move_ids], {
+        fields: ['id', 'product_id', 'product_uom_qty', 'sale_line_id'],
+      })
+    : [];
+
+  // 6. Read stock.move.line for serial numbers (lot_id may be false for non-serialized items)
+  const moveLines = picking.move_ids?.length
+    ? await callModel('stock.move.line', 'search_read',
+        [[['picking_id', '=', odooPickingId]]],
+        { fields: ['move_id', 'lot_id'] }
+      ).catch(() => [])
+    : [];
+
+  const serialByMove = {};
+  for (const ml of moveLines) {
+    const mid = ml.move_id?.[0];
+    if (mid && ml.lot_id && !serialByMove[mid]) {
+      serialByMove[mid] = ml.lot_id[1] || null;
+    }
+  }
+
+  // Strip HTML tags from sale.order note field
+  const stripHtml = html => (html ? html.replace(/<[^>]*>/g, '').trim() : null);
+
+  // Strip " (MY)" country suffix from state name e.g. "Selangor (MY)" → "Selangor"
+  const stateName = customerPartner?.state_id?.[1]?.replace(/\s*\(MY\)\s*$/, '') || null;
+
   return {
-    id:                   order.id,
-    name:                 order.name,
-    partner_name:         partner?.name  || null,
-    partner_email:        partner?.email || null,
-    partner_phone:        partner?.phone || null,
-    delivery_address:     shipping?.street            || null,
-    delivery_city:        shipping?.city              || null,
-    delivery_state_name:  shipping?.state_id?.[1]      || null,
-    delivery_zip:         shipping?.zip               || null,
-    delivery_remarks:     order.note                  || null,
-    salesperson_name:     salesperson?.name            || null,
-    salesperson_phone:    null, // resolved separately if needed — res.users has no direct phone field
-    order_lines: lines.map(l => ({
-      product_name:    l.product_id?.[1]    || null,
-      product_uom_qty: l.product_uom_qty,
-      serial_number:   l.lot_id?.[1]        || null,
+    id:                      picking.id,
+    name:                    picking.name,
+    sales_order_name:        saleOrder?.name                                          || null,
+    preferred_delivery_time: picking.scheduled_date                                   || null,
+    partner_name:            customerPartner?.name                                    || null,
+    partner_email:           customerPartner?.email   || null,
+    partner_phone:           customerPartner?.phone   || customerPartner?.mobile      || null,
+    delivery_address:        customerPartner?.street                                  || null,
+    delivery_city:           customerPartner?.city                                    || null,
+    delivery_state_name:     stateName,
+    delivery_zip:            customerPartner?.zip                                     || null,
+    delivery_remarks:        stripHtml(saleOrder?.note),
+    salesperson_name:        saleOrder?.user_id?.[1]                                  || null,
+    salesperson_phone:       salespersonPartner?.phone || salespersonPartner?.mobile  || null,
+    order_lines: moves.map(m => ({
+      order_line_id:   m.sale_line_id?.[0] || null,
+      product_name:    m.product_id?.[1]   || null,
+      product_uom_qty: m.product_uom_qty,
+      serial_number:   serialByMove[m.id]  || null,
     })),
   };
+}
+
+/**
+ * Write CE Hub's assigned timeslot back to the Odoo Delivery Order.
+ * Field names are placeholders — replace x_scheduled_date_start / x_scheduled_date_end
+ * with the exact names once confirmed by GCA.
+ *
+ * @param {string} odooOrderRef     - DO number (orders.odoo_order_ref)
+ * @param {string} scheduledStart   - ISO datetime string (MYT)
+ * @param {string} scheduledEnd     - ISO datetime string (MYT)
+ */
+async function writeScheduledTimeslot(odooOrderRef, scheduledStart, scheduledEnd) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+
+  const pickings = await callModel('stock.picking', 'search_read',
+    [[['name', '=', odooOrderRef]]],
+    { fields: ['id'], limit: 1 }
+  );
+  if (!pickings?.length) return null;
+
+  // TODO: replace field names below once GCA confirms the exact x_ field names
+  return callModel('stock.picking', 'write', [[pickings[0].id], {
+    x_scheduled_date_start: scheduledStart || false,
+    x_scheduled_date_end:   scheduledEnd   || false,
+  }]);
 }
 
 module.exports = {
@@ -196,7 +254,7 @@ module.exports = {
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
-  getConfirmedOrders,
+  writeScheduledTimeslot,
   getOrdersForDeliveryDate,
   getOrderDetail,
 };

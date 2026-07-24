@@ -212,7 +212,7 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
             ) : (
               <div className="space-y-2">
                 {items.map(item => {
-                  const productName = item.products?.product_name || `Product #${item.product_id?.slice(0, 8)}`;
+                  const productName = item.products?.product_name || item.odoo_product_name || `Product #${item.id}`;
                   const status      = item.item_delivery_status || 'pending';
                   const isUpdating  = updatingItem === item.id;
 

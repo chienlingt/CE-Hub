@@ -71,6 +71,8 @@ async function logChatterAttempt(orderId, odooOrderRef, { status, details, error
   }
 }
 
+// odooOrderRef is the DO number (stock.picking.name, e.g. "002/DOO-002909").
+// Chatter is posted on stock.picking — avoids needing the SO number separately.
 async function postToOdooChatter(orderId, odooOrderRef, { customerName, address, failureReason, failureDesc, driverName }) {
   const details = { customerName, address, driverName, failureReason, failureDesc };
 
@@ -85,22 +87,23 @@ async function postToOdooChatter(orderId, odooOrderRef, { customerName, address,
   try {
     const { callModel } = require('./odooService');
 
-    const odooOrders = await callModel('sale.order', 'search_read',
+    const pickings = await callModel('stock.picking', 'search_read',
       [[['name', '=', odooOrderRef]]],
       { fields: ['id'], limit: 1 }
     );
 
-    if (!odooOrders?.length) {
-      console.warn(`[NotificationService] Odoo order not found for ref: ${odooOrderRef}`);
+    if (!pickings?.length) {
+      console.warn(`[NotificationService] Odoo picking not found for ref: ${odooOrderRef}`);
       await logChatterAttempt(orderId, odooOrderRef, {
-        status: 'failed', details, error: `Odoo order not found for ref: ${odooOrderRef}`,
+        status: 'failed', details, error: `Odoo picking not found for ref: ${odooOrderRef}`,
       });
       return;
     }
 
-    const odooId = odooOrders[0].id;
+    const odooId = pickings[0].id;
     const body = [
       `<b>Delivery Failed</b>`,
+      `<b>Delivery Order:</b> ${odooOrderRef}`,
       `<b>Customer:</b> ${customerName}`,
       `<b>Address:</b> ${address}`,
       `<b>Driver:</b> ${driverName || 'N/A'}`,
@@ -108,7 +111,7 @@ async function postToOdooChatter(orderId, odooOrderRef, { customerName, address,
       `<b>Details:</b> ${failureDesc || 'None provided'}`,
     ].join('<br/>');
 
-    await callModel('sale.order', 'message_post', [[odooId]], {
+    await callModel('stock.picking', 'message_post', [[odooId]], {
       body,
       message_type:    'comment',
       subtype_xmlid:   'mail.mt_comment',

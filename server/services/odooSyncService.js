@@ -10,7 +10,7 @@
 const dayjs  = require('dayjs');
 const prisma = require('../prismaClient');
 
-async function syncOrdersFromOdoo() {
+async function syncOrdersFromOdoo(targetDate = null) {
   if (!process.env.ODOO_URL) {
     console.log('[OdooSync] ODOO_URL not configured — skipping sync.');
     return { synced: 0, skipped: 0 };
@@ -20,7 +20,7 @@ async function syncOrdersFromOdoo() {
     const { getOrdersForDeliveryDate, getOrderDetail } = require('./odooService');
     const { pushOrder } = require('./odooOrderIngestService');
 
-    const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
+    const tomorrow = targetDate || dayjs().add(1, 'day').format('YYYY-MM-DD');
     const odooOrders = await getOrdersForDeliveryDate(tomorrow);
 
     if (!odooOrders?.length) {
@@ -53,6 +53,24 @@ async function syncOrdersFromOdoo() {
     }
 
     console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
+
+    // Emit outbox event so Odoo/GCA knows polling is complete and can trigger D-1 WhatsApp
+    try {
+      await prisma.integration_outbox.create({
+        data: {
+          event_type:      'FALLBACK_POLL_COMPLETE',
+          target:          'odoo',
+          payload:         { date: tomorrow, synced, skipped },
+          idempotency_key: `fallback_poll:${tomorrow}`,
+          status:          'pending',
+          attempts:        0,
+          created_at:      new Date(),
+        },
+      });
+    } catch (outboxErr) {
+      console.warn('[OdooSync] Could not write FALLBACK_POLL_COMPLETE to outbox:', outboxErr.message);
+    }
+
     return { synced, skipped };
   } catch (err) {
     console.error('[OdooSync] Sync failed:', err.message);

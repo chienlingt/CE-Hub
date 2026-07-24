@@ -13,40 +13,6 @@ function verifySecret(req, res, next) {
   next();
 }
 
-/**
- * POST /api/webhooks/odoo/order
- *
- * Triggered by the Odoo "Push to CE Hub" button (single order) or an
- * Automated Action on sale.order confirmation. Create-or-update — if the
- * order doesn't exist locally it's created; if it exists and isn't already
- * in motion (Scheduled/Delivering/Delivered/Completed/Cancelled), it's
- * updated, including a protected merge of order lines (see
- * odooOrderIngestService.mergeOrderLines).
- *
- * Configure the Odoo button/Automated Action → Send Webhook with:
- *   URL:    https://lab2.tbm2u.net/api/webhooks/odoo/order
- *   Header: X-Odoo-Secret: <your ODOO_WEBHOOK_SECRET>
- *   Body (JSON template):
- *   {
- *     "id":                  {{ object.id }},
- *     "name":                "{{ object.name }}",
- *     "partner_name":        "{{ object.partner_id.name }}",
- *     "partner_email":       "{{ object.partner_id.email }}",
- *     "partner_phone":       "{{ object.partner_id.phone }}",
- *     "delivery_address":    "{{ object.partner_shipping_id.street }}",
- *     "delivery_city":       "{{ object.partner_shipping_id.city }}",
- *     "delivery_state_name": "{{ object.partner_shipping_id.state_id.name }}",
- *     "delivery_zip":        "{{ object.partner_shipping_id.zip }}",
- *     "delivery_remarks":    "{{ object.note }}",
- *     "salesperson_name":    "{{ object.user_id.name }}",
- *     "salesperson_phone":   "{{ object.user_id.partner_id.phone }}",
- *     "order_lines": [
- *       {% for line in object.order_line %}
- *       { "product_name": "{{ line.product_id.name }}", "product_uom_qty": {{ line.product_uom_qty }}, "serial_number": "{{ line.lot_id.name }}" }
- *       {% endfor %}
- *     ]
- *   }
- */
 router.post('/odoo/order', verifySecret, async (req, res) => {
   try {
     const { id, name } = req.body;
@@ -65,41 +31,6 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order error:', err);
     return res.status(500).json({ error: 'Failed to process webhook', details: err.message });
-  }
-});
-
-/**
- * POST /api/webhooks/odoo/orders/bulk
- *
- * Triggered by the Odoo "Push All" / "Push Selected" button — accepts
- * multiple orders in one request and create-or-updates each independently.
- * One order failing does not abort the rest of the batch.
- *
- * Body: { "orders": [ { ...same shape as POST /odoo/order... }, ... ] }
- */
-router.post('/odoo/orders/bulk', verifySecret, async (req, res) => {
-  try {
-    const { orders } = req.body;
-    if (!Array.isArray(orders) || orders.length === 0) {
-      return res.status(400).json({ error: 'Payload must include a non-empty "orders" array' });
-    }
-
-    const results = [];
-    for (const order of orders) {
-      try {
-        const result = await pushOrder(order);
-        results.push({ name: order?.name, ...result });
-      } catch (err) {
-        results.push({ name: order?.name, success: false, error: err.message });
-      }
-    }
-
-    const succeeded = results.filter(r => r.success).length;
-    console.log(`[Odoo Webhook] Bulk push — ${succeeded}/${orders.length} succeeded`);
-    return res.json({ success: true, total: orders.length, succeeded, failed: orders.length - succeeded, results });
-  } catch (err) {
-    console.error('[Odoo Webhook] /odoo/orders/bulk error:', err);
-    return res.status(500).json({ error: 'Failed to process bulk push', details: err.message });
   }
 });
 
