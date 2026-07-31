@@ -1,9 +1,10 @@
 /**
- * ScanStation — A2 Truck Loading Enforcement (v3)
+ * ScanStation — A2 Truck Loading Enforcement
  *
- * Warehouse → Picking only (no tabs)
- * Driver    → Loading / Unloading toggle (in filter bar, not header)
- * Admin     → Warehouse View / Driver View selector
+ * Driver → Loading / Unloading toggle
+ * Admin  → Loading / Unloading / Audit view
+ *
+ * Picking is handled by Odoo/warehouse — CE Hub starts from Loading.
  */
 
 import {
@@ -12,7 +13,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   CalendarDays,
-  Camera, ClipboardList, Package,
+  Camera, ClipboardList,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -92,18 +93,15 @@ function StatusPill({ item }) {
   const status = item?.picking_status || 'pending';
   const cfg = {
     pending:  { label: 'Pending',  cls: 'bg-gray-100 text-gray-500',       dot: 'bg-gray-400'    },
-    picked:   { label: 'Picked',   cls: 'bg-blue-100 text-blue-700',       dot: 'bg-blue-500'    },
     loaded:   { label: 'Loaded',   cls: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
     unloaded: { label: 'Unloaded', cls: 'bg-purple-100 text-purple-700',   dot: 'bg-purple-500'  },
   };
   const { label, cls, dot } = cfg[status] || cfg.pending;
 
   const byName = status === 'unloaded' ? item.unloaded_by_name
-               : status === 'loaded'   ? item.loaded_by_name
-               : status === 'picked'   ? item.picked_by_name : null;
+               : status === 'loaded'   ? item.loaded_by_name : null;
   const at     = status === 'unloaded' ? item.unloaded_at
-               : status === 'loaded'   ? item.loaded_at
-               : status === 'picked'   ? item.picked_at : null;
+               : status === 'loaded'   ? item.loaded_at : null;
 
   const pill = (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-default ${cls}`}>
@@ -242,10 +240,8 @@ function useAllOrderItems(orders) {
         ...prev,
         [orderId]: {
           ...od, items,
-          picked_count:   items.filter(i => ['picked','loaded','unloaded'].includes(i.picking_status)).length,
           loaded_count:   items.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
           unloaded_count: items.filter(i => i.picking_status === 'unloaded').length,
-          all_picked:     items.every(i => ['picked','loaded','unloaded'].includes(i.picking_status)),
           all_loaded:     items.every(i => ['loaded','unloaded'].includes(i.picking_status)),
           all_unloaded:   items.every(i => i.picking_status === 'unloaded'),
         },
@@ -263,19 +259,19 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   const [busy,       setBusy]       = useState({});
   const [rowCam,     setRowCam]     = useState(null);
   const [cancelling, setCancelling] = useState(null);
-  const [sort,        setSort]        = useState({ field: 'so', dir: 'asc' });
+  const [sort,        setSort]        = useState({ field: 'do', dir: 'asc' });
 
-  const apiStage   = tab === 'picking' ? 'picking' : tab === 'loading' ? 'loading' : 'unloading';
-  const needStatus = tab === 'picking' ? 'pending' : tab === 'loading' ? 'picked' : 'loaded';
+  const apiStage   = tab === 'loading' ? 'loading' : 'unloading';
+  const needStatus = tab === 'loading' ? 'pending' : 'loaded';
 
-  // Handle global scan (loading / unloading only)
+  // Handle global scan
   useEffect(() => {
-    if (!globalScanSerial || !rows.length || tab === 'picking') return;
+    if (!globalScanSerial || !rows.length) return;
     const serial = globalScanSerial.trim();
     const match = rows.find(r =>
       tab === 'loading'
-        ? r.picking_status === 'picked'  && r.picked_serial  === serial
-        : r.picking_status === 'loaded'  && r.loaded_serial  === serial
+        ? r.picking_status === 'pending' && r.assigned_serial === serial
+        : r.picking_status === 'loaded'  && r.loaded_serial   === serial
     ) || rows.find(r => r.picking_status === needStatus);
     if (!match) { onGlobalScanError?.({ ok: false, msg: `Serial "${serial}" not found in list.` }); return; }
     handleSubmit(match.id, match._orderId, serial);
@@ -298,7 +294,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   };
 
   const handleCancelScan = async (item, orderId) => {
-    const stageToCancel = { picked: 'picking', loaded: 'loading', unloaded: 'unloading' };
+    const stageToCancel = { loaded: 'loading', unloaded: 'unloading' };
     const stage = stageToCancel[item.picking_status];
     if (!stage || !window.confirm(`Cancel ${stage} scan for "${item.products?.product_name || item.odoo_product_name}"?`)) return;
     setCancelling(item.id);
@@ -321,15 +317,15 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
       let va, vb;
-      if (sort.field === 'so')     { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
+      if (sort.field === 'do')     { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
       else if (sort.field === 'name')   { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
       else if (sort.field === 'serial') {
-        const displaySerial = r => tab === 'picking' ? (r.picked_serial || r.assigned_serial)
-                                 : tab === 'loading' ? (r.loaded_serial || r.picked_serial)
-                                 : (r.unloaded_serial || r.loaded_serial);
+        const displaySerial = r => tab === 'loading'
+          ? (r.loaded_serial   || r.assigned_serial)
+          : (r.unloaded_serial || r.loaded_serial);
         va = displaySerial(a) || ''; vb = displaySerial(b) || '';
       }
-      else if (sort.field === 'status') { const o = ['pending','picked','loaded','unloaded']; va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status); return sort.dir === 'asc' ? va - vb : vb - va; }
+      else if (sort.field === 'status') { const o = ['pending','loaded','unloaded']; va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status); return sort.dir === 'asc' ? va - vb : vb - va; }
       else return 0;
       const c = String(va).localeCompare(String(vb), undefined, { numeric: true });
       return sort.dir === 'asc' ? c : -c;
@@ -338,12 +334,96 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
   if (!sorted.length) return null;
 
+  // Shared row renderer used in both flat (loading) and grouped (unloading) modes
+  const renderRow = (row, idx) => {
+    const isActionable = row.picking_status === needStatus;
+    const fb  = rowFb[row.id];
+    const doRef = row._order?.odoo_order_ref || row._order?.id;
+    return (
+      <React.Fragment key={row.id}>
+        <tr className={`transition-colors ${isActionable ? 'bg-blue-50/40' : 'hover:bg-gray-50'}`}>
+          {/* # */}
+          <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
+          {/* Item Name */}
+          <td className="px-4 py-3">
+            <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
+            <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
+            {/* DO inline on mobile */}
+            <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">{doRef}</p>
+            {/* Serial inline on mobile */}
+            {(() => {
+              const s = tab === 'loading'
+                ? (row.loaded_serial   || row.assigned_serial)
+                : (row.unloaded_serial || row.loaded_serial);
+              const cls = tab === 'loading'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-purple-50 text-purple-700 border-purple-200';
+              return s ? (
+                <span className={`md:hidden inline-block font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 ${cls}`}>{s}</span>
+              ) : null;
+            })()}
+          </td>
+          {/* DO Number */}
+          <td className="px-4 py-3 hidden sm:table-cell">
+            <span className="font-mono text-xs font-bold text-gray-700">{doRef}</span>
+            {row._order?.customers?.full_name && (
+              <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                <User size={9} />{row._order.customers.full_name}
+              </p>
+            )}
+          </td>
+          {/* Serial No. */}
+          <td className="px-4 py-3 hidden md:table-cell">
+            {(() => {
+              const serial =
+                tab === 'loading'
+                  ? (row.loaded_serial   || row.assigned_serial)
+                  : (row.unloaded_serial || row.loaded_serial);
+              const color =
+                tab === 'loading'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-purple-50 text-purple-700 border-purple-200';
+              return serial
+                ? <span className={`font-mono text-xs px-2 py-0.5 rounded border ${color}`}>{serial}</span>
+                : <span className="text-xs text-gray-300">—</span>;
+            })()}
+          </td>
+          {/* Status */}
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-1.5">
+              <StatusPill item={row} />
+              {isAdmin && row.picking_status !== 'pending' && (
+                <button
+                  onClick={() => handleCancelScan(row, row._orderId)}
+                  disabled={cancelling === row.id}
+                  className="text-red-400 hover:text-red-600 transition-colors disabled:opacity-40"
+                  title="Cancel scan"
+                >
+                  {cancelling === row.id
+                    ? <RefreshCw size={11} className="animate-spin" />
+                    : <XCircle size={11} />}
+                </button>
+              )}
+            </div>
+          </td>
+        </tr>
+        {fb && !fb.ok && (
+          <tr className="border-0">
+            <td colSpan={5} className="px-4 pb-2 pt-0">
+              <ErrorBanner fb={fb} onDismiss={() => setRowFb(p => ({ ...p, [row.id]: null }))} />
+            </td>
+          </tr>
+        )}
+      </React.Fragment>
+    );
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       {/* Mobile sort strip — column headers are hidden on small screens */}
       <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 md:hidden flex-wrap">
         <span className="text-xs text-gray-400 font-medium">Sort:</span>
-        {[{ id: 'so', label: 'SO' }, { id: 'serial', label: 'Serial' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
+        {[{ id: 'do', label: 'DO' }, { id: 'serial', label: 'Serial' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
           const active = sort.field === f.id;
           const Icon   = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
           return (
@@ -362,131 +442,56 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
               <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
-              <SortTh field="so"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">SO Number</SortTh>
+              <SortTh field="do"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">DO Number</SortTh>
               <SortTh field="serial" sort={sort} onSort={handleSort} className="hidden md:table-cell">Serial No.</SortTh>
               <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
-              {tab === 'picking' && (
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-52">Action</th>
-              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {sorted.map((row, idx) => {
-              const isActionable = row.picking_status === needStatus;
-              const fb = rowFb[row.id];
-
-              return (
-                <React.Fragment key={row.id}>
-                  <tr className={`transition-colors ${isActionable ? 'bg-blue-50/40' : 'hover:bg-gray-50'}`}>
-
-                    {/* # */}
-                    <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
-
-                    {/* Item Name */}
-                    <td className="px-4 py-3">
-                      <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
-                      <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
-                      {/* SO inline on mobile */}
-                      <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">
-                        {row._order?.id}
-                      </p>
-                      {/* Serial inline on mobile */}
-                      {(() => {
-                        const s = tab === 'picking' ? (row.picked_serial || row.assigned_serial)
-                                : tab === 'loading' ? (row.loaded_serial || row.picked_serial)
-                                : (row.unloaded_serial || row.loaded_serial);
-                        const cls = tab === 'picking' ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                  : tab === 'loading' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : 'bg-purple-50 text-purple-700 border-purple-200';
-                        return s ? (
-                          <span className={`md:hidden inline-block font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 ${cls}`}>{s}</span>
-                        ) : null;
-                      })()}
-                    </td>
-
-                    {/* SO Number */}
-                    <td className="px-4 py-3 hidden sm:table-cell">
-                      <span className="font-mono text-xs font-bold text-gray-700">
-                        {row._order?.id}
-                      </span>
-                      {row._order?.customers?.full_name && (
-                        <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
-                          <User size={9} />{row._order.customers.full_name}
-                        </p>
-                      )}
-                    </td>
-
-                    {/* Serial No. — one value, most relevant for current tab */}
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      {(() => {
-                        const serial =
-                          tab === 'picking'   ? (row.picked_serial   || row.assigned_serial) :
-                          tab === 'loading'   ? (row.loaded_serial   || row.picked_serial)  :
-                                               (row.unloaded_serial  || row.loaded_serial);
-                        const color =
-                          tab === 'picking'   ? 'bg-amber-50 text-amber-700 border-amber-200'   :
-                          tab === 'loading'   ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                                               'bg-purple-50 text-purple-700 border-purple-200';
-                        return serial
-                          ? <span className={`font-mono text-xs px-2 py-0.5 rounded border ${color}`}>{serial}</span>
-                          : <span className="text-xs text-gray-300">—</span>;
-                      })()}
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <StatusPill item={row} />
-                        {isAdmin && row.picking_status !== 'pending' && (
-                          <button
-                            onClick={() => handleCancelScan(row, row._orderId)}
-                            disabled={cancelling === row.id}
-                            className="text-red-400 hover:text-red-600 transition-colors disabled:opacity-40"
-                            title="Cancel scan"
-                          >
-                            {cancelling === row.id
-                              ? <RefreshCw size={11} className="animate-spin" />
-                              : <XCircle size={11} />}
-                          </button>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Action — picking only; loading/unloading use the global Scan button in header */}
-                    {tab === 'picking' && (
-                    <td className="px-4 py-3">
-                      {rowCam === row.id && (
-                        <ScannerModal
-                          itemName={row.products?.product_name || row.odoo_product_name || 'Item'}
-                          onScan={v => { setRowCam(null); handleSubmit(row.id, row._orderId, v); }}
-                          onClose={() => setRowCam(null)}
-                        />
-                      )}
-                      {isActionable ? (
-                        <button
-                          onClick={() => setRowCam(row.id)}
-                          className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors"
-                        >
-                          <Camera size={12} /> Scan
-                        </button>
-                      ) : (
-                        <span className="text-xs text-gray-300">—</span>
-                      )}
-                    </td>
-                    )}
-                  </tr>
-
-                  {/* Error feedback row */}
-                  {fb && !fb.ok && (
-                    <tr className="border-0">
-                      <td colSpan={6} className="px-4 pb-2 pt-0">
-                        <ErrorBanner fb={fb} onDismiss={() => setRowFb(p => ({ ...p, [row.id]: null }))} />
+            {tab === 'unloading' ? (() => {
+              // Group by order to show per-order Completed / Incompleted badge
+              const groups = [];
+              const gmap   = {};
+              sorted.forEach(row => {
+                if (!gmap[row._orderId]) {
+                  const g = { orderId: row._orderId, order: row._order, rows: [] };
+                  gmap[row._orderId] = g;
+                  groups.push(g);
+                }
+                gmap[row._orderId].rows.push(row);
+              });
+              let globalIdx = 0;
+              return groups.map(({ orderId, order, rows: gRows }) => {
+                const allUnloaded = gRows.every(r => r.picking_status === 'unloaded');
+                const doRef = order?.odoo_order_ref || orderId;
+                return (
+                  <React.Fragment key={orderId}>
+                    {/* Per-order header with completion badge */}
+                    <tr className="bg-gray-50 border-t-2 border-gray-200">
+                      <td colSpan={5} className="px-4 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono text-xs font-bold text-gray-700 truncate">{doRef}</span>
+                            {order?.customers?.full_name && (
+                              <span className="text-xs text-gray-400 flex items-center gap-1 flex-shrink-0">
+                                <User size={9} />{order.customers.full_name}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
+                            ${allUnloaded ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {allUnloaded ? 'Completed' : 'Incompleted'}
+                          </span>
+                        </div>
                       </td>
                     </tr>
-                  )}
-                </React.Fragment>
-              );
-            })}
+                    {gRows.map(row => renderRow(row, globalIdx++))}
+                  </React.Fragment>
+                );
+              });
+            })() : (
+              sorted.map((row, idx) => renderRow(row, idx))
+            )}
           </tbody>
         </table>
       </div>
@@ -513,7 +518,7 @@ function AuditCell({ name, at, serial, color }) {
 }
 
 function AuditTable({ rows, isAdmin, onUpdated }) {
-  const [sort,      setSort]      = useState({ field: 'so', dir: 'asc' });
+  const [sort,      setSort]      = useState({ field: 'do', dir: 'asc' });
   const [resetting, setResetting] = useState(null);
 
   const handleResetScan = async (row) => {
@@ -526,7 +531,6 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
       if (!res.ok) { alert(data.error || 'Failed to reset item'); return; }
       onUpdated(row._orderId, {
         ...data.orderProduct,
-        picked_by_name:   null,
         loaded_by_name:   null,
         unloaded_by_name: null,
       });
@@ -540,10 +544,10 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
       let va, vb;
-      if (sort.field === 'so')        { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
+      if (sort.field === 'do')        { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
       else if (sort.field === 'name') { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
       else if (sort.field === 'status') {
-        const o = ['pending', 'picked', 'loaded', 'unloaded'];
+        const o = ['pending', 'loaded', 'unloaded'];
         va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status);
         return sort.dir === 'asc' ? va - vb : vb - va;
       }
@@ -590,7 +594,6 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
               <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
               <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Picked</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Loaded</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Unloaded</th>
             </tr>
@@ -600,10 +603,10 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
               <React.Fragment key={orderId}>
                 {/* Per-order group header with Reset button for admin */}
                 <tr className="bg-gray-50 border-t-2 border-gray-200">
-                  <td colSpan={6} className="px-4 py-2">
+                  <td colSpan={5} className="px-4 py-2">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-xs font-bold text-gray-600">
-                        {orderId}
+                        {order?.odoo_order_ref || orderId}
                         {order?.customers?.full_name && (
                           <span className="font-normal text-gray-400 ml-2">{order.customers.full_name}</span>
                         )}
@@ -635,7 +638,6 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3"><AuditCell name={row.picked_by_name}   at={row.picked_at}   serial={row.picked_serial}   color="blue" /></td>
                     <td className="px-4 py-3"><AuditCell name={row.loaded_by_name}   at={row.loaded_at}   serial={row.loaded_serial}   color="emerald" /></td>
                     <td className="px-4 py-3"><AuditCell name={row.unloaded_by_name} at={row.unloaded_at} serial={row.unloaded_serial} color="purple" /></td>
                   </tr>
@@ -658,10 +660,10 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
   const [busy,    setBusy]    = useState(false);
   const inputRef = useRef(null);
 
-  const apiStage   = stage === 'warehouse' ? 'picking' : stage === 'driver' ? 'loading' : 'unloading';
-  const canStatus  = stage === 'warehouse' ? 'pending' : stage === 'driver' ? 'picked' : 'loaded';
-  const doneStatus = stage === 'warehouse' ? ['picked','loaded','unloaded'] : stage === 'driver' ? ['loaded','unloaded'] : ['unloaded'];
-  const doneLabel  = stage === 'warehouse' ? 'Picked' : stage === 'driver' ? 'Loaded' : 'Unloaded';
+  const apiStage   = stage === 'driver' ? 'loading' : 'unloading';
+  const canStatus  = stage === 'driver' ? 'pending' : 'loaded';
+  const doneStatus = stage === 'driver' ? ['loaded','unloaded'] : ['unloaded'];
+  const doneLabel  = stage === 'driver' ? 'Loaded' : 'Unloaded';
 
   const nextItem  = items.find(i => i.picking_status === canStatus);
   const allDone   = items.length > 0 && items.every(i => doneStatus.includes(i.picking_status));
@@ -690,7 +692,7 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
   if (noneReady) return (
     <div className="flex items-center gap-2 py-3 rounded-xl bg-amber-50 text-amber-700 text-sm px-3">
       <AlertTriangle size={16} />
-      {stage === 'driver' ? 'Items not yet picked.' : 'Items not yet loaded.'}
+      {stage === 'driver' ? 'No items pending for loading.' : 'Items not yet loaded.'}
     </div>
   );
 
@@ -742,22 +744,19 @@ export default function ScanStation({ forcedStage }) {
   const tabOptions = useMemo(() => {
     const roleKnown = isAdmin || isWarehouse || isDriver;
     if (roleKnown && !isAdmin) {
-      if (isWarehouse && !isDriver) return [{ id: 'picking', label: 'Picking' }];
-      if (isDriver && !isWarehouse) return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
+      return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     }
-    // Admin: respect forcedStage or show all three
-    if (forcedStage === 'warehouse') return [{ id: 'picking',   label: 'Picking'   }];
+    // Admin: respect forcedStage or show all
     if (forcedStage === 'unloading') return [{ id: 'unloading', label: 'Unloading' }];
     if (forcedStage === 'driver')    return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     if (forcedStage === 'audit')     return [{ id: 'audit', label: 'Audit' }];
-    if (isAdmin) return [{ id: 'picking', label: 'Picking' }, { id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
-    return [{ id: 'picking', label: 'Picking' }]; // safe default
+    if (isAdmin) return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
+    return [{ id: 'loading', label: 'Loading' }]; // safe default
   }, [forcedStage, isAdmin, isDriver, isWarehouse]);
 
   // forcedStage determines the initial active tab regardless of role order
   const [tab, setTab] = useState(() => {
     if (forcedStage === 'unloading') return 'unloading';
-    if (forcedStage === 'warehouse') return 'picking';
     if (forcedStage === 'audit')     return 'audit';
     return tabOptions[0].id;
   });
@@ -771,12 +770,11 @@ export default function ScanStation({ forcedStage }) {
   // Sync tab with forcedStage when prop changes
   useEffect(() => {
     if (forcedStage === 'unloading') setTab('unloading');
-    else if (forcedStage === 'warehouse') setTab('picking');
     else if (forcedStage === 'driver') setTab('loading');
     else if (forcedStage === 'audit') setTab('audit');
   }, [forcedStage]);
 
-  const orderStatus = tab === 'unloading' ? 'Delivering' : tab === 'audit' ? 'all' : 'Scheduled';
+  const orderStatus = tab === 'unloading' ? 'Delivering,Delivered' : tab === 'audit' ? 'all' : 'Scheduled';
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -816,15 +814,15 @@ export default function ScanStation({ forcedStage }) {
       const name   = (row.products?.product_name || row.odoo_product_name || '').toLowerCase();
       const so     = row._order?.odoo_order_ref?.toLowerCase() || row._order?.id?.toLowerCase() || '';
       const cust   = row._order?.customers?.full_name?.toLowerCase() || '';
-      const serial = [row.assigned_serial, row.picked_serial, row.loaded_serial, row.unloaded_serial]
+      const serial = [row.assigned_serial, row.loaded_serial, row.unloaded_serial]
                        .filter(Boolean).join(' ').toLowerCase();
       return name.includes(s) || so.includes(s) || cust.includes(s) || serial.includes(s);
     });
   }, [filteredOrders, itemMap, search]);
 
-  const tabLabel = tab === 'picking' ? 'Picking' : tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : 'Audit';
+  const tabLabel = tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : 'Audit';
 
-  // Global scan — only for loading / unloading (picking uses per-row buttons)
+  // Global scan — loading and unloading tabs
   const [showGlobalCam,    setShowGlobalCam]    = useState(false);
   const [globalScanSerial, setGlobalScanSerial] = useState(null);
   const [globalError,      setGlobalError]      = useState(null);
@@ -865,7 +863,7 @@ export default function ScanStation({ forcedStage }) {
               <RefreshCw className="w-4 h-4 text-white" />
             </button>
             {/* Global scan button — loading & unloading only */}
-            {tab !== 'picking' && tab !== 'audit' && (
+            {tab !== 'audit' && (
               <button onClick={() => setShowGlobalCam(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-white text-blue-700 font-bold text-sm rounded-xl hover:bg-blue-50 transition-colors shadow-sm">
                 <Camera size={16} />
@@ -896,7 +894,7 @@ export default function ScanStation({ forcedStage }) {
           <div className="relative flex-1 min-w-[180px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search SO, customer, item or serial…"
+              placeholder="Search DO, customer, item or serial…"
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
           </div>
 
@@ -912,8 +910,7 @@ export default function ScanStation({ forcedStage }) {
           </div>
         ) : rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
-            {tab === 'picking' ? <Package size={48} className="opacity-20" />
-              : tab === 'audit' ? <ClipboardList size={48} className="opacity-20" />
+            {tab === 'audit' ? <ClipboardList size={48} className="opacity-20" />
               : <Truck size={48} className="opacity-20" />}
             <p className="text-base font-medium text-gray-500">
               {search ? 'No items match your search.' : tab === 'audit' ? 'No items for this date.' : `No ${tabLabel.toLowerCase()} items for this date.`}

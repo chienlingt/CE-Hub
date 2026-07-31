@@ -476,9 +476,10 @@ router.get('/', async (req, res) => {
     // Build where clause
     const where = {};
 
-    // Status filter
+    // Status filter — supports comma-separated values (e.g. "Delivering,Delivered")
     if (status && status !== 'all') {
-      where.order_status = status;
+      const parts = status.split(',').map(s => s.trim()).filter(Boolean);
+      where.order_status = parts.length > 1 ? { in: parts } : parts[0];
     }
 
     // Date range filter (on created_at)
@@ -1276,7 +1277,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// GET /:id/loading-status — A2: per-item picking/loading status for an order
+// GET /:id/loading-status — A2: per-item loading/unloading status for an order
 router.get('/:id/loading-status', async (req, res) => {
   try {
     const items = await prisma.order_products.findMany({
@@ -1287,15 +1288,15 @@ router.get('/:id/loading-status', async (req, res) => {
 
     if (!items.length) {
       return res.json({
-        items: [], all_picked: true, all_loaded: true,
-        ready_to_dispatch: true, picked_count: 0, loaded_count: 0, total: 0,
+        items: [], all_loaded: true, all_unloaded: true,
+        ready_to_dispatch: true, loaded_count: 0, unloaded_count: 0, total: 0,
       });
     }
 
-    // Resolve employee names for picked_by / loaded_by
+    // Resolve employee names for loaded_by / unloaded_by
     const empIds = [...new Set([
-      ...items.filter(i => i.picked_by).map(i => i.picked_by),
       ...items.filter(i => i.loaded_by).map(i => i.loaded_by),
+      ...items.filter(i => i.unloaded_by).map(i => i.unloaded_by),
     ])];
 
     const empMap = {};
@@ -1309,30 +1310,14 @@ router.get('/:id/loading-status', async (req, res) => {
 
     const enriched = items.map(item => ({
       ...item,
-      picked_by_name: item.picked_by ? (empMap[item.picked_by] || 'Unknown') : null,
-      loaded_by_name: item.loaded_by ? (empMap[item.loaded_by] || 'Unknown') : null,
+      loaded_by_name:   item.loaded_by   ? (empMap[item.loaded_by]   || 'Unknown') : null,
+      unloaded_by_name: item.unloaded_by ? (empMap[item.unloaded_by] || 'Unknown') : null,
     }));
 
-    const all_picked   = enriched.every(i => ['picked','loaded','unloaded'].includes(i.picking_status));
     const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.picking_status));
     const all_unloaded = enriched.every(i => i.picking_status === 'unloaded');
 
-    // Resolve unloaded_by names
-    const unloadedEmpIds = [...new Set(enriched.filter(i => i.unloaded_by).map(i => i.unloaded_by))];
-    const unloadedEmpMap = {};
-    if (unloadedEmpIds.length > 0) {
-      const emps = await prisma.employees.findMany({
-        where:  { id: { in: unloadedEmpIds } },
-        select: { id: true, name: true, display_name: true },
-      });
-      emps.forEach(e => { unloadedEmpMap[e.id] = e.name || e.display_name || 'Unknown'; });
-    }
-    const enrichedWithUnload = enriched.map(item => ({
-      ...item,
-      unloaded_by_name: item.unloaded_by ? (unloadedEmpMap[item.unloaded_by] || 'Unknown') : null,
-    }));
-
-    // Also fetch order-level status + delivery info
+    // Fetch order-level status + delivery info
     const order = await prisma.orders.findUnique({
       where:  { id: req.params.id },
       select: { order_status: true, delivered_by: true, delivery_end_date_time: true },
@@ -1348,16 +1333,14 @@ router.get('/:id/loading-status', async (req, res) => {
     }
 
     res.json({
-      items:             enrichedWithUnload,
-      all_picked,
+      items:             enriched,
       all_loaded,
       all_unloaded,
       ready_to_dispatch: all_loaded,
       ready_to_deliver:  all_unloaded,
-      picked_count:   enrichedWithUnload.filter(i => ['picked','loaded','unloaded'].includes(i.picking_status)).length,
-      loaded_count:   enrichedWithUnload.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
-      unloaded_count: enrichedWithUnload.filter(i => i.picking_status === 'unloaded').length,
-      total:          enrichedWithUnload.length,
+      loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
+      unloaded_count: enriched.filter(i => i.picking_status === 'unloaded').length,
+      total:          enriched.length,
       order_status:   order?.order_status || null,
       delivered_by_name: deliveredByName,
       delivered_at:   order?.delivery_end_date_time || null,

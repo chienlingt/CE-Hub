@@ -69,7 +69,7 @@ async function callModel(model, method, args = [], kwargs = {}) {
 // Picked and Completed have no Odoo counterpart — they return null (no-op).
 const CE_HUB_STATUS_MAP = {
   Loaded:     'loaded',
-  Unloaded:   'arrived',
+  Arrived:    'arrived',
   Delivering: 'in_transit',
   Delivered:  'delivered',
   Failed:     'failed',

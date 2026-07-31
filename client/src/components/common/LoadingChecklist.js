@@ -1,7 +1,7 @@
 /**
- * LoadingChecklist — Read-only status display for warehouse and delivery schedules.
+ * LoadingChecklist — Read-only status display for delivery schedules.
  *
- * Shows picking/loading/unloading status per item. Scanning is done in Scan Station.
+ * Shows loading/unloading status per item. Scanning is done in Scan Station.
  * Departure (→ Delivering) is triggered by the Leave warehouse banner in DriverDashboard
  * via POST /api/time-slots/:id/depart. There is no per-order dispatch here.
  */
@@ -34,7 +34,6 @@ function formatDateTime(str) {
 function ItemStatusRow({ item, stage, idx }) {
   const status    = item.picking_status || 'pending';
   const isLoaded  = status === 'loaded';
-  const isPicked  = status === 'picked';
   const isPending = status === 'pending';
   const isWaiting = stage === 'driver' && isPending;
 
@@ -44,28 +43,22 @@ function ItemStatusRow({ item, stage, idx }) {
 
   const byName = isUnloaded ? item.unloaded_by_name
                : isLoaded   ? item.loaded_by_name
-               : isPicked   ? item.picked_by_name
                : null;
   const at     = isUnloaded ? item.unloaded_at
                : isLoaded   ? item.loaded_at
-               : isPicked   ? item.picked_at
                : null;
   const serial = isUnloaded ? item.unloaded_serial
                : isLoaded   ? item.loaded_serial
-               : isPicked   ? item.picked_serial
                : null;
 
   return (
     <div className={`flex items-center gap-3 px-3 py-2.5 ${
-      isLoaded  ? 'bg-green-50'  :
-      isPicked  ? 'bg-blue-50'   :
-      isWaiting ? 'bg-gray-50'   : 'bg-white'
+      isLoaded  ? 'bg-green-50' :
+      isWaiting ? 'bg-gray-50'  : 'bg-white'
     }`}>
       {/* Circle number */}
       <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold ${
-        isLoaded  ? 'bg-green-200 text-green-800' :
-        isPicked  ? 'bg-blue-200 text-blue-800'   :
-                    'bg-gray-200 text-gray-500'
+        isLoaded ? 'bg-green-200 text-green-800' : 'bg-gray-200 text-gray-500'
       }`}>
         {idx + 1}
       </div>
@@ -82,14 +75,14 @@ function ItemStatusRow({ item, stage, idx }) {
         {/* Status details */}
         {byName && (
           <p className={`text-xs flex items-center gap-1 mt-0.5 ${
-            isUnloaded ? 'text-purple-600' : isLoaded ? 'text-green-600' : 'text-blue-500'
+            isUnloaded ? 'text-purple-600' : 'text-green-600'
           }`}>
             <User size={9} />
-            {isUnloaded ? 'Unloaded' : isLoaded ? 'Loaded' : 'Picked'} by {byName}
+            {isUnloaded ? 'Unloaded' : 'Loaded'} by {byName}
             {at && ` · ${formatDateTime(at)}`}
             {serial && (
               <span className={`font-mono ml-1 px-1 py-0.5 rounded text-xs ${
-                isUnloaded ? 'bg-purple-100' : isLoaded ? 'bg-green-100' : 'bg-blue-100'
+                isUnloaded ? 'bg-purple-100' : 'bg-green-100'
               }`}>
                 {serial}
               </span>
@@ -112,7 +105,6 @@ function ItemStatusRow({ item, stage, idx }) {
       <div className="flex-shrink-0">
         {isUnloaded && <CheckCircle size={15} className="text-purple-500" />}
         {isLoaded   && <CheckCircle size={15} className="text-green-500"  />}
-        {isPicked   && <CheckCircle size={15} className="text-blue-400"   />}
         {isPending  && <Clock       size={13} className="text-gray-300"   />}
       </div>
     </div>
@@ -177,31 +169,25 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
     }
   };
 
-  const items      = data?.items     || [];
-  const pickedCnt  = data?.picked_count || 0;
-  const loadedCnt  = data?.loaded_count || 0;
-  const total      = data?.total        || 0;
-  const allPicked  = data?.all_picked   || false;
-  const allLoaded  = data?.all_loaded   || false;
+  const items       = data?.items         || [];
+  const loadedCnt   = data?.loaded_count  || 0;
+  const total       = data?.total         || 0;
+  const allLoaded   = data?.all_loaded    || false;
 
-  const unloadedCnt  = data?.unloaded_count || 0;
-  const allUnloaded  = data?.all_unloaded  || false;
+  const unloadedCnt = data?.unloaded_count || 0;
+  const allUnloaded = data?.all_unloaded   || false;
 
   const isUnloading  = stage === 'unloading';
-  const stageCount   = stage === 'warehouse' ? pickedCnt
-                     : isUnloading           ? unloadedCnt
-                     :                         loadedCnt;
-  const allDone      = stage === 'warehouse' ? allPicked
-                     : isUnloading           ? allUnloaded
-                     :                         allLoaded;
+  const stageCount   = isUnloading ? unloadedCnt : loadedCnt;
+  const allDone      = isUnloading ? allUnloaded  : allLoaded;
   const pct          = total > 0 ? Math.round((stageCount / total) * 100) : 0;
 
-  const barColor = stage === 'warehouse' ? (allDone ? 'bg-blue-500'   : 'bg-blue-400')
-                 : isUnloading           ? (allDone ? 'bg-purple-500' : 'bg-purple-400')
-                 :                         (allDone ? 'bg-green-500'  : 'bg-green-400');
+  const barColor = isUnloading
+    ? (allDone ? 'bg-purple-500' : 'bg-purple-400')
+    : (allDone ? 'bg-green-500'  : 'bg-green-400');
 
   const headerBorder = allDone
-    ? (stage === 'warehouse' ? 'border-blue-200' : isUnloading ? 'border-purple-200' : 'border-green-200')
+    ? (isUnloading ? 'border-purple-200' : 'border-green-200')
     : 'border-gray-200';
 
   return (
@@ -223,13 +209,13 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
                 <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
               </div>
               <span className="text-xs text-gray-400">
-                {stageCount}/{total} {stage === 'warehouse' ? 'picked' : isUnloading ? 'unloaded' : 'loaded'}
+                {stageCount}/{total} {isUnloading ? 'unloaded' : 'loaded'}
               </span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-          {allDone && <CheckCircle size={14} className={stage === 'warehouse' ? 'text-blue-500' : 'text-green-500'} />}
+          {allDone && <CheckCircle size={14} className="text-green-500" />}
           {expanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
         </div>
       </div>
