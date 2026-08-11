@@ -394,7 +394,7 @@ export default function SyncMonitor() {
                       {/* DO ref */}
                       <td className="px-4 py-3">
                         <span className="font-mono text-sm font-medium text-gray-900">
-                          {order.odoo_order_ref || order.id.slice(0, 8).toUpperCase()}
+                          {order.odoo_order_ref || 'Not Synced'}
                         </span>
                       </td>
                       {/* SO ref */}
@@ -507,7 +507,7 @@ export default function SyncMonitor() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {outboxDisplay.map(row => {
-                    const doRef = row.payload?.odooRef || (row.payload?.orderId ? row.payload.orderId.slice(0, 8).toUpperCase() : '—');
+                    const doRef = row.payload?.odooRef || 'Not Synced';
                     return (
                       <tr key={row.id} className={`hover:bg-gray-50 ${row.status === 'dead' ? 'bg-red-50' : ''}`}>
                         <td className="px-4 py-3">

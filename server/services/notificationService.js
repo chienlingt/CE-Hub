@@ -158,7 +158,7 @@ async function sendDeliveryFailureNotifications(orderId) {
   const customerName     = order.customers?.full_name || 'Unknown Customer';
   const customerPhone    = order.customers?.phone     || null;
   const address          = order.delivery_address || order.buildings?.building_name || 'Unknown Address';
-  const orderRef         = order.odoo_order_ref   || order.id;
+  const orderRef         = order.odoo_order_ref   || 'Not Synced';
   const failureReason    = order.issue_reason     || 'Unspecified';
   const failureDesc      = order.issue_desc       || '';
   const driverName       = order.employees?.name  || order.employees?.display_name || 'Unknown';
@@ -170,7 +170,7 @@ async function sendDeliveryFailureNotifications(orderId) {
   // ── 2. Notify admins in-app (FR-06-001, FR-06-002) ───────────────────────
   const allAdmins = await getAdminEmployees();
   for (const admin of allAdmins) {
-    const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
+    const shortRef = order.odoo_order_ref || 'Not Synced';
     const message = `Delivery failed · ${customerName} · ${address} · ${failureReason} · #${shortRef}`;
     await createInAppNotification(admin.id, message, 'error', orderId);
   }
@@ -188,7 +188,7 @@ async function sendDeliveryFailureNotifications(orderId) {
       },
     });
     if (salespersonEmployee) {
-      const shortRef = (order.odoo_order_ref || orderId).substring(0, 8).toUpperCase();
+      const shortRef = order.odoo_order_ref || 'Not Synced';
       const message = `Delivery failed · ${customerName} · ${address} · ${failureReason} · #${shortRef}`;
       await createInAppNotification(salespersonEmployee.id, message, 'error', orderId);
     } else {
@@ -259,5 +259,6 @@ async function sendDeliveryFailureNotifications(orderId) {
 
 module.exports = {
   createInAppNotification,
+  getAdminEmployees,
   sendDeliveryFailureNotifications,
 };

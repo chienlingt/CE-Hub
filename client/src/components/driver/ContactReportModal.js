@@ -32,7 +32,7 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
   // Follow-up if this order already has a report submitted (any reason)
   const isFollowUp = !!job.is_complaint_submitted;
 
-  const shortId = job.id?.slice(0, 8).toUpperCase();
+  const shortId = job.odoo_order_ref?.toUpperCase() || 'Not Synced';
 
   const hasSalesperson = !!job.salesperson_phone;
   const hasWarehouse   = !!job.warehouse_contact_phone;

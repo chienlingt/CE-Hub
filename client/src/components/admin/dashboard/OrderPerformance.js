@@ -331,7 +331,7 @@ export default function OrderPerformance() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order ID</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order Ref</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Building</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rating</th>
@@ -373,7 +373,7 @@ export default function OrderPerformance() {
                         {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </button>
                     </td>
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{getOrderId(order)}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{order.odoo_order_ref || 'Not Synced'}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{getCustomerName(customerId)}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{buildingName}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">

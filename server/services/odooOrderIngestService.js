@@ -6,6 +6,7 @@
 
 const prisma = require('../prismaClient');
 const { extractBuildingName } = require('../utils/addressParser');
+const { createInAppNotification, getAdminEmployees } = require('./notificationService');
 
 const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Cancelled'];
 
@@ -35,7 +36,7 @@ async function resolveBuilding(address, zip, fallbackName = '') {
  * Lines removed from Odoo are deleted UNLESS the item already has progress
  * (picked/loaded/unloaded) — those are kept and logged, never silently destroyed.
  */
-async function mergeOrderLines(orderId, newLines = []) {
+async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
   const existing = await prisma.order_products.findMany({ where: { order_id: orderId } });
 
   const incoming = newLines
@@ -58,7 +59,18 @@ async function mergeOrderLines(orderId, newLines = []) {
     const hasProgress = ex.item_delivery_status === 'delivered' || ex.picking_status !== 'pending';
     if (hasProgress) {
       protectedCount++;
+      const ref = odooOrderRef || orderId;
       console.warn(`[Odoo push] Line ${ex.odoo_line_id} removed in Odoo but already in progress/delivered (order ${orderId}) — kept.`);
+
+      // Surface to admins — this is a data-integrity conflict, not just a log line.
+      try {
+        const admins = await getAdminEmployees();
+        const message = `Order ${ref}: Odoo removed a line item (${ex.odoo_product_name || 'unknown product'}, line ${ex.odoo_line_id}) that is already in progress or delivered in CE Hub. The line was kept, not deleted — please verify with Odoo.`;
+        await Promise.all(admins.map(admin => createInAppNotification(admin.id, message, 'warning', orderId)));
+      } catch (notifyErr) {
+        console.error('[Odoo push] Failed to notify admins of protected line:', notifyErr.message);
+      }
+
       continue;
     }
 
@@ -165,7 +177,7 @@ async function pushOrder(payload) {
       await prisma.customers.update({ where: { id: existing.customer_id }, data: customerUpdate });
     }
 
-    const lineResult = await mergeOrderLines(existing.id, order_lines);
+    const lineResult = await mergeOrderLines(existing.id, order_lines, odoo_order_ref);
 
     return { success: true, action: 'updated', order_id: existing.id, address_changed: !!addressChanged, lines: lineResult };
   }

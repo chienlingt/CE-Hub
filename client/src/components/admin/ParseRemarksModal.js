@@ -107,7 +107,7 @@ export default function ParseRemarksModal({ order, onClose, onApplied }) {
               <Sparkles size={16} className="text-purple-600" /> LLM Remark Parser
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              {order.odoo_order_ref || order.id.slice(0, 8).toUpperCase()} — Groq / Gemini AI
+              {order.odoo_order_ref || 'Not Synced'} — Groq / Gemini AI
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/60"><X size={18} /></button>

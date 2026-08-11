@@ -27,7 +27,7 @@ export default function TripOrderRow({ order, index, trip, onOrderUpdate }) {
   function handleWhatsApp() {
     const msg = onTheWayTemplate({
       customerName: order.customer_name,
-      orderRef: order.odoo_order_ref || order.id?.slice(0, 8).toUpperCase(),
+      orderRef: order.odoo_order_ref || 'Not Synced',
       slotDate: trip?.date,
       timeWindow: [trip?.time_window_start, trip?.time_window_end].filter(Boolean).join(' – '),
       address: order.delivery_address,
@@ -62,15 +62,6 @@ export default function TripOrderRow({ order, index, trip, onOrderUpdate }) {
         <div className="text-xs font-mono text-gray-700 truncate max-w-[120px]" title={order.odoo_order_ref || undefined}>
           {order.odoo_order_ref || <span className="text-gray-400 italic">No Odoo ref</span>}
         </div>
-      </td>
-      <td className="py-3 pr-3">
-        {order.id ? (
-          <div className="text-[10px] text-gray-500 font-mono truncate max-w-[140px]" title={order.id}>
-            {order.id}
-          </div>
-        ) : (
-          <span className="text-xs text-gray-400 italic">—</span>
-        )}
       </td>
       <td className="py-3 pr-3">
         {order.customer_name ? (

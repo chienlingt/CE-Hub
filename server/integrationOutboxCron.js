@@ -133,7 +133,7 @@ async function handleCustomerOnTheWay(row) {
   const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
   const vars = {
     customerName: customerName || 'Customer',
-    orderRef: orderRef || orderId?.slice(0, 8).toUpperCase() || 'your order',
+    orderRef: orderRef || 'your order',
     slotDate: slotDate || 'today',
     timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
     address: address || 'your delivery address',
@@ -196,7 +196,7 @@ async function handleD1Reminder(row) {
   const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
   const vars = {
     customerName: customerName || 'Customer',
-    orderRef: orderRef || orderId?.slice(0, 8).toUpperCase() || 'your order',
+    orderRef: orderRef || 'your order',
     slotDate: slotDate || 'tomorrow',
     timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
     address: address || 'your delivery address',

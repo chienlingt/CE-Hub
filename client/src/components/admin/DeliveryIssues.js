@@ -81,7 +81,7 @@ function EvidenceThumbnails({ evidence = [] }) {
 function ReportDetail({ order, onClose, onResolved }) {
   const [resolving, setResolving] = useState(false);
   const isResolved = order.issue_status === 'resolved';
-  const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+  const orderRef   = order.odoo_order_ref || 'Not Synced';
   const driverName = order.employees?.name || order.employees?.display_name || '—';
   const customer   = order.customers;
 
@@ -192,7 +192,7 @@ function ReportDetail({ order, onClose, onResolved }) {
 function EscalationDetail({ order, onClose, onAcknowledged }) {
   const [acking, setAcking] = useState(false);
   const isAcked    = order.is_escalation_acknowledged;
-  const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+  const orderRef   = order.odoo_order_ref || 'Not Synced';
   const driverName = order.employees?.name || order.employees?.display_name || '—';
   const customer   = order.customers;
 
@@ -312,7 +312,7 @@ function IssueRow({ issue, highlightId, isEscalation, onClick }) {
       onClick={() => onClick(issue)}
     >
       <td className="px-4 py-3 text-sm font-mono text-gray-900">
-        {issue.odoo_order_ref || issue.id.slice(0, 8).toUpperCase()}
+        {issue.odoo_order_ref || 'Not Synced'}
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">

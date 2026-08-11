@@ -390,7 +390,7 @@ export default function EmployeePerformance() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Ref</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rating</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer Feedback</th>
@@ -404,7 +404,7 @@ export default function EmployeePerformance() {
                 const rating = getOrderRating(order);
                 return (
                   <tr key={getOrderId(order)} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{getOrderId(order)}</td>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{order.odoo_order_ref || 'Not Synced'}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       <div>
                         <div className="font-medium">{employee?.name || employee?.displayName || 'Unknown'}</div>

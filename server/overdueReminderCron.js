@@ -49,7 +49,7 @@ async function runOverdueReminderCron() {
         ? `reminded at ${order.overdue_reminder_sent_at.toISOString()}`
         : 'NOT YET REMINDED';
       console.log(
-        `[OverdueCron]  → Order ${order.odoo_order_ref || order.id.slice(0, 8)} | ` +
+        `[OverdueCron]  → Order ${order.odoo_order_ref || 'Not Synced'} | ` +
         `Slot: ${slotDate} | Driver: ${driverName} | ${reminded}`
       );
     }

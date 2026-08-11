@@ -29,9 +29,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
   const showLoadingBadge = isScheduledStatus(job.status) && job.loading_total > 0;
   const loadingReady     = job.all_loaded;
 
-  // const shortId   = job.id?.slice(0, 8).toUpperCase();
-  const shortId = job.id?.toUpperCase();
-  // const shortId = job.odoo_order_ref?.toUpperCase();
+  const shortId = job.odoo_order_ref?.toUpperCase() || 'Not Synced';
   const timeLabel = job.time
     ? new Date(job.time).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false })
     : '';
@@ -45,7 +43,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
   }
 
   function handleChat() {
-    const orderRef = job.odoo_order_ref || job.id?.slice(0, 8).toUpperCase();
+    const orderRef = job.odoo_order_ref || 'Not Synced';
     const msg = onTheWayTemplate({
       customerName: job.customer_name,
       orderRef,

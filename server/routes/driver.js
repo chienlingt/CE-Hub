@@ -310,7 +310,7 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
     });
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    const orderRef     = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+    const orderRef     = order.odoo_order_ref || 'Not Synced';
     const customerName = order.customers?.full_name || 'Unknown';
     const driverName   = order.employees?.display_name || order.employees?.name || 'Driver';
     const trimmedMsg   = message.trim();

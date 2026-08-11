@@ -119,7 +119,7 @@ const Layout = () => {
         { id: 'employee', label: 'Employee', path: '', component: EmployeeInfo },
         { id: 'team', label: 'Team', path: 'team', component: TeamInfo },
         { id: 'building', label: 'Building', path: 'building', component: BuildingInfo },
-        { id: 'product', label: 'Product', path: 'product', component: ProductInfo },
+        // { id: 'product', label: 'Product', path: 'product', component: ProductInfo }, // removed — products are not stored in CE Hub
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
         // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
       ],
@@ -152,22 +152,23 @@ const Layout = () => {
         { id: 'delivery', label: 'Delivery Schedule', path: '', component: DeliverySchedule },
       ],
     },
-    installation: {
-      title: 'Installation Schedule',
-      icon: Users,
-      route: '/installation',
-      topNavItems: [
-        { id: 'installation', label: 'Installation Schedule', path: '', component: InstallationSchedule },
-      ],
-    },
-    warehouse: {
-      title: 'Warehouse Schedule',
-      icon: Users,
-      route: '/warehouse',
-      topNavItems: [
-        { id: 'warehouse', label: 'Warehouse Schedule', path: '', component: WarehouseLoadingSchedule },
-      ],
-    },
+    // Hidden from sidebar — kept for easy re-enable.
+    // installation: {
+    //   title: 'Installation Schedule',
+    //   icon: Users,
+    //   route: '/installation',
+    //   topNavItems: [
+    //     { id: 'installation', label: 'Installation Schedule', path: '', component: InstallationSchedule },
+    //   ],
+    // },
+    // warehouse: {
+    //   title: 'Warehouse Schedule',
+    //   icon: Users,
+    //   route: '/warehouse',
+    //   topNavItems: [
+    //     { id: 'warehouse', label: 'Warehouse Schedule', path: '', component: WarehouseLoadingSchedule },
+    //   ],
+    // },
     customer: {
       title: 'Order Management',
       icon: Users,

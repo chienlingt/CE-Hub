@@ -270,7 +270,7 @@ async function processDeliveryCompletion(orderId, {
     await prisma.notifications.create({
       data: {
         user_id: order.customers.id,
-        message: `Your delivery for order #${orderId.slice(0, 8).toUpperCase()} has been delivered.`,
+        message: `Your delivery for order #${order.odoo_order_ref || 'Not Synced'} has been delivered.`,
         type:    'success',
       },
     }).catch(e => console.error('[A4] Notification create failed:', e.message));

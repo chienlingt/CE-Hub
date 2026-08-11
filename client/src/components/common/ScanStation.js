@@ -463,7 +463,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
               let globalIdx = 0;
               return groups.map(({ orderId, order, rows: gRows }) => {
                 const allUnloaded = gRows.every(r => r.picking_status === 'unloaded');
-                const doRef = order?.odoo_order_ref || orderId;
+                const doRef = order?.odoo_order_ref || 'Not Synced';
                 return (
                   <React.Fragment key={orderId}>
                     {/* Per-order header with completion badge */}
@@ -606,7 +606,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
                   <td colSpan={5} className="px-4 py-2">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-xs font-bold text-gray-600">
-                        {order?.odoo_order_ref || orderId}
+                        {order?.odoo_order_ref || 'Not Synced'}
                         {order?.customers?.full_name && (
                           <span className="font-normal text-gray-400 ml-2">{order.customers.full_name}</span>
                         )}

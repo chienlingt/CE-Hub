@@ -254,6 +254,7 @@ const WarehouseLoadingSchedule = () => {
   // Convert orders data to expected format
   const ordersData = orders.map(order => ({
     OrderID: field.orderId(order),
+    OdooOrderRef: order.odoo_order_ref || null,
     CustomerID: field.orderCustomerId(order),
     BuildingID: field.orderBuildingId(order),
     TimeSlotID: field.orderTimeSlotId(order),
@@ -752,7 +753,7 @@ const WarehouseLoadingSchedule = () => {
                             <div key={order.OrderID} className="border rounded-lg p-4">
                               <div className="flex items-center justify-between mb-3">
                                 <div className="flex items-center space-x-3">
-                                  <span className="font-medium text-blue-600">{order.OrderID}</span>
+                                  <span className="font-medium text-blue-600">{order.OdooOrderRef || 'Not Synced'}</span>
                                   <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(order.OrderStatus)}`}>
                                     {order.OrderStatus}
                                   </span>
@@ -902,7 +903,7 @@ const WarehouseLoadingSchedule = () => {
                               
                               <div className="grid grid-cols-2 gap-4 text-xs text-gray-600">
                                 <div>
-                                  <div>Order: {item.OrderID}</div>
+                                  <div>Order: {item.orderInfo?.OdooOrderRef || 'Not Synced'}</div>
                                   <div>Customer: {item.customerInfo?.name}</div>
                                   <div>Position: {item.LoadingPosition || 'Auto-assign'}</div>
                                 </div>

@@ -104,7 +104,7 @@ function AssignModal({ order, employees, timeSlots, onClose, onAssigned }) {
           <div>
             <h2 className="text-base font-bold text-gray-900">Assign Delivery Order</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              {order.odoo_order_ref || order.id.slice(0, 8).toUpperCase()} —{' '}
+              {order.odoo_order_ref || 'Not Synced'} —{' '}
               {order.customers?.full_name}
             </p>
           </div>
@@ -412,7 +412,7 @@ export default function DoAssignment() {
                       {/* Row 1: ref + status + odoo badge */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-sm font-semibold text-gray-900">
-                          {order.odoo_order_ref || order.id.slice(0, 8).toUpperCase()}
+                          {order.odoo_order_ref || 'Not Synced'}
                         </span>
                         <StatusBadge status={order.assignment_status || 'unassigned'} />
                         {order.odoo_order_ref && (

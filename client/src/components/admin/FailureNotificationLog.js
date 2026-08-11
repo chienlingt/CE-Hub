@@ -59,7 +59,7 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
 
   const isResolved = order.issue_status === 'resolved';
   const customer   = order.customers;
-  const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+  const orderRef   = order.odoo_order_ref || 'Not Synced';
 
   const failedItems    = items.filter(i => i.item_delivery_status === 'failed');
   const deliveredItems = items.filter(i => i.item_delivery_status === 'delivered');
@@ -473,7 +473,7 @@ export default function FailureNotificationLog() {
                     <div className="flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-sm font-semibold text-gray-800">
-                          {order.odoo_order_ref || order.id.slice(0, 8).toUpperCase()}
+                          {order.odoo_order_ref || 'Not Synced'}
                         </span>
                         {order.issue_reason && <ReasonBadge reason={order.issue_reason} />}
                         {isResolved && (

@@ -201,7 +201,7 @@ export default function LoadingChecklist({ orderId, orderRef, customerName, stag
           <Package size={14} className="text-gray-400 flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-gray-800 truncate">
-              {orderRef || orderId?.slice(0, 8).toUpperCase()}
+              {orderRef || 'Not Synced'}
               {customerName && <span className="ml-1.5 text-gray-400 font-normal">{customerName}</span>}
             </p>
             <div className="flex items-center gap-2 mt-0.5">

@@ -136,7 +136,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
 
   const isResolved = order.issue_status === 'resolved';
   const customer   = order.customers;
-  const orderRef   = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+  const orderRef   = order.odoo_order_ref || 'Not Synced';
   const failedItems = items.filter(i => i.item_delivery_status === 'failed');
 
   // FR-06-003 — load Odoo chatter post history for this order
@@ -273,7 +273,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
               <CalendarPlus size={13} className="shrink-0" />
               {order.rescheduled_to.map(r => (
                 <span key={r.id}>
-                  Rescheduled to <span className="font-semibold">{r.odoo_order_ref || r.id.slice(0, 8).toUpperCase()}</span>
+                  Rescheduled to <span className="font-semibold">{r.odoo_order_ref || 'Not Synced'}</span>
                   <span className="text-blue-400"> · {r.order_status || 'Pending'}</span>
                 </span>
               ))}
@@ -506,7 +506,7 @@ const IssueManagement = () => {
     if (search) {
       const s = search.toLowerCase();
       list = list.filter(i => {
-        const ref      = (i.odoo_order_ref || i.id || '').toLowerCase();
+        const ref      = (i.odoo_order_ref || 'Not Synced').toLowerCase();
         const customer = (i.customers?.full_name || '').toLowerCase();
         const reason   = (i.issue_reason || '').toLowerCase();
         return ref.includes(s) || customer.includes(s) || reason.includes(s);
@@ -539,7 +539,7 @@ const IssueManagement = () => {
         return sort.dir === 'asc' ? va - vb : vb - va;
       }
       let va, vb;
-      if (sort.field === 'order')         { va = a.odoo_order_ref || a.id; vb = b.odoo_order_ref || b.id; }
+      if (sort.field === 'order')         { va = a.odoo_order_ref || 'Not Synced'; vb = b.odoo_order_ref || 'Not Synced'; }
       else if (sort.field === 'customer') { va = a.customers?.full_name || ''; vb = b.customers?.full_name || ''; }
       else if (sort.field === 'reason')   { va = a.issue_reason || ''; vb = b.issue_reason || ''; }
       else return 0;
@@ -722,7 +722,7 @@ const IssueManagement = () => {
                       onClick={() => setSelectedIssue(issue)}
                     >
                       <td className="px-4 py-3 text-sm font-mono text-gray-900">
-                        {issue.odoo_order_ref || issue.id.slice(0, 8).toUpperCase()}
+                        {issue.odoo_order_ref || 'Not Synced'}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
