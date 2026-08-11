@@ -99,7 +99,7 @@ router.post('/whatsapp/:orderId', async (req, res) => {
 
     const phone    = order.customers?.phone;
     const name     = order.customers?.full_name || 'Customer';
-    const orderRef = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+    const orderRef = order.odoo_order_ref || 'Not Synced';
     const reason   = order.issue_reason   || 'Delivery issue';
 
     if (!phone) {

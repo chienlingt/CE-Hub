@@ -357,7 +357,7 @@ export default function AutoScheduleReview() {
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Order ID
+                      Order Ref
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Customer
@@ -410,7 +410,7 @@ export default function AutoScheduleReview() {
                 >
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-gray-900">Order ID: {item.id}</p>
+                      <p className="font-semibold text-gray-900">Order Ref: {item.odoo_order_ref || 'Not Synced'}</p>
                       <p className="text-sm text-gray-600 mt-1">Reason: {item.unscheduled_reason || 'No suitable timeslot found'}</p>
                       <div className="mt-2 text-sm text-gray-700 space-y-1">
                         <p><span className="font-medium">Customer:</span> {item.customers?.full_name || 'N/A'}</p>
@@ -478,7 +478,7 @@ function ScheduledOrderRow({ order, isExpanded, onToggleExpand, getTotalProductC
     <>
       <tr className="hover:bg-gray-50">
         <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-          {order.id?.substring(0, 8)}...
+          {order.odoo_order_ref || 'Not Synced'}
         </td>
         <td className="px-4 py-4 whitespace-nowrap">
           <div className="text-sm font-medium text-gray-900">

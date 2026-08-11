@@ -651,7 +651,7 @@ export default function DeliverySchedule() {
                                     </p>
                                     <LoadingChecklist
                                       orderId={field.orderId(order)}
-                                      orderRef={order.odoo_order_ref || field.orderId(order)?.slice(0, 8).toUpperCase()}
+                                      orderRef={order.odoo_order_ref || 'Not Synced'}
                                       customerName={customer ? field.customerName(customer) : ''}
                                       stage="driver"
                                       employeeId={currentUser?.employeeId || null}
@@ -685,7 +685,7 @@ export default function DeliverySchedule() {
                                     </p>
                                     <LoadingChecklist
                                       orderId={field.orderId(order)}
-                                      orderRef={order.odoo_order_ref || field.orderId(order)?.slice(0, 8).toUpperCase()}
+                                      orderRef={order.odoo_order_ref || 'Not Synced'}
                                       customerName={customer ? field.customerName(customer) : ''}
                                       stage="unloading"
                                       employeeId={currentUser?.employeeId || null}

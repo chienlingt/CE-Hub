@@ -26,12 +26,13 @@ import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUr
 const mockNavItems = [
   { key: 'dashboard', name: 'Dashboard', description: 'Main dashboard overview', icon: '📊' },
   { key: 'schedule', name: 'Schedule', description: 'Schedule management and delivery planning', icon: '📅' },
-  { key: 'info', name: 'Information', description: 'Product, team, and building data', icon: '📦' },
+  { key: 'info', name: 'Information', description: 'Employee, team, and building data', icon: '📦' },
   { key: 'cases', name: 'Cases', description: 'Cases reported by employees', icon: '📈' },
   { key: 'access', name: 'Access Control', description: 'Role and permission management', icon: '🛡️' },
   { key: 'delivery', name: 'Delivery Schedule', description: 'Delivery schedule management', icon: '🚚' },
-  { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
-  { key: 'warehouse', name: 'Warehouse Schedule', description: 'Warehouse loading and operations', icon: '🏭' },
+  // Hidden from sidebar — kept for easy re-enable.
+  // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
+  // { key: 'warehouse', name: 'Warehouse Schedule', description: 'Warehouse loading and operations', icon: '🏭' },
   { key: 'customer',  name: 'Place Order',   description: 'Demo to place order', icon: '' },
   { key: 'scanning',  name: 'Scan Station',  description: 'Item picking and loading scan confirmation', icon: '📷' },
   { key: 'settings',  name: 'Settings',      description: 'Notification and system settings', icon: '⚙️' },

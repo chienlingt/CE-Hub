@@ -266,7 +266,7 @@ const ComplaintManagement = () => {
                                     <div>
                                         <p className="text-xs text-gray-500 mb-1">Order Ref</p>
                                         <p className="text-xs font-mono font-semibold text-gray-700">
-                                            #{selectedComplaint.orders.id.substring(0, 8).toUpperCase()}
+                                            #{selectedComplaint.orders.odoo_order_ref || 'Not Synced'}
                                         </p>
                                     </div>
                                 )}

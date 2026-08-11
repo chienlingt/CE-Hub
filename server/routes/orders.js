@@ -1810,7 +1810,7 @@ router.post('/:id/remind-driver', async (req, res) => {
 
     const driverName   = order.employees?.display_name || order.employees?.name || 'Driver';
     const customerName = order.customers?.full_name || 'customer';
-    const orderRef     = order.odoo_order_ref || order.id.slice(0, 8).toUpperCase();
+    const orderRef     = order.odoo_order_ref || 'Not Synced';
     const address      = order.delivery_address || '';
 
     const message = `Hi ${driverName}, please update the delivery status for order #${orderRef} (${customerName} — ${address}). If the delivery could not be completed, mark it as Failed Delivery before end of day.`;

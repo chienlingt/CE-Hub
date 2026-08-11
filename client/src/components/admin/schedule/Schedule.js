@@ -1115,7 +1115,7 @@ export default function Schedule() {
             <div className="bg-blue-50 p-3 rounded-md">
               <div className="text-sm font-medium text-gray-700 mb-2">Order Details</div>
               <div className="text-xs space-y-1">
-                <div><strong>Order ID:</strong> {editingOrder.OrderID?.substring(0, 12)}...</div>
+                <div><strong>Order Ref:</strong> {editingOrder.odoo_order_ref || 'Not Synced'}</div>
                 <div><strong>Customer:</strong> {editingOrder.CustomerName}</div>
                 <div><strong>Building:</strong> {editingOrder.BuildingName}</div>
                 <div><strong>Status:</strong> {field.orderStatus(editingOrder)}</div>
@@ -1377,7 +1377,7 @@ export default function Schedule() {
                       <div className="text-sm space-y-1">
                         <div className="font-medium text-gray-800">{order.CustomerName}</div>
                         <div className="text-xs text-gray-600">{order.BuildingName}</div>
-                        <div className="text-xs text-gray-500">Order ID: {String(orderId || '').slice(0, 12)}...</div>
+                        <div className="text-xs text-gray-500">Order Ref: {order.odoo_order_ref || 'Not Synced'}</div>
                         <div className="text-xs text-gray-600">Access window: {accessStart} - {accessEnd}</div>
                         <div className="text-xs text-gray-700">
                           Service time: {order.calculatedServiceTime || 0} min

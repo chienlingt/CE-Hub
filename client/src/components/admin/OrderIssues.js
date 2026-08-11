@@ -8,7 +8,7 @@ import {
 function normalizeIssue(o) {
     return {
         id: o.id,
-        shortRef: (o.odoo_order_ref || o.id || '').substring(0, 8).toUpperCase(),
+        shortRef: o.odoo_order_ref || 'Not Synced',
         customerName: o.customers?.full_name || 'Unknown',
         customerPhone: o.customers?.phone || null,
         priority: o.issue_priority_level || 'Normal',

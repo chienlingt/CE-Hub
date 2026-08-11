@@ -164,20 +164,19 @@ export default function CompletedDeliveries() {
             <table className="w-full text-sm min-w-[1100px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-4 py-3 text-left min-w-[10rem]">Order ID</th>
+                  <th className="px-4 py-3 text-left min-w-[10rem]">Order Ref</th>
                   <th className="px-4 py-3 text-left min-w-[9rem]">Customer</th>
                   <th className="px-4 py-3 text-left min-w-[10rem]">Driver</th>
                   <th className="px-4 py-3 text-left min-w-[9rem] whitespace-nowrap">Completed At</th>
                   <th className="px-4 py-3 text-left">Status</th>
                   <th className="px-4 py-3 text-left">POD</th>
                   <th className="px-4 py-3 text-left">Odoo Sync</th>
-                  <th className="px-4 py-3 text-left">Odoo Ref</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
                 {records.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">No records found.</td>
+                    <td colSpan={7} className="px-4 py-8 text-center text-gray-400">No records found.</td>
                   </tr>
                 )}
                 {records.map(r => (
@@ -188,8 +187,8 @@ export default function CompletedDeliveries() {
                       onClick={() => setExpanded(expanded === r.id ? null : r.id)}
                     >
                       <td className="px-4 py-3">
-                        <span className="font-mono text-xs text-blue-700 whitespace-nowrap" title={r.id}>
-                          {r.id}
+                        <span className="font-mono text-xs text-blue-700 whitespace-nowrap">
+                          {r.odoo_order_ref || 'Not Synced'}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-800">{r.customer_name || '—'}</td>
@@ -211,11 +210,10 @@ export default function CompletedDeliveries() {
                         <PodThumbnails evidence={r.delivery_evidence} signatureUrl={r.proof_of_delivery_url} />
                       </td>
                       <td className="px-4 py-3"><OdooSyncBadge odoo_sync={r.odoo_sync} /></td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{r.odoo_order_ref || '—'}</td>
                     </tr>
                     {expanded === r.id && (
                       <tr key={`${r.id}-exp`}>
-                        <td colSpan={8} className="px-6 py-4 bg-gray-50">
+                        <td colSpan={7} className="px-6 py-4 bg-gray-50">
                           <ExpandedRow record={r} />
                         </td>
                       </tr>
@@ -239,7 +237,7 @@ export default function CompletedDeliveries() {
               >
                 <div className="flex items-start justify-between">
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-mono text-blue-700 truncate" title={r.id}>{r.id}</p>
+                    <p className="text-xs font-mono text-blue-700 truncate">{r.odoo_order_ref || 'Not Synced'}</p>
                     <p className="font-semibold text-gray-800">{r.customer_name || '—'}</p>
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>

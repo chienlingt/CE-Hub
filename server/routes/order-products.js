@@ -123,7 +123,7 @@ router.patch('/:id/picking-status', async (req, res) => {
       );
 
       if (conflict) {
-        const ref = conflict.orders?.odoo_order_ref || conflict.orders?.id?.substring(0, 8) || 'another order';
+        const ref = conflict.orders?.odoo_order_ref || 'another order (Not Synced)';
         return res.status(409).json({
           error:  `Serial number "${serial_number}" is already assigned to ${ref}. A serial cannot be used across orders.`,
           code:   'SERIAL_CROSS_ORDER_CONFLICT',

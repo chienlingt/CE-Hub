@@ -295,6 +295,14 @@ model time_slots {
   ended_by                String?      @db.Uuid
   slot_status             String?      @default("scheduled") @db.VarChar(30)
   started_by              String?      @db.Uuid
+  ended_by                String?      @db.Uuid
+  // Route Optimisation (B.2) output — computed once per scheduler run, consumed
+  // by the driver Route tab so it never has to re-call Google Maps itself.
+  route_polyline          String?
+  route_distance_m        Int?
+  route_duration_s        Int?
+  route_computed_at       DateTime?    @db.Timestamp(6)
+  orders                  orders[]
   lorry_trip              lorry_trips?
   orders                  orders[]
   delivery_team           teams?       @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")

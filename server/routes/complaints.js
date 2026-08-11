@@ -17,6 +17,7 @@ router.get('/', async (req, res) => {
         orders: {
           select: {
             id: true,
+            odoo_order_ref: true,
           },
         },
       },
@@ -47,6 +48,7 @@ router.get('/:id', async (req, res) => {
         orders: {
           select: {
             id: true,
+            odoo_order_ref: true,
           },
         },
       },

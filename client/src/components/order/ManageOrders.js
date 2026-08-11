@@ -540,8 +540,8 @@ function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssi
   return (
     <>
       <tr ref={rowRef} className="hover:bg-gray-50 transition-colors">
-        <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || order.id}>
-          <div className="truncate">{order.odoo_order_ref || `${order.id.substring(0, 8)}...`}</div>
+        <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || 'Not Synced'}>
+          <div className="truncate">{order.odoo_order_ref || 'Not Synced'}</div>
           {siblingDOs.length > 0 && (
             <div className="flex items-center gap-1 mt-0.5 text-xs text-indigo-500">
               <GitBranch className="w-3 h-3" />
@@ -742,7 +742,7 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
                 {/* Current DO */}
                 <tr className="bg-indigo-50/40">
                   <td className="px-3 py-1.5 font-mono text-indigo-800 font-semibold">
-                    {order.odoo_order_ref || order.id.substring(0, 8)}
+                    {order.odoo_order_ref || 'Not Synced'}
                     <span className="ml-1.5 text-xs bg-indigo-200 text-indigo-700 px-1.5 py-0.5 rounded font-sans">this</span>
                   </td>
                   <td className="px-3 py-1.5 text-gray-700">{order.customers?.full_name || '—'}</td>
@@ -766,7 +766,7 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
                           to={`?expand=${sib.id}`}
                           className="font-mono text-indigo-600 hover:text-indigo-800 hover:underline"
                         >
-                          {sib.odoo_order_ref || sib.id.substring(0, 8)}
+                          {sib.odoo_order_ref || 'Not Synced'}
                         </Link>
                       </td>
                       <td className="px-3 py-1.5 text-gray-700">{sib.customers?.full_name || '—'}</td>
@@ -1046,7 +1046,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
                 {order.odoo_sales_ref && <p>SO: <span className="font-mono font-medium">{order.odoo_sales_ref}</span></p>}
               </div>
             ) : (
-              <p className="text-sm text-gray-600 mt-1">Order ID: {order.id.substring(0, 8)}...</p>
+              <p className="text-sm text-gray-600 mt-1">Order Ref: Not Synced</p>
             )}
             {remainingTime && !remainingTime.expired && (
               <p className="text-sm text-green-600 mt-1">
@@ -1232,7 +1232,7 @@ function AssignTimeslotModal({ order, timeslots, selectedTimeslot, onSelectTimes
           <div>
             <h2 className="text-xl font-bold text-gray-800">Assign Order to Timeslot</h2>
             <p className="text-sm text-gray-600 mt-1">
-              Order ID: {order.id.substring(0, 8)}... • Customer: {order.customers?.full_name || 'N/A'}
+              Order Ref: {order.odoo_order_ref || 'Not Synced'} • Customer: {order.customers?.full_name || 'N/A'}
             </p>
           </div>
           <button

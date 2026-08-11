@@ -636,7 +636,7 @@ export default function Overview() {
                 <ActivityItem
                   key={getOrderId(order)}
                   icon={Package}
-                  title={`Order ${getOrderId(order)}`}
+                  title={`Order ${order.odoo_order_ref || 'Not Synced'}`}
                   description={getOrderFeedback(order) || 'No feedback provided'}
                   status={getOrderStatus(order)}
                   deliveredDate={getOrderDeliveredDate(order)}

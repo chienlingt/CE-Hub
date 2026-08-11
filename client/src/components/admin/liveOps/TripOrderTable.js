@@ -12,7 +12,6 @@ export default function TripOrderTable({ items, trip }) {
           <tr className="border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
             <th className="py-2 pl-4 pr-2 text-left w-8">#</th>
             <th className="py-2 pr-3 text-left">Odoo ref</th>
-            <th className="py-2 pr-3 text-left">Order ID</th>
             <th className="py-2 pr-3 text-left">Customer</th>
             <th className="py-2 pr-3 text-left">Address</th>
             <th className="py-2 pr-3 text-left">Contact</th>
