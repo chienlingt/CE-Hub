@@ -1,5 +1,4 @@
 -- Renames orders.preferred_delivery_time to orders.preferred_timeslot to match
--- GCA's "Confirmed Data Mapping Requirements" table (10 Jul 2026 meeting notes, §6).
 DO $$
 BEGIN
   IF EXISTS (

@@ -128,9 +128,7 @@ async function pushOrder(payload) {
     salesperson_name, salesperson_phone,
     // Customer-requested delivery window as read from Odoo's picking.scheduled_date
     // (see odooService.getOrderDetail) — a preference only, not guaranteed. Flows
-    // Odoo -> CE Hub; previously destructured nowhere and silently dropped. Persisted
-    // below as orders.preferred_timeslot (GCA's confirmed field name, §6 of their
-    // meeting notes) — the wire-level payload key itself stays preferred_delivery_time.
+    // Odoo -> CE Hub;
     preferred_delivery_time,
     order_lines = [],
   } = payload || {};

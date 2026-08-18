@@ -216,8 +216,7 @@ model orders {
   // Customer-requested delivery window as received from Odoo (picking.scheduled_date) at
   // order ingest — flows Odoo -> CE Hub, a preference only, not guaranteed. Previously
   // read by odooService.getOrderDetail() but silently dropped by pushOrder(); now
-  // persisted. Named to match GCA's "Confirmed Data Mapping Requirements" table (10 Jul
-  // meeting notes, §6). See odooOrderIngestService.js.
+  // persisted. See odooOrderIngestService.js.
   preferred_timeslot         DateTime?
   created_at                 DateTime?
   updated_at                 DateTime?

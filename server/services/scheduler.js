@@ -911,8 +911,7 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
           }
         });
 
-        // Notify Odoo of the assigned delivery window — extended fields only,
-        // see odooService.writeOdooExtendedFields (gated on GCA field confirmation).
+        // Notify Odoo of the assigned delivery window — extended fields only
         if (schedulerUpdatedOrder.odoo_order_ref) {
           buildOdooEventPayload(schedulerUpdatedOrder.id, 'Scheduled').then(payload => enqueue({
             eventType:      'ORDER_SCHEDULED',

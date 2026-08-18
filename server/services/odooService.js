@@ -229,11 +229,10 @@ async function getOrderDetail(odooPickingId) {
  * reason, driver/assistant name) back to the Odoo Delivery Order, on top of the
  * one confirmed field `writeOdooDeliveryStatus` already writes.
  *
- * Every x_ field name below is a PLACEHOLDER pending GCA confirmation (meeting
- * notes §9.1 — everything except x_delivery_status is still TBC). Gated behind
+ * Every x_ field name below is a PLACEHOLDER pending GCA confirmation. Gated behind
  * ODOO_SEND_EXTENDED_FIELDS so it never fires unless explicitly enabled, and
  * never throws — a wrong/unconfirmed field name must not break the working
- * x_delivery_status sync that runs alongside it. See docs/odoo-payload-addendum.md.
+ * x_delivery_status sync that runs alongside it.
  *
  * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
  * @param {object} payload      - the object from odooPayloadBuilder.buildOdooEventPayload()
