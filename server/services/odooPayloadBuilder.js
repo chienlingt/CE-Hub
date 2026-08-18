@@ -1,29 +1,12 @@
 // server/services/odooPayloadBuilder.js
-//
+
 // Single source of truth for the payload CE Hub sends Odoo on every status change.
 // Replaces the old ad hoc `{ orderId, odooRef, status }` literals scattered across
 // integrationOutboxService/deliveryCompletionService/deliveryFailureService/routes —
 // every call site now enqueues the result of buildOdooEventPayload() instead.
-//
-// Field names match "Odoo Integration Meeting Prep by CE Hub team" (do_ref, so_ref,
-// order_lines[], failure_reason, driver_name, etc.) — see docs/odoo-payload-addendum.md
-// for the fields added here beyond that original doc, and for open questions still
-// pending GCA's confirmation (actual_delivered_qty granularity, stock.move.line
-// write-back semantics).
 
 const prisma = require('../prismaClient');
 
-// CE Hub status -> conceptual event name from the reference payload doc.
-// Delivering was originally 'status', Delivered was originally 'completion', and
-// this stage was originally 'Arrived'/'arrived' in the CE Hub prep doc — the first
-// two renamed for symmetry with loaded/unloaded (named after their CE Hub status);
-// Arrived -> Unloaded to match GCA's own confirmed status list (their meeting
-// notes doc, §5 "Confirmed CE Hub Status List"), which names this status
-// `Unloaded`/`unloaded` — matching CE Hub's own item-level `picking_status:
-// 'unloaded'` naming too. Delivering is also distinct from x_delivery_status's
-// own 'in_transit' value — see docs/odoo-payload-addendum.md.
-// `schedule` (Scheduled) is CE Hub's own proposal, not yet confirmed by GCA —
-// their confirmed status list has no Scheduled entry. See addendum §Open Items.
 const EVENT_BY_STATUS = {
   Scheduled:  'schedule',
   Loaded:     'loaded',
@@ -125,9 +108,6 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     status:                 resolveLineStatus(item),
   }));
 
-  // Only meaningful on the delivered event — see docs/odoo-payload-addendum.md
-  // for the current limitation (always false today; CE Hub's failure-confirmation
-  // flow has no path that reaches "Delivered" with some lines undelivered yet).
   const deliveredCount = order.order_products.filter(i => i.item_delivery_status === 'delivered').length;
   const isPartial = ceHubStatus === 'Delivered'
     && deliveredCount > 0
@@ -144,9 +124,6 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     ...(ceHubStatus === 'Failed' && {
       failure_reason: latestFailure?.failure_reason || order.issue_reason || null,
       remarks:        latestFailure?.failure_desc   || order.issue_desc   || null,
-      // Business confirmed no same-trip revisit workflow exists on-ground (GCA
-      // meeting notes, 16 Jul 2026) — always false until that changes.
-      no_revisit:     false,
     }),
     driver_name:            crew.driver_name,
     assistant_name:         crew.assistant_name,
