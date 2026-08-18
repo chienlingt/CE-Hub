@@ -20,6 +20,7 @@ const {
   enqueueSlotDepartureSideEffects,
   enqueueOnTheWayNotifications,
 } = require('./integrationOutboxService');
+const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -238,6 +239,16 @@ async function processDeliveryCompletion(orderId, {
     data:  updateData,
   });
 
+  // This path only ever completes a full delivery (Step 2 already gated on every
+  // item being unloaded) — mark every line item delivered at its full ordered
+  // quantity so the Odoo completion payload's order_lines are accurate.
+  for (const item of order.order_products) {
+    await prisma.order_products.update({
+      where: { id: item.id },
+      data:  { item_delivery_status: 'delivered', delivered_quantity: item.quantity },
+    }).catch(e => console.error('[A4] order_products delivered-status update failed:', e.message));
+  }
+
   // Upsert driver's current location (non-fatal)
   await upsertEmployeeLocation(employeeId, latitude, longitude);
 
@@ -247,7 +258,7 @@ async function processDeliveryCompletion(orderId, {
     await enqueue({
       eventType:      'SLOT_STATUS_CHANGED',
       target:         'odoo',
-      payload:        { orderId, odooRef: updatedOrder.odoo_order_ref, status: finalStatus },
+      payload:        await buildOdooEventPayload(orderId, finalStatus),
       idempotencyKey: `order:${orderId}:odoo:${finalStatus}`,
     }).catch(e => console.error('[A4] Odoo enqueue failed:', e.message));
     odooEnqueued = true;

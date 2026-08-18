@@ -9,6 +9,7 @@ const { getCoordinatesFromAddress, calculateRoute } = require('../services/routi
 
 const { markOrderDelivering, markOrderDelivered, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
+const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
 const upload = require('../middleware/upload');
 const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
 
@@ -1235,6 +1236,17 @@ router.patch('/:id', async (req, res) => {
 
     const slotAfterUpdate = await prisma.time_slots.findUnique({ where: { id: time_slot_id }, select: { delivery_team_id: true, date: true } });
 
+    // Notify Odoo of the (re)assigned delivery window — extended fields only,
+    // see odooService.writeOdooExtendedFields (still gated on GCA field confirmation).
+    if (updatedOrder.odoo_order_ref) {
+      buildOdooEventPayload(updatedOrder.id, 'Scheduled').then(payload => enqueue({
+        eventType:      'ORDER_SCHEDULED',
+        target:         'odoo',
+        payload,
+        idempotencyKey: `order:${updatedOrder.id}:odoo:scheduled:${updatedOrder.scheduled_start_date_time?.toISOString?.() || Date.now()}`,
+      })).catch(e => console.error('[Reassign] ORDER_SCHEDULED outbox enqueue failed:', e.message));
+    }
+
     console.log(`Order ${req.params.id} reassigned to timeslot ${time_slot_id}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
@@ -1493,6 +1505,16 @@ router.post('/:id/deliver', upload.fields([
     const now     = new Date();
     const updated = await markOrderDelivered(req.params.id, { employeeId: employee_id, now, latitude: lat, longitude: lng });
 
+    // This path is already gated on every item being unloaded (see notUnloaded
+    // check above) — mark every line item delivered at its full ordered quantity
+    // so the Odoo completion payload's order_lines are accurate.
+    for (const item of items) {
+      await prisma.order_products.update({
+        where: { id: item.id },
+        data:  { item_delivery_status: 'delivered', delivered_quantity: item.quantity },
+      }).catch(e => console.error('[A2] order_products delivered-status update failed:', e.message));
+    }
+
     let deliveredByName = null;
     if (employee_id) {
       const emp = await prisma.employees.findUnique({
@@ -1505,12 +1527,12 @@ router.post('/:id/deliver', upload.fields([
 
     // Enqueue Odoo write-back via outbox — never inline (A.3.2)
     if (updated.odoo_order_ref) {
-      enqueue({
+      buildOdooEventPayload(updated.id, 'Delivered').then(payload => enqueue({
         eventType:      'SLOT_STATUS_CHANGED',
         target:         'odoo',
-        payload:        { orderId: updated.id, odooRef: updated.odoo_order_ref, status: 'Delivered' },
+        payload,
         idempotencyKey: `order:${updated.id}:odoo:Delivered`,
-      }).catch(e => console.error('[Deliver] outbox enqueue failed:', e.message));
+      })).catch(e => console.error('[Deliver] outbox enqueue failed:', e.message));
     }
 
     res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });

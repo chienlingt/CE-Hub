@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const { enqueue } = require('../services/integrationOutboxService');
+const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
 
 router.get('/', async (req, res) => {
   try {
@@ -158,12 +159,12 @@ router.patch('/:id/picking-status', async (req, res) => {
           select: { id: true, odoo_order_ref: true },
         });
         if (order?.odoo_order_ref) {
-          enqueue({
+          buildOdooEventPayload(order.id, 'Loaded').then(payload => enqueue({
             eventType:      'SLOT_STATUS_CHANGED',
             target:         'odoo',
-            payload:        { orderId: order.id, odooRef: order.odoo_order_ref, status: 'Loaded' },
+            payload,
             idempotencyKey: `order:${order.id}:odoo:Loaded`,
-          }).catch(e => console.error('[Loading] Loaded outbox enqueue failed:', e.message));
+          })).catch(e => console.error('[Loading] Loaded outbox enqueue failed:', e.message));
         }
       }
     }
@@ -176,12 +177,12 @@ router.patch('/:id/picking-status', async (req, res) => {
           select: { id: true, odoo_order_ref: true },
         });
         if (order?.odoo_order_ref) {
-          enqueue({
+          buildOdooEventPayload(order.id, 'Unloaded').then(payload => enqueue({
             eventType:      'SLOT_STATUS_CHANGED',
             target:         'odoo',
-            payload:        { orderId: order.id, odooRef: order.odoo_order_ref, status: 'Arrived' },
-            idempotencyKey: `order:${order.id}:odoo:Arrived`,
-          }).catch(e => console.error('[Unloading] Arrived outbox enqueue failed:', e.message));
+            payload,
+            idempotencyKey: `order:${order.id}:odoo:Unloaded`,
+          })).catch(e => console.error('[Unloading] Unloaded outbox enqueue failed:', e.message));
         }
       }
     }
@@ -276,17 +277,29 @@ router.patch('/:id/cancel-scan', async (req, res) => {
 
 // PATCH /api/order-products/:id/delivery-status
 // Update individual item delivery status: pending | delivered | failed
+// delivered_quantity is optional — when the caller doesn't supply a real per-unit
+// count (e.g. a UI that only knows delivered/failed, not "3 of 5"), it defaults
+// to the ordered quantity for delivered / 0 for failed. See odooPayloadBuilder.js.
 router.patch('/:id/delivery-status', async (req, res) => {
   try {
-    const { item_delivery_status } = req.body;
+    const { item_delivery_status, delivered_quantity } = req.body;
     const allowed = ['pending', 'delivered', 'failed'];
     if (!allowed.includes(item_delivery_status)) {
       return res.status(400).json({ error: `item_delivery_status must be one of: ${allowed.join(', ')}` });
     }
 
+    const item = await prisma.order_products.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!item) return res.status(404).json({ error: 'Order product not found' });
+
+    const resolvedQty = delivered_quantity != null
+      ? parseInt(delivered_quantity)
+      : item_delivery_status === 'delivered' ? item.quantity
+      : item_delivery_status === 'failed'    ? 0
+      : null;
+
     const updated = await prisma.order_products.update({
       where: { id: parseInt(req.params.id) },
-      data:  { item_delivery_status },
+      data:  { item_delivery_status, delivered_quantity: resolvedQty },
       include: { products: { select: { id: true, product_name: true } } },
     });
 

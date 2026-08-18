@@ -7,13 +7,14 @@
 // On success → marks processed. On failure → increments attempts and schedules retry.
 //
 // Handlers:
-//   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus
-//                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed')
+//   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus + writeOdooExtendedFields
+//                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed') + extended fields
+//                             ORDER_SCHEDULED      → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
 //                             RETURN_DO_CREATE (A5.5 stub) → logs until ERP API confirmed
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
-const { writeOdooDeliveryStatus } = require('./services/odooService');
+const { writeOdooDeliveryStatus, writeOdooExtendedFields } = require('./services/odooService');
 const {
   fetchPendingBatch,
   markProcessed,
@@ -59,13 +60,19 @@ async function handleOdoo(row) {
     return;
   }
 
-  const { odooRef, status } = row.payload || {};
+  // `odooRef`/`status` are legacy-shaped payloads from before the shared payload
+  // builder existed; new rows carry `do_ref`/`status` (see odooPayloadBuilder.js).
+  // Support both so already-queued rows from before this change still process.
+  const payload = row.payload || {};
+  const odooRef = payload.do_ref || payload.odooRef;
+  const status  = payload.status;
   if (!odooRef) {
     console.warn('[OutboxWorker] Odoo row missing odooRef — marking dead:', row.id);
     throw new Error('Missing odooRef in payload');
   }
 
   await writeOdooDeliveryStatus(odooRef, status);
+  await writeOdooExtendedFields(odooRef, payload);
   console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}`);
 }
 
@@ -77,15 +84,38 @@ async function handleOrderFailed(row) {
     return;
   }
 
-  const { odooRef, orderId } = row.payload || {};
+  const payload = row.payload || {};
+  const odooRef = payload.do_ref || payload.odooRef;
   if (!odooRef) {
     // No Odoo ref — mark processed silently (nothing to sync)
-    console.log(`[OutboxWorker] ORDER_FAILED skipped (no odooRef) for order ${orderId}`);
+    console.log(`[OutboxWorker] ORDER_FAILED skipped (no odooRef) for order ${payload.orderId || payload.ce_hub_order_ref}`);
     return;
   }
 
   await writeOdooDeliveryStatus(odooRef, 'Failed');
+  await writeOdooExtendedFields(odooRef, payload);
   console.log(`[OutboxWorker] ORDER_FAILED: wrote Failed to Odoo for ${odooRef}`);
+}
+
+// ── ORDER_SCHEDULED handler — write the assigned window back to Odoo ──────
+// writeOdooDeliveryStatus is a no-op for 'Scheduled' (not in CE_HUB_STATUS_MAP);
+// only the extended (still-unconfirmed) fields carry anything for this event.
+
+async function handleOrderScheduled(row) {
+  if (!process.env.ODOO_URL) {
+    console.log('[OutboxWorker] ODOO_URL not set — skipping ORDER_SCHEDULED:', row.id);
+    return;
+  }
+
+  const payload = row.payload || {};
+  const odooRef = payload.do_ref;
+  if (!odooRef) {
+    console.log('[OutboxWorker] ORDER_SCHEDULED skipped (no do_ref) for order', payload.ce_hub_order_ref);
+    return;
+  }
+
+  await writeOdooExtendedFields(odooRef, payload);
+  console.log(`[OutboxWorker] ORDER_SCHEDULED: pushed schedule fields for ${odooRef}`);
 }
 
 // ── A5.5 stub: RETURN_DO_CREATE — deferred until Odoo Return DO API confirmed ──
@@ -255,6 +285,8 @@ async function dispatchRow(row) {
       break;
     case 'ORDER_FAILED':
       return handleOrderFailed(row);
+    case 'ORDER_SCHEDULED':
+      return handleOrderScheduled(row);
     case 'RETURN_DO_CREATE':
       return handleReturnDoCreate(row);
     case 'CUSTOMER_ON_THE_WAY':

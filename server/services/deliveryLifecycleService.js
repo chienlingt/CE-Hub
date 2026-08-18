@@ -158,7 +158,7 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
           customers: { select: { id: true, full_name: true, phone: true, email: true } },
         },
       },
-      truck: { select: { id: true, plate_no: true } },
+      truck: { select: { id: true, plate_no: true, driver_id: true, assistant_id: true } },
     },
   });
 
@@ -251,7 +251,10 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
     updatedOrders.push(updated);
   }
 
-  // Upsert lorry_trips (1:1 mirror keyed by time_slot_id)
+  // Upsert lorry_trips (1:1 mirror keyed by time_slot_id). driver_id/assistant_id
+  // are seeded from the truck's default assignment at departure — a genuine
+  // per-trip column an admin can later override (PUT /api/lorry-trips/:id),
+  // distinct from the truck's own static default.
   const lorryTrip = await prisma.lorry_trips.upsert({
     where:  { time_slot_id: timeSlotId },
     create: {
@@ -259,6 +262,8 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
       truck_id:          slot.truck_id || null,
       delivery_team_id:  slot.delivery_team_id || null,
       warehouse_team_id: slot.warehouse_team_id || null,
+      driver_id:         slot.truck?.driver_id ?? null,
+      assistant_id:      slot.truck?.assistant_id ?? null,
       status:            'active',
       started_at:        now,
       started_by:        employeeId || null,
