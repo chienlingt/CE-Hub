@@ -192,7 +192,7 @@ export default function SyncMonitor() {
   const orderOutboxMap = useMemo(() => {
     const map = {};
     outboxRows.forEach(row => {
-      const id = row.payload?.orderId;
+      const id = row.payload?.ce_hub_order_ref || row.payload?.orderId;
       if (id) {
         if (!map[id]) map[id] = [];
         map[id].push(row);
@@ -507,7 +507,7 @@ export default function SyncMonitor() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {outboxDisplay.map(row => {
-                    const doRef = row.payload?.odooRef || 'Not Synced';
+                    const doRef = row.payload?.do_ref || row.payload?.odooRef || 'Not Synced';
                     return (
                       <tr key={row.id} className={`hover:bg-gray-50 ${row.status === 'dead' ? 'bg-red-50' : ''}`}>
                         <td className="px-4 py-3">
