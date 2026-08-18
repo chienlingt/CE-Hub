@@ -10,6 +10,8 @@ const {
   getCoordinatesFromAddress,
   calculateRoute
 } = require('./routingService');
+const { enqueue } = require('./integrationOutboxService');
+const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 dayjs.extend(weekday);
 dayjs.extend(isSameOrAfter);
@@ -897,7 +899,7 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
         }
 
         // Update order in database
-        await prisma.orders.update({
+        const schedulerUpdatedOrder = await prisma.orders.update({
           where: { id: order.id },
           data: {
             scheduled_start_date_time: orderStart.toDate(),
@@ -908,6 +910,17 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
             updated_at: new Date()
           }
         });
+
+        // Notify Odoo of the assigned delivery window — extended fields only,
+        // see odooService.writeOdooExtendedFields (gated on GCA field confirmation).
+        if (schedulerUpdatedOrder.odoo_order_ref) {
+          buildOdooEventPayload(schedulerUpdatedOrder.id, 'Scheduled').then(payload => enqueue({
+            eventType:      'ORDER_SCHEDULED',
+            target:         'odoo',
+            payload,
+            idempotencyKey: `order:${schedulerUpdatedOrder.id}:odoo:scheduled:${orderStart.toISOString()}`,
+          })).catch(e => console.error('[Scheduler] ORDER_SCHEDULED outbox enqueue failed:', e.message));
+        }
 
         console.log(`   [Scheduler] Scheduled Order ${order.id}: ${orderStart.format('HH:mm')}-${orderEnd.format('HH:mm')} (Load Seq: ${order.truck_loading_sequence})`);
 

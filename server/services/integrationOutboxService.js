@@ -17,6 +17,7 @@
 //   then status → 'dead' for manual review.
 
 const prisma = require('../prismaClient');
+const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 const MAX_ATTEMPTS   = parseInt(process.env.OUTBOX_MAX_ATTEMPTS || '8', 10);
 // Backoff delays in minutes: attempt 1→1m, 2→5m, 3→15m, 4→60m, 5+→60m
@@ -91,7 +92,7 @@ async function enqueueSlotDepartureSideEffects(timeSlotId, activeOrders) {
       await enqueue({
         eventType:      'SLOT_STATUS_CHANGED',
         target:         'odoo',
-        payload:        { orderId: order.id, odooRef: order.odoo_order_ref, status: 'Delivering' },
+        payload:        await buildOdooEventPayload(order.id, 'Delivering'),
         idempotencyKey: `order:${order.id}:odoo:Delivering`,
       });
     }
@@ -119,7 +120,7 @@ async function enqueueSlotEndTripSideEffects(timeSlotId, slotOrders) {
       await enqueue({
         eventType:      'SLOT_STATUS_CHANGED',
         target:         'odoo',
-        payload:        { orderId: order.id, odooRef: order.odoo_order_ref, status: order.order_status },
+        payload:        await buildOdooEventPayload(order.id, order.order_status),
         idempotencyKey: `order:${order.id}:odoo:${order.order_status}`,
       });
     }
