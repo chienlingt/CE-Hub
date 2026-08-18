@@ -38,6 +38,8 @@ model employees {
   reports                               reports[]                   @relation("EmployeeReports")
   trucks_trucks_assistant_idToemployees trucks[]                    @relation("trucks_assistant_idToemployees")
   trucks_trucks_driver_idToemployees    trucks[]                    @relation("trucks_driver_idToemployees")
+  lorry_trips_assistant_idToemployees   lorry_trips[]               @relation("lorry_trips_assistant_idToemployees")
+  lorry_trips_driver_idToemployees      lorry_trips[]               @relation("lorry_trips_driver_idToemployees")
 }
 
 model teams {
@@ -135,20 +137,27 @@ model customers {
 }
 
 model lorry_trips {
-  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  delivery_team_id  String?
-  warehouse_team_id String?
-  truck_id          String?     @db.Uuid
-  created_at        DateTime    @default(now())
-  updated_at        DateTime?
-  ended_at          DateTime?   @db.Timestamp(6)
-  ended_by          String?     @db.Uuid
-  started_at        DateTime?   @db.Timestamp(6)
-  started_by        String?     @db.Uuid
-  status            String?     @default("planned") @db.VarChar(20)
-  time_slot_id      String?     @unique @db.Uuid
-  time_slot         time_slots? @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lorry_trip_time_slot")
-  trucks            trucks?     @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                                       String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  delivery_team_id                         String?
+  warehouse_team_id                        String?
+  truck_id                                 String?     @db.Uuid
+  created_at                               DateTime    @default(now())
+  updated_at                               DateTime?
+  ended_at                                 DateTime?   @db.Timestamp(6)
+  ended_by                                 String?     @db.Uuid
+  started_at                               DateTime?   @db.Timestamp(6)
+  started_by                               String?     @db.Uuid
+  status                                   String?     @default("planned") @db.VarChar(20)
+  time_slot_id                             String?     @unique @db.Uuid
+  // Trip-level driver/assistant — overrides the truck's default driver_id/assistant_id
+  // for this specific run once the trip exists (from departure onward). Seeded from the
+  // truck's defaults at departure; see deliveryLifecycleService.departTimeSlot().
+  driver_id                                String?     @db.Uuid
+  assistant_id                             String?     @db.Uuid
+  time_slot                                time_slots? @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lorry_trip_time_slot")
+  trucks                                   trucks?     @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees_lorry_trips_driver_idToemployees    employees? @relation("lorry_trips_driver_idToemployees", fields: [driver_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_driver")
+  employees_lorry_trips_assistant_idToemployees employees? @relation("lorry_trips_assistant_idToemployees", fields: [assistant_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_assistant")
 }
 
 model order_products {
@@ -156,6 +165,12 @@ model order_products {
   order_id                     String    @db.Uuid
   product_id                   String?   @db.Uuid
   quantity                     Int?
+  // Actual delivered count for this line, as opposed to `quantity` (ordered). Distinct
+  // from `item_delivery_status` (delivered/failed) so true partial-unit delivery (e.g.
+  // "3 of 5") is representable — defaults to quantity/0 by status until a caller
+  // supplies an explicit value. See deliveryFailureService.confirmFailure() and
+  // routes/order-products.js PATCH.
+  delivered_quantity           Int?
   dismantle_required           Boolean?
   dismantle_time_min           Int?
   dismantle_time_max           Int?
@@ -196,6 +211,14 @@ model orders {
   actual_start_date_time     DateTime?
   actual_end_date_time       DateTime?
   actual_arrival_date_time   DateTime?
+  delivered_latitude         Float?
+  delivered_longitude        Float?
+  // Customer-requested delivery window as received from Odoo (picking.scheduled_date) at
+  // order ingest — flows Odoo -> CE Hub, a preference only, not guaranteed. Previously
+  // read by odooService.getOrderDetail() but silently dropped by pushOrder(); now
+  // persisted. Named to match GCA's "Confirmed Data Mapping Requirements" table (10 Jul
+  // meeting notes, §6). See odooOrderIngestService.js.
+  preferred_timeslot         DateTime?
   created_at                 DateTime?
   updated_at                 DateTime?
   truck_loading_sequence     Int?
@@ -295,7 +318,6 @@ model time_slots {
   ended_by                String?      @db.Uuid
   slot_status             String?      @default("scheduled") @db.VarChar(30)
   started_by              String?      @db.Uuid
-  ended_by                String?      @db.Uuid
   // Route Optimisation (B.2) output — computed once per scheduler run, consumed
   // by the driver Route tab so it never has to re-call Google Maps itself.
   route_polyline          String?
@@ -304,7 +326,6 @@ model time_slots {
   route_computed_at       DateTime?    @db.Timestamp(6)
   orders                  orders[]
   lorry_trip              lorry_trips?
-  orders                  orders[]
   delivery_team           teams?       @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
   truck                   trucks?      @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_truck")
   warehouse_team          teams?       @relation("WarehouseTeamSlots", fields: [warehouse_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_warehouse_team")
