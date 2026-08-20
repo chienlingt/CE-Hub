@@ -13,7 +13,7 @@ const prisma = require('../prismaClient');
 async function syncOrdersFromOdoo(targetDate = null) {
   if (!process.env.ODOO_URL) {
     console.log('[OdooSync] ODOO_URL not configured — skipping sync.');
-    return { synced: 0, skipped: 0 };
+    return { synced: 0, skipped: 0, syncedDos: [], skippedDos: [] };
   }
 
   try {
@@ -25,11 +25,13 @@ async function syncOrdersFromOdoo(targetDate = null) {
 
     if (!odooOrders?.length) {
       console.log(`[OdooSync] No confirmed orders in Odoo for ${tomorrow}.`);
-      return { synced: 0, skipped: 0 };
+      return { synced: 0, skipped: 0, syncedDos: [], skippedDos: [] };
     }
 
-    let synced = 0;
-    let skipped = 0;
+    // Track the actual DO references, not just counts, so GCA can see which
+    // DOs were imported vs. skipped in the FALLBACK_POLL_COMPLETE payload.
+    const syncedDos  = [];
+    const skippedDos = [];
 
     for (const oo of odooOrders) {
       const odooRef = oo.name;
@@ -37,20 +39,23 @@ async function syncOrdersFromOdoo(targetDate = null) {
 
       // Skip if already in CE Hub — push endpoints own keeping it up to date
       const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: odooRef } });
-      if (existing) { skipped++; continue; }
+      if (existing) { skippedDos.push(odooRef); continue; }
 
       const detail = await getOrderDetail(oo.id);
-      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skipped++; continue; }
+      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skippedDos.push(odooRef); continue; }
 
       const result = await pushOrder(detail);
       if (result.success) {
         console.log(`[OdooSync] Imported next-day order missed by push: ${odooRef}`);
-        synced++;
+        syncedDos.push(odooRef);
       } else {
         console.warn(`[OdooSync] Failed to import ${odooRef}: ${result.error}`);
-        skipped++;
+        skippedDos.push(odooRef);
       }
     }
+
+    const synced  = syncedDos.length;
+    const skipped = skippedDos.length;
 
     console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
 
@@ -60,7 +65,13 @@ async function syncOrdersFromOdoo(targetDate = null) {
         data: {
           event_type:      'FALLBACK_POLL_COMPLETE',
           target:          'odoo',
-          payload:         { date: tomorrow, synced, skipped },
+          payload:         {
+            date:           tomorrow,
+            synced_dos:     syncedDos,
+            skipped_dos:    skippedDos,
+            synced_count:   synced,
+            skipped_count:  skipped,
+          },
           idempotency_key: `fallback_poll:${tomorrow}`,
           status:          'pending',
           attempts:        0,
@@ -71,10 +82,10 @@ async function syncOrdersFromOdoo(targetDate = null) {
       console.warn('[OdooSync] Could not write FALLBACK_POLL_COMPLETE to outbox:', outboxErr.message);
     }
 
-    return { synced, skipped };
+    return { synced, skipped, syncedDos, skippedDos };
   } catch (err) {
     console.error('[OdooSync] Sync failed:', err.message);
-    return { synced: 0, skipped: 0, error: err.message };
+    return { synced: 0, skipped: 0, syncedDos: [], skippedDos: [], error: err.message };
   }
 }
 

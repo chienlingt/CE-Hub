@@ -7,15 +7,6 @@
 
 const prisma = require('../prismaClient');
 
-const EVENT_BY_STATUS = {
-  Scheduled:  'schedule',
-  Loaded:     'loaded',
-  Unloaded:   'unloaded',
-  Delivering: 'delivering',
-  Delivered:  'delivered',
-  Failed:     'failure',
-};
-
 // Serial number for a line: prefer the latest lifecycle stage that recorded one.
 function resolveSerial(item) {
   return item.unloaded_serial || item.assigned_serial || item.picked_serial || item.loaded_serial || null;
@@ -114,10 +105,8 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     && deliveredCount < order.order_products.length;
 
   return {
-    event:                  EVENT_BY_STATUS[ceHubStatus] || null,
     do_ref:                 order.odoo_order_ref || null,
     so_ref:                 order.odoo_sales_ref || null,
-    ce_hub_order_ref:       order.id,
     status:                 ceHubStatus,
     order_lines:            orderLines,
     ...(ceHubStatus === 'Delivered' && { is_partial: isPartial }),
@@ -131,9 +120,8 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     scheduled_start:        order.scheduled_start_date_time || null,
     scheduled_end:          order.scheduled_end_date_time || null,
     delivered_time:         order.delivery_end_date_time || order.actual_arrival_date_time || null,
-    proof_of_delivery_url:  order.proof_of_delivery_url || null,
     timestamp:              new Date().toISOString(),
   };
 }
 
-module.exports = { buildOdooEventPayload, EVENT_BY_STATUS };
+module.exports = { buildOdooEventPayload };
