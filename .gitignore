@@ -1,3 +1,6 @@
+# macOS Finder metadata
+.DS_Store
+
 # Firebase
 serviceAccountKey.json
 
@@ -29,5 +32,9 @@ server/.env
 # Cursor
 .cursor/
 
+# Claude Code
+CLAUDE.md
+
 # User-uploaded runtime files (POD photos, failure evidence, etc.)
 server/uploads/
+docs/

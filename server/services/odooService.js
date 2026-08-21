@@ -69,7 +69,7 @@ async function callModel(model, method, args = [], kwargs = {}) {
 // Picked and Completed have no Odoo counterpart — they return null (no-op).
 const CE_HUB_STATUS_MAP = {
   Loaded:     'loaded',
-  Arrived:    'arrived',
+  Unloaded:   'unloaded',
   Delivering: 'in_transit',
   Delivered:  'delivered',
   Failed:     'failed',
@@ -88,7 +88,7 @@ async function pushDeliveryStatus(odooPickingId, localStatus) {
  * Returns null (non-fatal) if Odoo is unreachable or the picking is not found.
  *
  * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
- * @param {string} localStatus   - CE Hub status (Loaded|Unloaded|Delivering|Delivered|Failed); Picked and Completed are no-ops
+ * @param {string} localStatus   - CE Hub status (Loaded|Arrived|Delivering|Delivered|Failed); Picked and Completed are no-ops
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
@@ -225,28 +225,40 @@ async function getOrderDetail(odooPickingId) {
 }
 
 /**
- * Write CE Hub's assigned timeslot back to the Odoo Delivery Order.
- * Field names are placeholders — replace x_scheduled_date_start / x_scheduled_date_end
- * with the exact names once confirmed by GCA.
+ * Write the richer, still-unconfirmed fields (scheduled/delivered time, failure
+ * reason, driver/assistant name) back to the Odoo Delivery Order, on top of the
+ * one confirmed field `writeOdooDeliveryStatus` already writes.
  *
- * @param {string} odooOrderRef     - DO number (orders.odoo_order_ref)
- * @param {string} scheduledStart   - ISO datetime string (MYT)
- * @param {string} scheduledEnd     - ISO datetime string (MYT)
+ * Every x_ field name below is a PLACEHOLDER pending GCA confirmation. Gated behind
+ * ODOO_SEND_EXTENDED_FIELDS so it never fires unless explicitly enabled, and
+ * never throws — a wrong/unconfirmed field name must not break the working
+ * x_delivery_status sync that runs alongside it.
+ *
+ * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
+ * @param {object} payload      - the object from odooPayloadBuilder.buildOdooEventPayload()
  */
-async function writeScheduledTimeslot(odooOrderRef, scheduledStart, scheduledEnd) {
+async function writeOdooExtendedFields(odooOrderRef, payload) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
+  if (process.env.ODOO_SEND_EXTENDED_FIELDS !== 'true') return null;
 
   const pickings = await callModel('stock.picking', 'search_read',
     [[['name', '=', odooOrderRef]]],
     { fields: ['id'], limit: 1 }
-  );
+  ).catch(() => null);
   if (!pickings?.length) return null;
 
-  // TODO: replace field names below once GCA confirms the exact x_ field names
+  // TODO: every x_ field name below is a placeholder pending GCA confirmation.
   return callModel('stock.picking', 'write', [[pickings[0].id], {
-    x_scheduled_date_start: scheduledStart || false,
-    x_scheduled_date_end:   scheduledEnd   || false,
-  }]);
+    x_scheduled_date_start: payload?.scheduled_start || false,
+    x_scheduled_date_end:   payload?.scheduled_end   || false,
+    x_delivered_time:       payload?.delivered_time  || false,
+    x_failure_reason:       payload?.failure_reason  || false,
+    x_driver_name:          payload?.driver_name     || false,
+    x_assistant_name:       payload?.assistant_name  || false,
+  }]).catch(err => {
+    console.error(`[Odoo] writeOdooExtendedFields failed for ${odooOrderRef} (non-fatal, extended fields unconfirmed):`, err.message);
+    return null;
+  });
 }
 
 module.exports = {
@@ -254,7 +266,7 @@ module.exports = {
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
-  writeScheduledTimeslot,
+  writeOdooExtendedFields,
   getOrdersForDeliveryDate,
   getOrderDetail,
 };

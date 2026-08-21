@@ -18,6 +18,7 @@
 const prisma = require('../prismaClient');
 const { sendDeliveryFailureNotifications } = require('./notificationService');
 const { enqueue } = require('./integrationOutboxService');
+const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 // FR-05-001 — five permitted failure reasons; "Other" requires a description
 const FAILURE_REASONS = [
@@ -41,7 +42,7 @@ const ELIGIBLE_STATUSES = ['Delivering', 'In Progress'];
  * @param {{
  *   issue_reason: string,
  *   issue_desc: string,
- *   order_products_status: Array<{ id: number, item_delivery_status: string }>,
+ *   order_products_status: Array<{ id: number, item_delivery_status: string, delivered_quantity?: number }>,
  *   employee_id?: string,
  *   evidence_paths?: string[],
  * }} params
@@ -57,7 +58,7 @@ async function confirmFailure(orderId, {
   // ── 1. Load order ──────────────────────────────────────────────────────────
   const order = await prisma.orders.findUnique({
     where:   { id: orderId },
-    include: { order_products: { select: { id: true, item_delivery_status: true } } },
+    include: { order_products: { select: { id: true, item_delivery_status: true, quantity: true } } },
   });
 
   if (!order) {
@@ -167,12 +168,19 @@ async function confirmFailure(orderId, {
     },
   });
 
-  // 8b. Update each line item delivery status
+  // 8b. Update each line item delivery status (+ real delivered_quantity when the
+  // caller supplies one — e.g. a future partial-quantity UI — else default to
+  // the full ordered quantity for delivered / 0 for failed).
+  const orderProductById = Object.fromEntries(order.order_products.map(p => [String(p.id), p]));
   for (const item of (order_products_status || [])) {
     if (!allowedItemStatuses.includes(item.item_delivery_status)) continue;
+    const orderedQty = orderProductById[String(item.id)]?.quantity ?? null;
+    const deliveredQty = item.delivered_quantity != null
+      ? parseInt(item.delivered_quantity)
+      : item.item_delivery_status === 'delivered' ? orderedQty : 0;
     await prisma.order_products.update({
       where: { id: parseInt(item.id) },
-      data:  { item_delivery_status: item.item_delivery_status },
+      data:  { item_delivery_status: item.item_delivery_status, delivered_quantity: deliveredQty },
     });
   }
 
@@ -199,7 +207,9 @@ async function confirmFailure(orderId, {
     await enqueue({
       eventType:      'ORDER_FAILED',
       target:         'odoo',
-      payload:        { orderId, odooRef: order.odoo_order_ref, status: 'Failed' },
+      // Rebuilt from DB state after the 8b/8c writes above, so failure_reason
+      // and the per-line delivered/failed outcomes are already reflected.
+      payload:        await buildOdooEventPayload(orderId, 'Failed'),
       idempotencyKey: `order:${orderId}:odoo:Failed`,
     });
   }

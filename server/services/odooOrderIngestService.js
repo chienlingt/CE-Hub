@@ -126,6 +126,10 @@ async function pushOrder(payload) {
     partner_name, partner_email, partner_phone,
     delivery_address, delivery_city, delivery_state_name, delivery_zip, delivery_remarks,
     salesperson_name, salesperson_phone,
+    // Customer-requested delivery window as read from Odoo's picking.scheduled_date
+    // (see odooService.getOrderDetail) — a preference only, not guaranteed. Flows
+    // Odoo -> CE Hub;
+    preferred_delivery_time,
     order_lines = [],
   } = payload || {};
 
@@ -150,6 +154,7 @@ async function pushOrder(payload) {
     const addressChanged = delivery_address && delivery_address !== existing.delivery_address;
 
     if (odoo_sales_ref)       changes.odoo_sales_ref    = odoo_sales_ref;
+    if (preferred_delivery_time) changes.preferred_timeslot = new Date(preferred_delivery_time);
     if (delivery_address)    changes.delivery_address  = delivery_address;
     if (delivery_city)       changes.delivery_city     = delivery_city;
     if (delivery_state_name) changes.delivery_state    = delivery_state_name;
@@ -228,6 +233,7 @@ async function pushOrder(payload) {
       delivery_remarks:          delivery_remarks    || null,
       original_delivery_address: delivery_address    || null,
       odoo_sales_ref:            odoo_sales_ref      || null,
+      preferred_timeslot:        preferred_delivery_time ? new Date(preferred_delivery_time) : null,
       salesperson_name:          salesperson_name    || null,
       salesperson_phone:         salesperson_phone   || null,
       assignment_status:         'unassigned',

@@ -28,6 +28,8 @@ async function syncOrdersFromOdoo(targetDate = null) {
       return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [] };
     }
 
+    // Track the actual DO references, not just counts, so GCA can see which
+    // DOs were imported vs. skipped in the FALLBACK_POLL_COMPLETE payload.
     const syncedDos  = [];
     const skippedDos = [];
 
@@ -52,7 +54,10 @@ async function syncOrdersFromOdoo(targetDate = null) {
       }
     }
 
-    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${syncedDos.length}, skipped: ${skippedDos.length}`);
+    const synced  = syncedDos.length;
+    const skipped = skippedDos.length;
+
+    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
 
     // Emit outbox event so Odoo/GCA knows polling is complete and can trigger D-1 WhatsApp.
     // Carries the actual DO references (not just counts) so GCA can identify exactly which
@@ -67,8 +72,8 @@ async function syncOrdersFromOdoo(targetDate = null) {
             date:          tomorrow,
             synced_dos:    syncedDos,
             skipped_dos:   skippedDos,
-            synced_count:  syncedDos.length,
-            skipped_count: skippedDos.length,
+            synced_count:  synced,
+            skipped_count: skipped,
           },
           idempotency_key: `fallback_poll:${tomorrow}`,
           status:          'pending',
@@ -81,10 +86,10 @@ async function syncOrdersFromOdoo(targetDate = null) {
     }
 
     return {
-      synced:        syncedDos.length,
-      skipped:       skippedDos.length,
-      synced_dos:    syncedDos,
-      skipped_dos:   skippedDos,
+      synced,
+      skipped,
+      synced_dos:  syncedDos,
+      skipped_dos: skippedDos,
     };
   } catch (err) {
     console.error('[OdooSync] Sync failed:', err.message);
