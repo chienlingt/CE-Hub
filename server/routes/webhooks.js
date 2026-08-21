@@ -69,40 +69,73 @@ router.post('/odoo/order-update', verifySecret, async (req, res) => {
 /**
  * POST /api/webhooks/odoo/order-cancel
  *
- * Triggered by an Odoo Automated Action when a sale.order is cancelled.
+ * Triggered by an Odoo Automated Action when a stock.picking (Delivery
+ * Order) is cancelled — DO cancellation is the primary, correct trigger,
+ * since CE Hub's odoo_order_ref always stores the DO reference (e.g.
+ * "WH/OUT/00123"), never the Sales Order reference (e.g. "S00042").
+ *
+ * If a sale.order is cancelled and that cascades to multiple DOs, send
+ * every affected DO's reference in `names` (one webhook call for the
+ * whole batch) rather than the SO's own name — CE Hub cannot match on
+ * an SO reference.
+ *
  * Configure the webhook URL as: https://lab2.tbm2u.net/api/webhooks/odoo/order-cancel
  *
- * Expected payload: { "name": "S00042" }
+ * Single DO:  { "name": "WH/OUT/00123" }
+ * SO cascade: { "names": ["WH/OUT/00123", "WH/OUT/00124"] }
  */
 router.post('/odoo/order-cancel', verifySecret, async (req, res) => {
   try {
-    const { name: odoo_order_ref } = req.body;
+    const { name, names } = req.body;
 
-    if (!odoo_order_ref) {
-      return res.status(400).json({ error: 'Payload must include name (order reference)' });
-    }
+    async function cancelOne(odoo_order_ref) {
+      const order = await prisma.orders.findFirst({ where: { odoo_order_ref } });
+      if (!order) {
+        return { name: odoo_order_ref, success: false, error: 'Order not found' };
+      }
+      if (order.order_status === 'Delivered') {
+        return { name: odoo_order_ref, success: false, error: 'Cannot cancel an order that is already delivered.' };
+      }
 
-    const order = await prisma.orders.findFirst({ where: { odoo_order_ref } });
-    if (!order) {
-      return res.status(404).json({ error: `Order not found for ref: ${odoo_order_ref}` });
-    }
-
-    if (order.order_status === 'Delivered') {
-      return res.status(409).json({
-        error: 'Cannot cancel an order that is already delivered.',
+      await prisma.orders.update({
+        where: { id: order.id },
+        data:  { order_status: 'Cancelled', updated_at: new Date() },
       });
+
+      console.log(`[Odoo Webhook] Cancelled ${odoo_order_ref}`);
+      return { name: odoo_order_ref, success: true };
     }
 
-    await prisma.orders.update({
-      where: { id: order.id },
-      data:  { order_status: 'Cancelled', updated_at: new Date() },
-    });
+    // Batch mode — SO cancelled, cascading to every DO it generated
+    if (Array.isArray(names)) {
+      if (names.length === 0) {
+        return res.status(400).json({ error: 'names must be a non-empty array of DO references' });
+      }
 
-    console.log(`[Odoo Webhook] Cancelled ${odoo_order_ref}`);
+      const results = [];
+      for (const ref of names) {
+        results.push(await cancelOne(ref));
+      }
+
+      const anySucceeded = results.some(r => r.success);
+      return res.status(anySucceeded ? 200 : 404).json({ success: anySucceeded, results });
+    }
+
+    // Single mode — one DO cancelled directly (unchanged response contract)
+    if (!name) {
+      return res.status(400).json({ error: 'Payload must include name (DO reference) or names (array of DO references)' });
+    }
+
+    const result = await cancelOne(name);
+    if (!result.success) {
+      const statusCode = result.error === 'Order not found' ? 404 : 409;
+      return res.status(statusCode).json({ error: result.error === 'Order not found' ? `Order not found for ref: ${name}` : result.error });
+    }
+
     return res.json({ success: true });
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order-cancel error:', err);
-    return res.status(500).json({ error: 'Failed to cancel order', details: err.message });
+    return res.status(500).json({ error: 'Failed to cancel order(s)', details: err.message });
   }
 });
 

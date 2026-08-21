@@ -13,7 +13,7 @@ const prisma = require('../prismaClient');
 async function syncOrdersFromOdoo(targetDate = null) {
   if (!process.env.ODOO_URL) {
     console.log('[OdooSync] ODOO_URL not configured — skipping sync.');
-    return { synced: 0, skipped: 0 };
+    return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [] };
   }
 
   try {
@@ -25,11 +25,11 @@ async function syncOrdersFromOdoo(targetDate = null) {
 
     if (!odooOrders?.length) {
       console.log(`[OdooSync] No confirmed orders in Odoo for ${tomorrow}.`);
-      return { synced: 0, skipped: 0 };
+      return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [] };
     }
 
-    let synced = 0;
-    let skipped = 0;
+    const syncedDos  = [];
+    const skippedDos = [];
 
     for (const oo of odooOrders) {
       const odooRef = oo.name;
@@ -37,30 +37,39 @@ async function syncOrdersFromOdoo(targetDate = null) {
 
       // Skip if already in CE Hub — push endpoints own keeping it up to date
       const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: odooRef } });
-      if (existing) { skipped++; continue; }
+      if (existing) { skippedDos.push(odooRef); continue; }
 
       const detail = await getOrderDetail(oo.id);
-      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skipped++; continue; }
+      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skippedDos.push(odooRef); continue; }
 
       const result = await pushOrder(detail);
       if (result.success) {
         console.log(`[OdooSync] Imported next-day order missed by push: ${odooRef}`);
-        synced++;
+        syncedDos.push(odooRef);
       } else {
         console.warn(`[OdooSync] Failed to import ${odooRef}: ${result.error}`);
-        skipped++;
+        skippedDos.push(odooRef);
       }
     }
 
-    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
+    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${syncedDos.length}, skipped: ${skippedDos.length}`);
 
-    // Emit outbox event so Odoo/GCA knows polling is complete and can trigger D-1 WhatsApp
+    // Emit outbox event so Odoo/GCA knows polling is complete and can trigger D-1 WhatsApp.
+    // Carries the actual DO references (not just counts) so GCA can identify exactly which
+    // orders CE Hub now has — the send-to-Odoo side is still a stub (see integrationOutboxCron.js
+    // handleFallbackPollComplete) pending GCA confirming the receiving mechanism.
     try {
       await prisma.integration_outbox.create({
         data: {
           event_type:      'FALLBACK_POLL_COMPLETE',
           target:          'odoo',
-          payload:         { date: tomorrow, synced, skipped },
+          payload:         {
+            date:          tomorrow,
+            synced_dos:    syncedDos,
+            skipped_dos:   skippedDos,
+            synced_count:  syncedDos.length,
+            skipped_count: skippedDos.length,
+          },
           idempotency_key: `fallback_poll:${tomorrow}`,
           status:          'pending',
           attempts:        0,
@@ -71,10 +80,15 @@ async function syncOrdersFromOdoo(targetDate = null) {
       console.warn('[OdooSync] Could not write FALLBACK_POLL_COMPLETE to outbox:', outboxErr.message);
     }
 
-    return { synced, skipped };
+    return {
+      synced:        syncedDos.length,
+      skipped:       skippedDos.length,
+      synced_dos:    syncedDos,
+      skipped_dos:   skippedDos,
+    };
   } catch (err) {
     console.error('[OdooSync] Sync failed:', err.message);
-    return { synced: 0, skipped: 0, error: err.message };
+    return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [], error: err.message };
   }
 }
 

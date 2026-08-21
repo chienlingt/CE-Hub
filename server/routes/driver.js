@@ -405,4 +405,84 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
   }
 });
 
+// ─── GET /api/driver/route/:timeSlotId ───────────────────────────────────────
+// Route tab data — the pre-computed Route Optimisation (B.2) output for one
+// time slot (geometry + ordered stops), so the driver app never has to call
+// Google Maps itself. Query: employee_id (required — scopes access to slots
+// the driver is actually assigned to).
+router.get('/route/:timeSlotId', async (req, res) => {
+  try {
+    const { timeSlotId } = req.params;
+    const { employee_id } = req.query;
+    if (!employee_id) {
+      return res.status(400).json({ error: 'employee_id query param required' });
+    }
+
+    const timeslot = await prisma.time_slots.findUnique({ where: { id: timeSlotId } });
+    if (!timeslot) return res.status(404).json({ error: 'Time slot not found' });
+
+    // Scope: driver must either be the delivery team on this slot, or have
+    // at least one order on it assigned directly to them.
+    const allAssignments = await prisma.employee_team_assignments.findMany({
+      where: { employee_id },
+      include: { team: { select: { id: true, team_type: true } } },
+    });
+    const deliveryTeamIds = [...new Set(
+      allAssignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id)
+    )];
+
+    const isOnDeliveryTeam = timeslot.delivery_team_id && deliveryTeamIds.includes(timeslot.delivery_team_id);
+    if (!isOnDeliveryTeam) {
+      const ownOrderOnSlot = await prisma.orders.count({
+        where: { time_slot_id: timeSlotId, employee_id },
+      });
+      if (ownOrderOnSlot === 0) {
+        return res.status(403).json({ error: 'Not assigned to this time slot' });
+      }
+    }
+
+    const orders = await prisma.orders.findMany({
+      where: {
+        time_slot_id: timeSlotId,
+        order_status: { notIn: ['Cancelled'] },
+      },
+      orderBy: { truck_loading_sequence: 'desc' }, // last-loaded (seq 1) is first delivered
+      include: {
+        customers: { select: { full_name: true, phone: true } },
+        buildings: { select: { building_name: true, latitude: true, longitude: true } },
+      },
+    });
+
+    const stops = orders.map(order => ({
+      order_id:               order.id,
+      odoo_order_ref:         order.odoo_order_ref,
+      customer_name:          order.customers?.full_name || null,
+      customer_phone:         order.customers?.phone || null,
+      address:                order.delivery_address || order.buildings?.building_name || null,
+      // Prisma Decimal fields serialize to strings in JSON — Google Maps'
+      // SDK requires actual numbers for lat/lng, so convert explicitly.
+      latitude:               order.buildings?.latitude  != null ? Number(order.buildings.latitude)  : null,
+      longitude:              order.buildings?.longitude != null ? Number(order.buildings.longitude) : null,
+      order_status:           order.order_status,
+      truck_loading_sequence: order.truck_loading_sequence,
+      eta:                    order.scheduled_start_date_time,
+    }));
+
+    res.json({
+      time_slot_id:      timeslot.id,
+      date:               timeslot.date,
+      time_window_start:  timeslot.time_window_start,
+      time_window_end:    timeslot.time_window_end,
+      route_polyline:     timeslot.route_polyline,
+      route_distance_m:   timeslot.route_distance_m,
+      route_duration_s:   timeslot.route_duration_s,
+      route_computed_at:  timeslot.route_computed_at,
+      stops,
+    });
+  } catch (err) {
+    console.error('GET /api/driver/route/:timeSlotId error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;

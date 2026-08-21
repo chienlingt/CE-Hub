@@ -4,19 +4,12 @@ const weekday = require('dayjs/plugin/weekday');
 const isSameOrAfter = require('dayjs/plugin/isSameOrAfter');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 const prisma = require('../prismaClient');
-const {
-  optimizeRouteOrder,
-  calculateCompleteRoute,
-  getCoordinatesFromAddress,
-  calculateRoute
-} = require('./routingService');
+const { planRoutes } = require('./googleRoutingService');
 
 dayjs.extend(weekday);
 dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
 
-const SMALL_GROUP_THRESHOLD = 8;
-const NEARBY_TRAVEL_MINUTES = 20;
 const TRAFFIC_MULTIPLIER = 1.5;
 
 function scaleTravelMinutes(minutes) {
@@ -143,10 +136,11 @@ async function scheduleOrders(options = {}) {
       return results;
     }
 
-    // Step 4: Group by address/location
-    console.log('\n[Scheduler] Step 4: grouping orders by location...');
-    const locationGroups = await groupByLocation(pendingOrders);
-    results.postalCodeGroups = Object.keys(locationGroups).length;
+    // Step 4: Route Optimisation (B.2) — group nearby orders and sequence
+    // each group, once per run, via Google Maps (see googleRoutingService.js).
+    console.log('\n[Scheduler] Step 4: planning routes (Google Maps)...');
+    const routePlans = await computeRoutePlans(pendingOrders, config.warehouse_address);
+    results.postalCodeGroups = routePlans.length;
 
     // Step 5: Calculate installation time and requirements
     console.log('\n[Scheduler] Step 5: calculating installation times...');
@@ -176,7 +170,7 @@ async function scheduleOrders(options = {}) {
     // Step 8: Optimize routes and assign to timeslots
     console.log('\n[Scheduler] Step 8: optimizing routes and scheduling...');
     const schedulingResults = await optimizeAndSchedule(
-      locationGroups,
+      routePlans,
       availableTimeslots,
       teams,
       trucks,
@@ -382,113 +376,33 @@ async function fetchPendingOrders() {
 }
 
 /**
- * Group orders by location (address) for efficient routing
+ * Route Optimisation (B.2) call site — the only place B.1 talks to
+ * googleRoutingService. Runs exactly once per scheduler run: grouping,
+ * sequencing, and per-leg timing all happen inside planRoutes() up front,
+ * so the slot-fitting loop in optimizeAndSchedule() never calls Google
+ * again (every call there would otherwise re-bill Distance Matrix/Routes).
+ *
+ * Attaches each order's own precomputed leg duration (_legDurationSec) so
+ * the scheduling loop can look up travel time per order directly, even
+ * after a slot-fit subset drops some orders from the original sequence.
  */
-function getOrderAddress(order) {
-  return order.customers?.address || order.buildings?.building_name || 'UNKNOWN';
-}
+async function computeRoutePlans(orders, warehouseAddress) {
+  const plans = await planRoutes(orders, warehouseAddress);
 
-async function getOrderCoords(order, cache) {
-  const address = getOrderAddress(order);
-  if (!address || address === 'UNKNOWN') return null;
-  if (cache.has(address)) return cache.get(address);
-  try {
-    const coords = await getCoordinatesFromAddress(address);
-    cache.set(address, coords);
-    return coords;
-  } catch (error) {
-    console.warn(`[Scheduler] Geocode failed for ${address}: ${error.message}`);
-    cache.set(address, null);
-    return null;
-  }
-}
-
-async function getTravelMinutes(aOrder, bOrder, coordCache, travelCache) {
-  const aAddress = getOrderAddress(aOrder);
-  const bAddress = getOrderAddress(bOrder);
-  const key = [aAddress, bAddress].sort().join('|');
-  if (travelCache.has(key)) return travelCache.get(key);
-
-  const aCoords = await getOrderCoords(aOrder, coordCache);
-  const bCoords = await getOrderCoords(bOrder, coordCache);
-
-  if (!aCoords || !bCoords) {
-    travelCache.set(key, null);
-    return null;
-  }
-
-  try {
-    const route = await calculateRoute([aCoords, bCoords], new Date());
-    const durationSeconds = route.legsDurationWithTrafficSeconds?.[0]
-      ?? route.durationWithTraffic
-      ?? route.duration
-      ?? 0;
-    const minutes = Math.max(Math.ceil(durationSeconds / 60), 1);
-    const scaledMinutes = scaleTravelMinutes(minutes);
-    travelCache.set(key, scaledMinutes);
-    return scaledMinutes;
-  } catch (error) {
-    console.warn(`[Scheduler] Travel time estimate failed: ${error.message}`);
-    travelCache.set(key, null);
-    return null;
-  }
-}
-
-async function groupByLocation(orders) {
-  const groups = {};
-
-  if (orders.length <= SMALL_GROUP_THRESHOLD) {
-    const coordCache = new Map();
-    const travelCache = new Map();
-
-    for (const order of orders) {
-      let placed = false;
-
-      for (const group of Object.values(groups)) {
-        const anchorOrder = group.anchor;
-        const minutes = await getTravelMinutes(order, anchorOrder, coordCache, travelCache);
-        if (minutes !== null && minutes <= NEARBY_TRAVEL_MINUTES) {
-          group.orders.push(order);
-          placed = true;
-          break;
-        }
-      }
-
-      if (!placed) {
-        const label = getOrderAddress(order);
-        const groupKey = `${label}-${Object.keys(groups).length + 1}`;
-        groups[groupKey] = { anchor: order, orders: [order] };
-      }
-    }
-
-    const clustered = {};
-    for (const [key, group] of Object.entries(groups)) {
-      clustered[key] = group.orders;
-    }
-
-    console.log(`Grouped into ${Object.keys(clustered).length} nearby clusters (OSRM travel time):`);
-    Object.entries(clustered).forEach(([location, orders]) => {
-      console.log(`   ${location}: ${orders.length} order(s)`);
+  plans.forEach(plan => {
+    plan.orders.forEach((order, i) => {
+      order._legDurationSec = plan.legDurationsSec?.[i] ?? null;
     });
-
-    return clustered;
-  }
-
-  for (const order of orders) {
-    const location = getOrderAddress(order);
-
-    if (!groups[location]) {
-      groups[location] = [];
-    }
-    groups[location].push(order);
-  }
-
-  console.log(`Grouped into ${Object.keys(groups).length} location areas:`);
-  Object.entries(groups).forEach(([location, orders]) => {
-    console.log(`   ${location}: ${orders.length} order(s)`);
   });
 
-  return groups;
+  console.log(`Route Optimisation: ${plans.length} route(s) planned:`);
+  plans.forEach((plan, idx) => {
+    const km   = (plan.totalDistanceM / 1000).toFixed(1);
+    const mins = Math.round(plan.totalDurationSec / 60);
+    console.log(`   Route ${idx + 1}: ${plan.orders.length} order(s), ${km} km, ${mins} min${plan.usedFallback ? ' (fallback estimate)' : ''}`);
+  });
+
+  return plans;
 }
 
 /**
@@ -770,20 +684,24 @@ async function fetchAvailableTimeslots() {
 }
 
 /**
- * Main optimization and scheduling logic
+ * Main scheduling logic (B.1). routePlans is the output of computeRoutePlans()
+ * — each plan.orders is already grouped and sequenced by Route Optimisation
+ * (B.2); this function's job is purely fitting that pre-computed sequence
+ * into time slots, resource assignment, and persistence. It never calls
+ * Google Maps itself.
  */
-async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, truckCapacity, config) {
+async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCapacity, config) {
   const scheduled = [];
   const unscheduled = [];
   let installationSchedulesCreated = 0;
-
-  // Team assignment counters (round-robin)
-  let warehouseTeamIndex = 0;
   let installationTeamIndex = 0;
 
-  // Process each location group
-  for (const [location, orders] of Object.entries(locationGroups)) {
-    console.log(`\nProcessing location ${location} (${orders.length} orders)...`);
+  // Process each pre-planned route
+  for (const plan of routePlans) {
+    const orders = [...plan.orders]; // mutable working copy for this route
+    console.log(`\nProcessing route (${orders.length} orders, ${(plan.totalDistanceM / 1000).toFixed(1)} km)...`);
+
+    let routePersistedForSlot = null; // write geometry once per slot per run
 
     // Try to fit orders into available timeslots
     for (const timeslot of timeslots) {
@@ -843,16 +761,12 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
 
       console.log(`   [Scheduler] ${suitableOrders.length} suitable orders found`);
 
-      // Optimize route for these orders
-      console.log('   [Scheduler] Step 8.2: optimizing route for suitable orders');
-      const optimizedRoute = await optimizeRoute(suitableOrders, config.warehouse_address, slotStart.toDate());
-
       // Start scheduling from the available start time calculated above
       let currentTime = availableStartTime.clone();
       let travelTimeAccumulated = 0;
 
-      for (let i = 0; i < optimizedRoute.orders.length; i++) {
-        const order = optimizedRoute.orders[i];
+      for (let i = 0; i < suitableOrders.length; i++) {
+        const order = suitableOrders[i];
         const orderVolumeCm3 = order.calculatedVolumeCm3 || 0;
 
         if (truckCapacity.maxThreeTonCapacity > 0 && slotVolumeCm3 + orderVolumeCm3 > truckCapacity.maxThreeTonCapacity) {
@@ -864,11 +778,15 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
           slotRequiresThreeTon = true;
         }
 
-        // Add travel time to this location
-        if (i < optimizedRoute.travelTimes.length) {
-          travelTimeAccumulated += optimizedRoute.travelTimes[i];
-          currentTime = currentTime.add(optimizedRoute.travelTimes[i], 'minute');
-        }
+        // Travel time to this stop — from Route Optimisation's precomputed
+        // leg duration for this order (Google Maps, or Haversine fallback).
+        // Reused as-is rather than re-derived for this slot's subset, so
+        // this loop never needs to call Google again.
+        const legMinutes = order._legDurationSec != null
+          ? scaleTravelMinutes(Math.max(1, Math.ceil(order._legDurationSec / 60)))
+          : scaleTravelMinutes(17);
+        travelTimeAccumulated += legMinutes;
+        currentTime = currentTime.add(legMinutes, 'minute');
 
         console.log(`   [Scheduler] Step 8.3: scheduling order ${order.id} at ${currentTime.format('HH:mm')}`);
         const building = order.buildings;
@@ -969,6 +887,23 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
       console.log(`   [Scheduler] Total travel time for this route: ${Math.round(travelTimeAccumulated)} minutes (with traffic)`);
 
       await ensureTimeslotAssignments(timeslot.id, slotVolumeCm3, teams, trucks);
+
+      // Persist route geometry for the driver Route tab (once per slot per
+      // run — if a later route also contributes orders to the same slot,
+      // its geometry overwrites this; an accepted simplification since one
+      // slot is normally served by one truck/route).
+      if (routePersistedForSlot !== timeslot.id) {
+        await prisma.time_slots.update({
+          where: { id: timeslot.id },
+          data: {
+            route_polyline:    plan.polyline,
+            route_distance_m:  plan.totalDistanceM,
+            route_duration_s:  plan.totalDurationSec,
+            route_computed_at: new Date(),
+          },
+        }).catch(e => console.warn(`[Scheduler] Failed to persist route geometry for slot ${timeslot.id}:`, e.message));
+        routePersistedForSlot = timeslot.id;
+      }
     }
 
     // Any remaining orders are unscheduled
@@ -994,78 +929,6 @@ async function optimizeAndSchedule(locationGroups, timeslots, teams, trucks, tru
   }
 
   return { scheduled, unscheduled, installationSchedulesCreated };
-}
-
-/**
- * Optimize delivery route using OpenStreetMap routing
- * CRITICAL: Assigns truck loading sequence (REVERSE of delivery order)
- */
-async function optimizeRoute(orders, warehouseAddress, departureTime) {
-  console.log(`   Optimizing route for ${orders.length} orders using OpenStreetMap...`);
-
-  try {
-    // Optimize route order using nearest neighbor algorithm
-    const optimizedOrders = await optimizeRouteOrder(orders, warehouseAddress);
-
-    // Calculate complete route with travel times
-    const routeInfo = await calculateCompleteRoute(optimizedOrders, warehouseAddress, departureTime);
-
-    // Calculate travel time between each stop (warehouse -> stop1 -> stop2 -> ...)
-    const travelTimes = [];
-    const legTimes = Array.isArray(routeInfo.legTravelTimesMinutes) ? routeInfo.legTravelTimesMinutes : [];
-    const fallbackSegments = routeInfo.waypoints.length > 1 ? routeInfo.waypoints.length - 1 : optimizedOrders.length;
-    const avgTravelTime = fallbackSegments > 0
-      ? Math.max(1, Math.ceil((routeInfo.totalTravelTimeWithTraffic || 0) / 60 / fallbackSegments))
-      : 1;
-
-    for (let i = 0; i < optimizedOrders.length; i++) {
-      const legTime = legTimes[i] ?? avgTravelTime;
-      const scaledLegTime = scaleTravelMinutes(legTime);
-      travelTimes.push(scaledLegTime);
-      console.log(`   Stop ${i + 1} travel time: ${Math.round(scaledLegTime)} minutes (with traffic)`);
-    }
-
-    // Assign truck loading sequence (REVERSE of delivery sequence)
-    // Delivery order: [A, B, C] means A delivered first, C delivered last
-    // Truck loading: C loaded first (seq=1), B middle (seq=2), A loaded last (seq=3)
-    optimizedOrders.forEach((order, deliveryIndex) => {
-      order.truck_loading_sequence = optimizedOrders.length - deliveryIndex;
-    });
-
-    console.log(`   Truck loading sequence assigned:`);
-    optimizedOrders.forEach((order, idx) => {
-      console.log(`      ${idx + 1}. Order ${order.id} -> Load Seq ${order.truck_loading_sequence} (${idx === 0 ? 'first delivery, LAST to load' : idx === optimizedOrders.length - 1 ? 'last delivery, FIRST to load' : 'middle'})`);
-    });
-
-    return {
-      orders: optimizedOrders,
-      travelTimes: travelTimes, // Travel time in minutes for each stop
-      totalDistance: routeInfo.totalDistance,
-      totalTravelTime: routeInfo.totalTravelTimeWithTraffic
-    };
-
-  } catch (error) {
-    console.error(`   Route optimization failed: ${error.message}`);
-    console.log(`   Using fallback: FIFO order without optimization`);
-
-    // Fallback: use FIFO order
-    const route = [...orders];
-
-    // Assign truck loading sequence
-    route.forEach((order, deliveryIndex) => {
-      order.truck_loading_sequence = route.length - deliveryIndex;
-    });
-
-    // Estimate travel times (17 min per stop)
-    const travelTimes = new Array(route.length).fill(17);
-
-    return {
-      orders: route,
-      travelTimes: travelTimes,
-      totalDistance: 0,
-      totalTravelTime: 0
-    };
-  }
 }
 
 async function reconcileTimeslotAssignments(teams, trucks) {

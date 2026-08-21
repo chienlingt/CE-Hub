@@ -231,13 +231,14 @@ async function handleD1Reminder(row) {
 // TODO: replace the log with a real Odoo API call once GCA confirms the endpoint.
 
 async function handleFallbackPollComplete(row) {
-  const { date, synced, skipped } = row.payload || {};
+  const { date, synced_dos = [], skipped_dos = [], synced_count, skipped_count } = row.payload || {};
   console.log(
-    `[OutboxWorker] FALLBACK_POLL_COMPLETE: date=${date}, synced=${synced}, skipped=${skipped}. ` +
+    `[OutboxWorker] FALLBACK_POLL_COMPLETE: date=${date}, synced=${synced_count ?? synced_dos.length} [${synced_dos.join(', ')}], ` +
+    `skipped=${skipped_count ?? skipped_dos.length} [${skipped_dos.join(', ')}]. ` +
     'D-1 WhatsApp trigger pending GCA API confirmation.'
   );
   // TODO: call Odoo endpoint here when GCA provides it, e.g.:
-  // await callModel('some.model', 'trigger_d1_whatsapp', [[]], { date });
+  // await callModel('some.model', 'trigger_d1_whatsapp', [[]], { date, synced_dos });
 }
 
 // ── Internal event handler (logging only) ─────────────────────────────────────

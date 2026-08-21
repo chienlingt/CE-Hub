@@ -43,6 +43,7 @@ import WarehouseLoadingSchedule from './warehouse/truckSchedule';
 import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
 import DriverDashboard from './driver/DriverDashboard';
+import DriverRoute from './driver/DriverRoute';
 import CompletedDeliveries from './admin/CompletedDeliveries';
 import DeliveryIssues from './admin/DeliveryIssues';
 
@@ -100,6 +101,7 @@ const Layout = () => {
       route: '/driver',
       topNavItems: [
         { id: 'driver', label: 'My Jobs', path: '', component: DriverDashboard },
+        { id: 'route',  label: 'Route',   path: 'route', component: DriverRoute },
       ],
     },
     schedule: {
