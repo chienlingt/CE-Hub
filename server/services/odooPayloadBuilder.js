@@ -7,6 +7,21 @@
 
 const prisma = require('../prismaClient');
 
+// Every timestamp sent to Odoo uses Malaysia time (UTC+8) — matches the
+// contract documented in Section 1 of the reference doc ("ISO 8601 in
+// UTC+8, e.g. 2026-07-28T11:30:00+08:00"). Date.prototype.toISOString()
+// alone always produces a "Z" (UTC) suffix, which is a different, incorrect
+// format for this contract — this shifts the wall-clock digits by +8h and
+// swaps the suffix so the string reads as true Malaysia local time.
+function toMytIso(date) {
+  if (!date) return null;
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+
+  const myt = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  return myt.toISOString().replace('Z', '+08:00');
+}
+
 // Serial number for a line: prefer the latest lifecycle stage that recorded one.
 function resolveSerial(item) {
   return item.unloaded_serial || item.assigned_serial || item.picked_serial || item.loaded_serial || null;
@@ -117,10 +132,10 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     driver_name:            crew.driver_name,
     assistant_name:         crew.assistant_name,
     vehicle_plate:          crew.vehicle_plate,
-    scheduled_start:        order.scheduled_start_date_time || null,
-    scheduled_end:          order.scheduled_end_date_time || null,
-    delivered_time:         order.delivery_end_date_time || order.actual_arrival_date_time || null,
-    timestamp:              new Date().toISOString(),
+    scheduled_start:        toMytIso(order.scheduled_start_date_time),
+    scheduled_end:          toMytIso(order.scheduled_end_date_time),
+    delivered_time:         toMytIso(order.delivery_end_date_time || order.actual_arrival_date_time),
+    timestamp:              toMytIso(new Date()),
   };
 }
 

@@ -261,12 +261,55 @@ async function writeOdooExtendedFields(odooOrderRef, payload) {
   });
 }
 
+/**
+ * Write per-line item detail (quantity, serial number, per-line delivered
+ * status) for Loaded / Arrived events, as a single JSON field on stock.picking.
+ *
+ * TODO: x_order_lines_json is a placeholder field name pending GCA confirmation
+ * — same status as every field in writeOdooExtendedFields above, reuses the
+ * same ODOO_SEND_EXTENDED_FIELDS flag.
+ *
+ * Deliberately NOT native stock.move.line writes (qty_done + lot_id per line).
+ * That would be the "correct" Odoo-native target — it'd show up in Odoo's own
+ * delivery UI instead of a hidden field — but it needs domain knowledge we
+ * don't have from outside GCA's instance: matching move lines to CE Hub's
+ * order_line_id requires stock.move.sale_line_id to be populated, and most
+ * Odoo versions require a stock.production.lot record to exist before a
+ * serial can be assigned to a move line. Both are real ways for this write to
+ * silently fail or attach data to the wrong line. A single JSON text field is
+ * a much smaller, lower-risk ask of GCA — one more field alongside the 6
+ * already requested — and carries the identical information.
+ *
+ * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
+ * @param {Array}  orderLines   - payload.order_lines from buildOdooEventPayload()
+ */
+async function writeOdooOrderLines(odooOrderRef, orderLines) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+  if (process.env.ODOO_SEND_EXTENDED_FIELDS !== 'true') return null;
+  if (!Array.isArray(orderLines) || orderLines.length === 0) return null;
+
+  const pickings = await callModel('stock.picking', 'search_read',
+    [[['name', '=', odooOrderRef]]],
+    { fields: ['id'], limit: 1 }
+  ).catch(() => null);
+  if (!pickings?.length) return null;
+
+  // TODO: x_order_lines_json is a placeholder field name pending GCA confirmation.
+  return callModel('stock.picking', 'write', [[pickings[0].id], {
+    x_order_lines_json: JSON.stringify(orderLines),
+  }]).catch(err => {
+    console.error(`[Odoo] writeOdooOrderLines failed for ${odooOrderRef} (non-fatal, field unconfirmed):`, err.message);
+    return null;
+  });
+}
+
 module.exports = {
   authenticate,
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
   writeOdooExtendedFields,
+  writeOdooOrderLines,
   getOrdersForDeliveryDate,
   getOrderDetail,
 };

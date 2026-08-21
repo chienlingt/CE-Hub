@@ -8,13 +8,17 @@
 //
 // Handlers:
 //   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus + writeOdooExtendedFields
+//                             (Loaded/Arrived also get writeOdooOrderLines via RPC, or the
+//                             whole event via webhook instead if ODOO_USE_WEBHOOK=true —
+//                             see odooWebhookService.js)
 //                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed') + extended fields
 //                             ORDER_SCHEDULED      → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
 //                             RETURN_DO_CREATE (A5.5 stub) → logs until ERP API confirmed
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
-const { writeOdooDeliveryStatus, writeOdooExtendedFields } = require('./services/odooService');
+const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines } = require('./services/odooService');
+const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
 const {
   fetchPendingBatch,
   markProcessed,
@@ -71,8 +75,17 @@ async function handleOdoo(row) {
     throw new Error('Missing odooRef in payload');
   }
 
+  if (shouldUseWebhook(status)) {
+    await sendOdooStatusWebhook(payload);
+    console.log(`[OutboxWorker] Odoo webhook sync: ${odooRef} → ${status}`);
+    return;
+  }
+
   await writeOdooDeliveryStatus(odooRef, status);
   await writeOdooExtendedFields(odooRef, payload);
+  if (['Loaded', 'Arrived'].includes(status)) {
+    await writeOdooOrderLines(odooRef, payload.order_lines);
+  }
   console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}`);
 }
 
