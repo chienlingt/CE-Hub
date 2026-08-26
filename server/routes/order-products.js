@@ -4,6 +4,7 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const { enqueue } = require('../services/integrationOutboxService');
 const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
+const { getReturnStateForOrder, advanceTransferStatus } = require('../services/returnWorkflowService');
 
 router.get('/', async (req, res) => {
   try {
@@ -308,6 +309,104 @@ router.patch('/:id/delivery-status', async (req, res) => {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Order product not found' });
     console.error('PATCH /api/order-products/:id/delivery-status error', err);
     res.status(500).json({ error: 'Failed to update item status', details: err.message });
+  }
+});
+
+// PATCH /api/order-products/:id/return-status — A5.7
+// Storekeeper scan-to-receive for failed-delivery items coming back from the vehicle
+// into quarantine. Mirrors picking-status's structure (prerequisite check → serial
+// validation → update → sibling rollup), but on the return_status column, and gated on
+// the order's delivery_returns.transfer_status having reached 'awaiting_receipt' (set by
+// the STOCK_TRANSFER outbox handler once A5.5/A5.6 have run).
+router.patch('/:id/return-status', async (req, res) => {
+  try {
+    const { employee_id, serial_number } = req.body;
+
+    const item = await prisma.order_products.findUnique({
+      where:   { id: parseInt(req.params.id) },
+      include: { products: { select: { product_name: true } } },
+    });
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    // Only failed items are returnable — a successfully delivered line never enters
+    // the return workflow.
+    if (item.item_delivery_status !== 'failed') {
+      return res.status(400).json({
+        error: 'Only items marked as failed can be scanned for return.',
+        code:  'NOT_FAILED_ITEM',
+      });
+    }
+
+    if (item.return_status === 'received') {
+      return res.status(400).json({ error: 'Item has already been received.', code: 'ALREADY_RECEIVED' });
+    }
+
+    // Prerequisite: the order's return must have reached 'awaiting_receipt' — i.e. the
+    // Return DO + stock transfer steps (A5.5/A5.6) have run (their Odoo calls are still
+    // TODO stubs, but the CE-Hub-side status advance is real; see integrationOutboxCron.js).
+    const returnState = await getReturnStateForOrder(item.order_id);
+    if (!returnState?.deliveryReturn || returnState.deliveryReturn.transfer_status !== 'awaiting_receipt') {
+      return res.status(400).json({
+        error: 'This order is not yet awaiting return receipt. The stock transfer step must complete first.',
+        code:  'NOT_AWAITING_RECEIPT',
+        transfer_status: returnState?.deliveryReturn?.transfer_status || null,
+      });
+    }
+
+    // ── Serial number validation — compare against the last known serial for this item ──
+    if (serial_number && item.unloaded_serial) {
+      if (item.unloaded_serial.trim() !== serial_number.trim()) {
+        const productName = item.products?.product_name || 'item';
+        return res.status(400).json({
+          error:    `Serial mismatch for "${productName}". Expected: ${item.unloaded_serial} — Scanned: ${serial_number}`,
+          code:     'RETURN_SERIAL_MISMATCH',
+          expected: item.unloaded_serial,
+          scanned:  serial_number,
+        });
+      }
+    }
+
+    const now = new Date();
+    const updated = await prisma.order_products.update({
+      where: { id: parseInt(req.params.id) },
+      data:  {
+        return_status:   'received',
+        returned_at:     now,
+        returned_by:     employee_id || null,
+        returned_serial: serial_number || null,
+      },
+      include: { products: { select: { id: true, product_name: true } } },
+    });
+
+    // ── Sibling rollup: once every failed item on the order is received, advance the
+    // order-level return record and enqueue the (still Odoo-stubbed) inventory update ──
+    const failedSiblings = await prisma.order_products.findMany({
+      where:  { order_id: item.order_id, item_delivery_status: 'failed' },
+      select: { return_status: true },
+    });
+    const allReceived = failedSiblings.length > 0 && failedSiblings.every(s => s.return_status === 'received');
+
+    if (allReceived) {
+      const failureEventId = returnState.failureEvent.id;
+      await advanceTransferStatus(failureEventId, 'received', { received_at: now, received_by: employee_id || null });
+
+      const order = await prisma.orders.findUnique({
+        where:  { id: item.order_id },
+        select: { odoo_order_ref: true },
+      });
+      await enqueue({
+        eventType:      'INVENTORY_RETURN',
+        target:         'odoo',
+        payload:        { orderId: item.order_id, odooRef: order?.odoo_order_ref || null, failureEventId },
+        idempotencyKey: `order:${item.order_id}:inventory_return`,
+      }).catch(e => console.error('[A5.7] INVENTORY_RETURN outbox enqueue failed:', e.message));
+    }
+
+    res.json({ success: true, orderProduct: updated, order_fully_received: allReceived });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
+    console.error('PATCH /api/order-products/:id/return-status error', err);
+    res.status(500).json({ error: 'Failed to update return status', details: err.message });
   }
 });
 

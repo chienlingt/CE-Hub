@@ -12,6 +12,7 @@ import {
   MapPin,
   MessageCircle,
   Package, RefreshCw,
+  RotateCcw,
   Search,
   User,
   X
@@ -133,8 +134,16 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
   const [updatingItem, setUpdatingItem] = useState(null);
   const [chatterLog,     setChatterLog]     = useState([]);
   const [chatterLoading, setChatterLoading] = useState(true);
+  // A5.11 — CE-Hub-side return state for this order's most recent failure event, used to
+  // gate the "Reset Order for Rescheduling" button. null while loading or if no return
+  // record exists yet (e.g. failure confirmed before Phase 2 shipped, or admin-created
+  // triage row with no driver-confirmed failure).
+  const [returnState,        setReturnState]        = useState(null);
+  const [returnStateLoading, setReturnStateLoading]  = useState(true);
+  const [reentering,         setReentering]          = useState(false);
 
   const isResolved = order.issue_status === 'resolved';
+  const isFailed   = order.order_status === 'Failed';
   const customer   = order.customers;
   const orderRef   = order.odoo_order_ref || 'Not Synced';
   const failedItems = items.filter(i => i.item_delivery_status === 'failed');
@@ -149,6 +158,24 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
       .finally(() => { if (active) setChatterLoading(false); });
     return () => { active = false; };
   }, [order.id]);
+
+  // A5.11 — load the return state for the most recent failure event (failure_history
+  // returns events oldest-first; the return record is included inline via Prisma).
+  useEffect(() => {
+    if (!isFailed) { setReturnStateLoading(false); return; }
+    let active = true;
+    fetch(`${API_BASE}/api/orders/${order.id}/failure-history`)
+      .then(res => res.ok ? res.json() : { failure_events: [] })
+      .then(data => {
+        if (!active) return;
+        const events = data.failure_events || [];
+        const latest = events[events.length - 1];
+        setReturnState(latest?.delivery_returns || null);
+      })
+      .catch(() => { if (active) setReturnState(null); })
+      .finally(() => { if (active) setReturnStateLoading(false); });
+    return () => { active = false; };
+  }, [order.id, isFailed]);
 
   const updateItemStatus = async (itemId, status) => {
     setUpdatingItem(itemId);
@@ -191,6 +218,32 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
     const clean = customer.phone.replace(/[\s\-+()]/g, '');
     const wa = clean.startsWith('60') ? clean : clean.startsWith('0') ? '60' + clean.slice(1) : '60' + clean;
     window.open(`https://api.whatsapp.com/send/?phone=${wa}&type=phone_number&app_absent=0`, '_blank', 'noopener,noreferrer');
+  };
+
+  // A5.11 — reset the SAME order back to Pending once its return is fully confirmed.
+  // Distinct from handleReschedule below, which creates a brand-new order row via
+  // PlaceOrder.js (orders.rescheduled_from_order_id) — that manual flow stays available
+  // regardless of return status; this one is the automated A5 path, gated on
+  // delivery_returns.transfer_status === 'inventory_updated'.
+  const handleReenter = async () => {
+    setReentering(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${order.id}/re-enter`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employeeData?.id || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to reset order');
+      // orderReentryService also sets issue_status: 'resolved' — reuse the same
+      // parent-list update path as a manual resolve.
+      const resolvedByName = employeeData?.display_name || employeeData?.name || null;
+      onResolved(order.id, resolvedByName);
+    } catch (err) {
+      alert(err.message || 'Failed to reset order for rescheduling');
+    } finally {
+      setReentering(false);
+    }
   };
 
   const handleReschedule = () => {
@@ -402,6 +455,31 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
                   Reschedule
                 </button>
               )}
+
+              {isFailed && (() => {
+                const transferStatus = returnState?.transfer_status || null;
+                const canReenter = transferStatus === 'inventory_updated';
+                const tooltip = returnStateLoading
+                  ? 'Checking return status…'
+                  : canReenter
+                    ? undefined
+                    : `Not ready — the return must be scanned back in via Scan Station → Returns first (currently: ${transferStatus || 'not started'}).`;
+                return (
+                  <button
+                    onClick={handleReenter}
+                    disabled={reentering || returnStateLoading || !canReenter}
+                    title={tooltip}
+                    className={`flex items-center justify-center gap-2 px-4 py-2.5 sm:py-2 text-sm font-medium rounded-xl transition-colors disabled:cursor-not-allowed ${
+                      canReenter
+                        ? 'bg-teal-600 hover:bg-teal-700 text-white'
+                        : 'bg-gray-100 text-gray-400'
+                    }`}
+                  >
+                    <RotateCcw size={14} />
+                    {reentering ? 'Resetting…' : 'Reset Order for Rescheduling'}
+                  </button>
+                );
+              })()}
 
               <button
                 onClick={handleResolve}

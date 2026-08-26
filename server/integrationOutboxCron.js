@@ -11,11 +11,22 @@
 //                             (Loaded/Arrived also get writeOdooOrderLines via RPC, or the
 //                             whole event via webhook instead if ODOO_USE_WEBHOOK=true —
 //                             see odooWebhookService.js)
-//                             ORDER_FAILED (A5.3)  → writeOdooDeliveryStatus('Failed') + extended fields
-//                             ORDER_SCHEDULED      → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
-//                             RETURN_DO_CREATE (A5.5 stub) → logs until ERP API confirmed
+//                             ORDER_FAILED (A5.3)     → writeOdooDeliveryStatus('Failed') + extended fields
+//                             ORDER_SCHEDULED         → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
+//                             RETURN_DO_CREATE (A5.5) → Odoo call is a TODO stub; chains into STOCK_TRANSFER
+//                             STOCK_TRANSFER (A5.6)   → Odoo call is a TODO stub; advances delivery_returns
+//                                                       to 'awaiting_receipt' (unblocks storekeeper scan screen)
+//                             INVENTORY_RETURN (A5.8) → Odoo call is a TODO stub; advances delivery_returns
+//                                                       to 'inventory_updated' (unblocks A5.11 re-entry)
+//                             DO_LINE_RESET (A5.9)    → Odoo call is a TODO stub; fired by order re-entry
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
+//
+// A5.5/A5.6/A5.8/A5.9 Odoo calls are unconfirmed with the Odoo dev team as of this
+// writing — every `// TODO: confirm Odoo API` marker below is deliberately isolated so
+// swapping in the real call is a single-function change, not a redesign. Each handler
+// still marks its outbox row processed regardless, so the queue never dead-letters on a
+// still-unconfirmed Odoo call.
 
 const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines } = require('./services/odooService');
 const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
@@ -23,7 +34,9 @@ const {
   fetchPendingBatch,
   markProcessed,
   recordFailure,
+  enqueue,
 } = require('./services/integrationOutboxService');
+const { advanceTransferStatus } = require('./services/returnWorkflowService');
 const { sendWhatsAppMessage } = require('./services/whatsappService');
 const {
   DEFAULT_BRAND_NAME,
@@ -131,16 +144,87 @@ async function handleOrderScheduled(row) {
   console.log(`[OutboxWorker] ORDER_SCHEDULED: pushed schedule fields for ${odooRef}`);
 }
 
-// ── A5.5 stub: RETURN_DO_CREATE — deferred until Odoo Return DO API confirmed ──
+// ── A5.5: RETURN_DO_CREATE — Odoo call is a TODO stub; chains into STOCK_TRANSFER ──
 
 async function handleReturnDoCreate(row) {
-  const { orderId, odooRef } = row.payload || {};
+  const { orderId, odooRef, failureEventId } = row.payload || {};
+
+  // TODO: confirm Odoo API — create a Return DO (stock.picking, return picking type?)
+  // linked to the original DO (odooRef) and the quarantine/return location
+  // (system_settings.odoo_quarantine_location_id, not yet confirmed with the Odoo dev
+  // team). Once confirmed, capture the returned reference and write it to
+  // delivery_returns.return_do_ref here via advanceTransferStatus's `extra` param.
   console.log(
     `[OutboxWorker] RETURN_DO_CREATE stub — order ${orderId} (${odooRef || 'no odooRef'}). ` +
-    'Return DO creation deferred until Odoo API is confirmed (Phase 2).'
+    'Odoo Return DO creation deferred until Odoo API is confirmed (Phase 2).'
   );
-  // Mark as processed so it does not block the queue.
-  // Phase 2 will replace this stub with the actual Odoo stock.picking return call.
+
+  // Chain into the stock-transfer step regardless of the Odoo stub above, so the
+  // CE-Hub-side workflow (and the storekeeper scan screen it unblocks) keeps moving.
+  if (failureEventId) {
+    await enqueue({
+      eventType:      'STOCK_TRANSFER',
+      target:         'odoo',
+      payload:        { orderId, odooRef: odooRef || null, failureEventId },
+      idempotencyKey: `order:${orderId}:stock_transfer`,
+    });
+  }
+  // Mark this row processed regardless — the queue must never dead-letter on the
+  // still-unconfirmed Odoo call above.
+}
+
+// ── A5.6: STOCK_TRANSFER — Odoo call is a TODO stub; CE-Hub side is real ──────
+
+async function handleStockTransfer(row) {
+  const { orderId, odooRef, failureEventId } = row.payload || {};
+
+  // TODO: confirm Odoo API — internal transfer of the failed items from the vehicle
+  // location to the quarantine/return location
+  // (system_settings.odoo_quarantine_location_id, not yet confirmed).
+  console.log(
+    `[OutboxWorker] STOCK_TRANSFER stub — order ${orderId} (${odooRef || 'no odooRef'}). ` +
+    'Odoo internal transfer deferred until Odoo API is confirmed (Phase 2).'
+  );
+
+  // CE-Hub side is real: this is what unblocks the storekeeper's Returns scan screen
+  // (routes/order-products.js PATCH /:id/return-status prerequisite check).
+  if (failureEventId) {
+    await advanceTransferStatus(failureEventId, 'awaiting_receipt');
+  }
+}
+
+// ── A5.8: INVENTORY_RETURN — Odoo call is a TODO stub; CE-Hub side is real ────
+// Fired by the scan-to-receive rollup once every failed item on the order has been
+// physically scanned back in (see routes/order-products.js).
+
+async function handleInventoryReturn(row) {
+  const { orderId, odooRef, failureEventId } = row.payload || {};
+
+  // TODO: confirm Odoo API — inventory adjustment confirming the returned quantities
+  // at the quarantine location.
+  console.log(
+    `[OutboxWorker] INVENTORY_RETURN stub — order ${orderId} (${odooRef || 'no odooRef'}). ` +
+    'Odoo inventory adjustment deferred until Odoo API is confirmed (Phase 2).'
+  );
+
+  // CE-Hub side is real: this is what unblocks A5.11 order re-entry.
+  if (failureEventId) {
+    await advanceTransferStatus(failureEventId, 'inventory_updated');
+  }
+}
+
+// ── A5.9: DO_LINE_RESET — Odoo call is a TODO stub ────────────────────────────
+// Fired by POST /api/orders/:id/re-enter (A5.11) once the return is fully confirmed.
+
+async function handleDoLineReset(row) {
+  const { orderId, odooRef } = row.payload || {};
+
+  // TODO: confirm Odoo API — zero/close the failed DO's lines in Odoo so a fresh
+  // delivery order can be scheduled without double-counting stock.
+  console.log(
+    `[OutboxWorker] DO_LINE_RESET stub — order ${orderId} (${odooRef || 'no odooRef'}). ` +
+    'Odoo DO-line zeroing deferred until Odoo API is confirmed (Phase 3).'
+  );
 }
 
 // ── Customer notification handler ─────────────────────────────────────────────
@@ -303,6 +387,12 @@ async function dispatchRow(row) {
       return handleOrderScheduled(row);
     case 'RETURN_DO_CREATE':
       return handleReturnDoCreate(row);
+    case 'STOCK_TRANSFER':
+      return handleStockTransfer(row);
+    case 'INVENTORY_RETURN':
+      return handleInventoryReturn(row);
+    case 'DO_LINE_RESET':
+      return handleDoLineReset(row);
     case 'CUSTOMER_ON_THE_WAY':
       return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':

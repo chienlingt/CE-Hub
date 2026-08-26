@@ -50,6 +50,7 @@ import DeliveryIssues from './admin/DeliveryIssues';
 // Scan Station wrappers — stage locked by tab selection
 const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
 const ScanStationUnloading = () => <ScanStation forcedStage="unloading" />;
+const ScanStationReturns   = () => <ScanStation forcedStage="returns" />;
 const ScanStationAudit     = () => <ScanStation forcedStage="audit" />;
 
 /**
@@ -187,6 +188,9 @@ const Layout = () => {
       topNavItems: [
         { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver', 'warehouse', 'storekeeper'] },
         { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver', 'warehouse', 'storekeeper'] },
+        // A5.7 — storekeeper scan-to-receive for failed-delivery returns. Not driver-scoped
+        // (returns happen at the warehouse, not in the field).
+        { id: 'returns',   label: 'Returns',   path: 'returns',   component: ScanStationReturns,   allowedRoles: ['admin', 'warehouse', 'storekeeper'] },
         { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
       ],
     },

@@ -19,6 +19,7 @@ const prisma = require('../prismaClient');
 const { sendDeliveryFailureNotifications } = require('./notificationService');
 const { enqueue } = require('./integrationOutboxService');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { createReturnRecord } = require('./returnWorkflowService');
 
 // FR-05-001 — five permitted failure reasons; "Other" requires a description
 const FAILURE_REASONS = [
@@ -185,7 +186,7 @@ async function confirmFailure(orderId, {
   }
 
   // 8c. Write immutable audit row (A5.12)
-  await prisma.delivery_failure_events.create({
+  const failureEvent = await prisma.delivery_failure_events.create({
     data: {
       order_id:       orderId,
       failure_reason: issue_reason,
@@ -196,6 +197,10 @@ async function confirmFailure(orderId, {
       created_at:     now,
     },
   });
+
+  // 8d. Open the Phase 2 return record — CE-Hub-local state, starts 'pending'
+  // regardless of whether the Odoo-side calls below are wired up yet (A5.5).
+  await createReturnRecord(failureEvent.id);
 
   // ── 9. A6 notifications (fire-and-forget, non-fatal) ──────────────────────
   sendDeliveryFailureNotifications(orderId).catch(err =>
@@ -214,11 +219,12 @@ async function confirmFailure(orderId, {
     });
   }
 
-  // ── 11. Outbox: RETURN_DO_CREATE (Phase 2 stub — handler logs until ERP ready) ──
+  // ── 11. Outbox: RETURN_DO_CREATE (A5.5 — Odoo call is a TODO stub; the CE-Hub
+  // side of the chain — delivery_returns state — is real, see returnWorkflowService) ──
   await enqueue({
     eventType:      'RETURN_DO_CREATE',
     target:         'odoo',
-    payload:        { orderId, odooRef: order.odoo_order_ref || null },
+    payload:        { orderId, odooRef: order.odoo_order_ref || null, failureEventId: failureEvent.id },
     idempotencyKey: `order:${orderId}:return_do`,
   });
 

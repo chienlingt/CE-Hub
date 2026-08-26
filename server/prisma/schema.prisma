@@ -137,27 +137,27 @@ model customers {
 }
 
 model lorry_trips {
-  id                                       String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  delivery_team_id                         String?
-  warehouse_team_id                        String?
-  truck_id                                 String?     @db.Uuid
-  created_at                               DateTime    @default(now())
-  updated_at                               DateTime?
-  ended_at                                 DateTime?   @db.Timestamp(6)
-  ended_by                                 String?     @db.Uuid
-  started_at                               DateTime?   @db.Timestamp(6)
-  started_by                               String?     @db.Uuid
-  status                                   String?     @default("planned") @db.VarChar(20)
-  time_slot_id                             String?     @unique @db.Uuid
+  id                                            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  delivery_team_id                              String?
+  warehouse_team_id                             String?
+  truck_id                                      String?     @db.Uuid
+  created_at                                    DateTime    @default(now())
+  updated_at                                    DateTime?
+  ended_at                                      DateTime?   @db.Timestamp(6)
+  ended_by                                      String?     @db.Uuid
+  started_at                                    DateTime?   @db.Timestamp(6)
+  started_by                                    String?     @db.Uuid
+  status                                        String?     @default("planned") @db.VarChar(20)
+  time_slot_id                                  String?     @unique @db.Uuid
   // Trip-level driver/assistant — overrides the truck's default driver_id/assistant_id
   // for this specific run once the trip exists (from departure onward). Seeded from the
   // truck's defaults at departure; see deliveryLifecycleService.departTimeSlot().
-  driver_id                                String?     @db.Uuid
-  assistant_id                             String?     @db.Uuid
-  time_slot                                time_slots? @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lorry_trip_time_slot")
-  trucks                                   trucks?     @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  employees_lorry_trips_driver_idToemployees    employees? @relation("lorry_trips_driver_idToemployees", fields: [driver_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_driver")
-  employees_lorry_trips_assistant_idToemployees employees? @relation("lorry_trips_assistant_idToemployees", fields: [assistant_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_assistant")
+  driver_id                                     String?     @db.Uuid
+  assistant_id                                  String?     @db.Uuid
+  time_slot                                     time_slots? @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lorry_trip_time_slot")
+  trucks                                        trucks?     @relation(fields: [truck_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  employees_lorry_trips_driver_idToemployees    employees?  @relation("lorry_trips_driver_idToemployees", fields: [driver_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_driver")
+  employees_lorry_trips_assistant_idToemployees employees?  @relation("lorry_trips_assistant_idToemployees", fields: [assistant_id], references: [id], onUpdate: NoAction, map: "fk_lorry_trip_assistant")
 }
 
 model order_products {
@@ -191,6 +191,15 @@ model order_products {
   unloaded_serial              String?
   odoo_line_id                 Int?
   odoo_product_name            String?   @db.VarChar(255)
+  // A.5.7 — storekeeper scan-to-receive for failed/returned items (Phase 2 return
+  // logistics). Distinct from picked_*/loaded_*/unloaded_* (forward delivery flow) and
+  // from item_delivery_status (delivered/failed outcome) — this tracks whether a failed
+  // item has physically been scanned back into the warehouse. See routes/order-products.js
+  // PATCH /:id/return-status.
+  return_status                String?   @default("pending") @db.VarChar(20)
+  returned_at                  DateTime?
+  returned_by                  String?   @db.Uuid
+  returned_serial              String?
   orders                       orders    @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products                     products? @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -271,6 +280,10 @@ model orders {
   rescheduled_to             orders[]                  @relation("OrderReschedule")
   time_slots                 time_slots?               @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rating                     rating[]
+  // A.5.10 — Phase 3 re-entry generation chain. Distinct from rescheduled_from_order_id
+  // (manual "create a brand-new order" flow in PlaceOrder.js) — delivery_workflows tracks
+  // this SAME order row being reset in place after a failed-delivery return is confirmed.
+  delivery_workflows         delivery_workflows[]
 }
 
 model products {
@@ -463,15 +476,58 @@ model notifications {
 }
 
 model delivery_failure_events {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  order_id         String   @db.Uuid
-  failure_reason   String   @db.VarChar(255)
-  failure_desc     String?
-  evidence_urls    String[]
-  confirmed_by     String?  @db.Uuid
-  odoo_sync_status String?  @default("pending") @db.VarChar(20)
-  created_at       DateTime @default(now()) @db.Timestamp(6)
-  orders           orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id           String               @db.Uuid
+  failure_reason     String               @db.VarChar(255)
+  failure_desc       String?
+  evidence_urls      String[]
+  confirmed_by       String?              @db.Uuid
+  odoo_sync_status   String?              @default("pending") @db.VarChar(20)
+  created_at         DateTime             @default(now()) @db.Timestamp(6)
+  orders             orders               @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  delivery_returns   delivery_returns?
+  delivery_workflows delivery_workflows[]
+}
+
+// A.5.5–A.5.8 — Phase 2 return logistics. One row per delivery_failure_events row,
+// created immediately on failure confirmation (transfer_status: 'pending'), then advanced
+// by the outbox stub handlers (RETURN_DO_CREATE, STOCK_TRANSFER) and the storekeeper
+// scan-to-receive flow (return-status endpoint) until 'inventory_updated', which is what
+// Phase 3 re-entry (A.5.11) gates on. See server/services/returnWorkflowService.js.
+model delivery_returns {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  failure_event_id        String                  @unique @db.Uuid
+  // Odoo Return DO reference — set once the RETURN_DO_CREATE Odoo call is confirmed and
+  // implemented (currently a stub). TODO: confirm Odoo API.
+  return_do_ref           String?                 @db.VarChar(100)
+  // pending -> awaiting_receipt -> received -> inventory_updated
+  transfer_status         String?                 @default("pending") @db.VarChar(30)
+  received_at             DateTime?               @db.Timestamp(6)
+  received_by             String?                 @db.Uuid
+  created_at              DateTime?               @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?               @updatedAt
+  delivery_failure_events delivery_failure_events @relation(fields: [failure_event_id], references: [id], onDelete: Cascade)
+}
+
+// A.5.9–A.5.11 — Phase 3 re-entry generation chain. One row per reset attempt for a given
+// order; `orders` itself is reset in place (order_status/time_slot_id cleared), this table
+// is what records how many times, and links each generation back to the failure event that
+// triggered it. See server/services/orderReentryService.js.
+model delivery_workflows {
+  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                String                   @db.Uuid
+  generation              Int                      @default(1)
+  previous_workflow_id    String?                  @db.Uuid
+  failure_event_id        String?                  @db.Uuid
+  // active | superseded
+  status                  String                   @default("active") @db.VarChar(20)
+  reset_reason            String?
+  created_by              String?                  @db.Uuid
+  created_at              DateTime?                @default(now()) @db.Timestamp(6)
+  orders                  orders                   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  delivery_failure_events delivery_failure_events? @relation(fields: [failure_event_id], references: [id])
+  previous_workflow       delivery_workflows?      @relation("WorkflowChain", fields: [previous_workflow_id], references: [id])
+  next_workflows          delivery_workflows[]     @relation("WorkflowChain")
 }
 
 model integration_outbox {

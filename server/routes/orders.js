@@ -1305,10 +1305,11 @@ router.get('/:id/loading-status', async (req, res) => {
       });
     }
 
-    // Resolve employee names for loaded_by / unloaded_by
+    // Resolve employee names for loaded_by / unloaded_by / returned_by (A5.7)
     const empIds = [...new Set([
       ...items.filter(i => i.loaded_by).map(i => i.loaded_by),
       ...items.filter(i => i.unloaded_by).map(i => i.unloaded_by),
+      ...items.filter(i => i.returned_by).map(i => i.returned_by),
     ])];
 
     const empMap = {};
@@ -1324,6 +1325,7 @@ router.get('/:id/loading-status', async (req, res) => {
       ...item,
       loaded_by_name:   item.loaded_by   ? (empMap[item.loaded_by]   || 'Unknown') : null,
       unloaded_by_name: item.unloaded_by ? (empMap[item.unloaded_by] || 'Unknown') : null,
+      returned_by_name: item.returned_by ? (empMap[item.returned_by] || 'Unknown') : null,
     }));
 
     const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.picking_status));
@@ -1681,6 +1683,7 @@ router.post('/:id/approve', async (req, res) => {
 });
 
 const { confirmFailure } = require('../services/deliveryFailureService');
+const { reenterOrder } = require('../services/orderReentryService');
 
 // PATCH /:id/issue — two paths:
 //   1. confirm_failure: true  → A5 driver failure confirmation (deliveryFailureService)
@@ -1789,6 +1792,54 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
   } catch (err) {
     console.error('PATCH /api/orders/:id/issue error', err);
     res.status(500).json({ error: 'Failed to update order issue', details: err.message });
+  }
+});
+
+// GET /:id/failure-history — A5.12
+// Read-only audit trail for an order: every delivery_failure_events row (immutable),
+// each one's linked delivery_returns state, and the delivery_workflows generation chain
+// (A5.9-A5.11) recording how many times the order has been reset for rescheduling.
+router.get('/:id/failure-history', async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    const [failureEvents, workflows] = await Promise.all([
+      prisma.delivery_failure_events.findMany({
+        where:   { order_id: orderId },
+        orderBy: { created_at: 'asc' },
+        include: { delivery_returns: true },
+      }),
+      prisma.delivery_workflows.findMany({
+        where:   { order_id: orderId },
+        orderBy: { generation: 'asc' },
+      }),
+    ]);
+
+    if (failureEvents.length === 0 && workflows.length === 0) {
+      const orderExists = await prisma.orders.findUnique({ where: { id: orderId }, select: { id: true } });
+      if (!orderExists) return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json({ failure_events: failureEvents, workflows });
+  } catch (err) {
+    console.error('GET /api/orders/:id/failure-history error', err);
+    res.status(500).json({ error: 'Failed to fetch failure history', details: err.message });
+  }
+});
+
+// POST /:id/re-enter — A5.9-A5.11
+// Admin-triggered reset of a failed order back to a schedulable state, once its return
+// has been fully confirmed on the CE-Hub side (delivery_returns.transfer_status ===
+// 'inventory_updated'). See orderReentryService.js for the full precondition/reset logic.
+router.post('/:id/re-enter', async (req, res) => {
+  try {
+    const { employee_id } = req.body;
+    const { order, workflow } = await reenterOrder(req.params.id, employee_id || null);
+    res.json({ success: true, order, workflow });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error(`[A5.11] re-enter error (${err.code || 'ERR'}):`, err.message);
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 

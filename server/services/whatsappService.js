@@ -223,6 +223,14 @@ async function seedWhatsAppSettings() {
       setting_value: 'true',
       description:   'A5.2 — Require a non-empty issue_desc remark on driver failure confirmation (true/false)',
     },
+    {
+      setting_key:   'odoo_quarantine_location_id',
+      setting_value: '',
+      // TODO: confirm real Odoo stock.location id with the Odoo dev team once the Return
+      // DO / stock-transfer API is confirmed (see A.5.5-A.5.6 stub handlers in
+      // integrationOutboxCron.js). Left blank until then.
+      description:   'A5.6 — Odoo stock.location id for the quarantine/return location used when transferring failed-delivery stock off the vehicle. Blank = not yet confirmed with Odoo.',
+    },
   ];
 
   for (const s of defaults) {
