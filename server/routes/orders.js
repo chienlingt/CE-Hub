@@ -385,6 +385,8 @@ router.get('/completed-deliveries', async (req, res) => {
   }
 });
 
+const DRIVER_ESCALATION_REASON = 'Driver Escalation';
+
 // Driver order report predicate — full Update→Issue reports AND lightweight escalations
 function driverOrderReportWhere(extra = {}) {
   return {
@@ -397,15 +399,13 @@ function driverOrderReportWhere(extra = {}) {
         OR: [
           { is_complaint_submitted: true },
           { order_status: 'Issue' },
-          { issue_reason: 'Driver Escalation' },
+          { issue_reason: DRIVER_ESCALATION_REASON },
         ],
       },
     ],
     ...extra,
   };
 }
-
-const DRIVER_ESCALATION_REASON = 'Driver Escalation';
 
 // GET /delivery-issues — driver order reports (Cases → Delivery Issues tab)
 router.get('/delivery-issues', async (req, res) => {
@@ -521,6 +521,7 @@ router.get('/', async (req, res) => {
                     OR: [
                       { is_complaint_submitted: true },
                       { order_status: 'Issue' },
+                      { issue_reason: DRIVER_ESCALATION_REASON },
                     ],
                   },
                 ],

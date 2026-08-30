@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import { ESCALATION_REASON_STYLES } from '../../utils/escalationReasons';
+import { useAuth } from '../../contexts/AuthContext';
 
 // Escalations = driver Report (is_complaint_submitted: true)
 // Full reports = old Issue-status orders still in the system (is_complaint_submitted: false)
@@ -79,6 +80,7 @@ function EvidenceThumbnails({ evidence = [] }) {
 
 // ── Full-report detail modal ──────────────────────────────────────────────────
 function ReportDetail({ order, onClose, onResolved }) {
+  const { employeeData } = useAuth();
   const [resolving, setResolving] = useState(false);
   const isResolved = order.issue_status === 'resolved';
   const orderRef   = order.odoo_order_ref || 'Not Synced';
@@ -91,7 +93,7 @@ function ReportDetail({ order, onClose, onResolved }) {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issue_status: 'resolved' }),
+        body: JSON.stringify({ issue_status: 'resolved', resolved_by: employeeData?.id || null }),
       });
       if (!res.ok) throw new Error('Failed');
       onResolved(order.id, 'resolved');
