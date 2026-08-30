@@ -100,7 +100,7 @@ export default function NotificationBell({ userId }) {
     setIsOpen(false);
 
     if (!n.order_id) {
-      navigate('/cases/order-issues');
+      navigate('/exceptions/failed-deliveries');
       return;
     }
 
@@ -109,13 +109,13 @@ export default function NotificationBell({ userId }) {
       if (res.ok) {
         const order = await res.json();
         if (isDriverOrderReport(order)) {
-          navigate(`/cases/delivery-issues?orderId=${n.order_id}`);
+          navigate(`/exceptions/driver-escalations?orderId=${n.order_id}`);
           return;
         }
       }
     } catch { /* fallback below */ }
 
-    navigate(`/cases/order-issues?orderId=${n.order_id}`);
+    navigate(`/exceptions/failed-deliveries?orderId=${n.order_id}`);
   };
 
   return (

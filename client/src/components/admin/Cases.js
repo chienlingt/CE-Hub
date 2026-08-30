@@ -197,7 +197,7 @@ export default function Cases() {
                                     <tr>
                                         <td colSpan={5} className="text-center py-10 text-gray-400">
                                             <FileText className="w-7 h-7 mx-auto mb-2 opacity-40" />
-                                            No cases found.
+                                            No reports found.
                                         </td>
                                     </tr>
                                 ) : (
@@ -257,7 +257,7 @@ export default function Cases() {
                             <div>
                                 <div className="flex items-center gap-2 flex-wrap">
                                     <MessageSquare size={16} className="text-gray-600" />
-                                    <h3 className="text-base font-bold text-gray-900">Case Details</h3>
+                                    <h3 className="text-base font-bold text-gray-900">System Report</h3>
                                     <StatusBadge status={selectedCase.Status} />
                                 </div>
                                 <p className="text-xs text-gray-500 mt-0.5">{formatDate(selectedCase.DateCasesed)}</p>

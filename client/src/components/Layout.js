@@ -30,7 +30,7 @@ import TeamInfo from './admin/info/TeamInfo';
 import Cases from './admin/Cases';
 import OrderIssues from './admin/OrderIssues';
 import ReportIssue from './employee/ReportIssue';
-import IssueManagement from './admin/IssueManagement';
+import IssueManagement from './admin/exceptions/IssueManagement';
 import ComplaintManagement from './admin/ComplaintManagement';
 import Schedule from './admin/schedule/Schedule';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
@@ -45,7 +45,7 @@ import ManageOrders from './order/ManageOrders';
 import DriverDashboard from './driver/DriverDashboard';
 import DriverRoute from './driver/DriverRoute';
 import CompletedDeliveries from './admin/CompletedDeliveries';
-import DeliveryIssues from './admin/DeliveryIssues';
+import DeliveryIssues from './admin/exceptions/DeliveryIssues';
 
 // Scan Station wrappers — stage locked by tab selection
 const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
@@ -128,13 +128,14 @@ const Layout = () => {
       ],
     },
     cases: {
-      title: 'Cases',
+      // Key stays 'cases' — it must keep matching role permission strings and OFFICE_KEYS.
+      title: 'Exceptions',
       icon: AlertCircle,
-      route: '/cases',
+      route: '/exceptions',
       topNavItems: [
-        { id: 'reports',              label: 'Reports',               path: '',                    component: Cases               },
-        { id: 'order-issues',         label: 'Order Issues',          path: 'order-issues',        component: IssueManagement     },
-        { id: 'delivery-issues',      label: 'Delivery Issues',       path: 'delivery-issues',     component: DeliveryIssues      },
+        // First tab has an explicit path (not '') so ?orderId= deep links survive the base-route redirect.
+        { id: 'failed-deliveries',    label: 'Failed Deliveries',     path: 'failed-deliveries',   component: IssueManagement     },
+        { id: 'driver-escalations',   label: 'Driver Escalations',    path: 'driver-escalations',  component: DeliveryIssues      },
         { id: 'sync-monitor',         label: 'Sync Monitor',          path: 'sync-monitor',        component: SyncMonitor         },
         { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
@@ -199,7 +200,8 @@ const Layout = () => {
       icon: AlertCircle,
       route: '/settings',
       topNavItems: [
-        { id: 'notifications', label: 'Notifications', path: '', component: NotificationSettings },
+        { id: 'notifications',  label: 'Notifications',  path: '',               component: NotificationSettings },
+        { id: 'system-reports', label: 'System Reports', path: 'system-reports', component: Cases },
       ],
     },
   }

@@ -1,14 +1,19 @@
-// client/src/components/admin/DeliveryIssues.js
-// Cases → Delivery Issues: two sections — Escalations (Report→Notify Admin) and Full driver reports.
+// client/src/components/admin/exceptions/DeliveryIssues.js
+// Exceptions → Driver Escalations: two sections — Escalations (Report→Notify Admin) and Full driver reports.
 import React, { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, FileText, RefreshCw,
   User, X, Truck, MapPin, BellRing,
 } from 'lucide-react';
-import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
-import { ESCALATION_REASON_STYLES } from '../../utils/escalationReasons';
-import { useAuth } from '../../contexts/AuthContext';
+import { API_BASE_URL as API_BASE } from '../../../utils/apiBaseUrl';
+import { ESCALATION_REASON_STYLES } from '../../../utils/escalationReasons';
+import { useAuth } from '../../../contexts/AuthContext';
+import { formatDate } from './shared/formatters';
+import { ReasonBadge } from './shared/badges';
+import EvidenceThumbnails from './shared/EvidenceThumbnails';
+import StatCard from './shared/StatCard';
+import useIssuePolling from './shared/useIssuePolling';
 
 // Escalations = driver Report (is_complaint_submitted: true)
 // Full reports = old Issue-status orders still in the system (is_complaint_submitted: false)
@@ -20,25 +25,6 @@ const PRIORITY_STYLES = {
   low:    'bg-green-100 text-green-700',
 };
 
-function formatDate(str) {
-  if (!str) return 'N/A';
-  const d = new Date(str);
-  if (isNaN(d.getTime())) return String(str);
-  return d.toLocaleString('en-MY', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-}
-
-function ReasonBadge({ reason }) {
-  const style = ESCALATION_REASON_STYLES[reason] || 'bg-gray-100 text-gray-700';
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style}`}>
-      {reason || 'Unknown'}
-    </span>
-  );
-}
-
 function PriorityBadge({ level }) {
   const key = (level || 'medium').toLowerCase();
   const style = PRIORITY_STYLES[key] || PRIORITY_STYLES.medium;
@@ -46,35 +32,6 @@ function PriorityBadge({ level }) {
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${style}`}>
       {key}
     </span>
-  );
-}
-
-function EvidenceThumbnails({ evidence = [] }) {
-  if (!evidence.length) {
-    return <span className="text-xs text-gray-400">No photos</span>;
-  }
-  function mediaUrl(path) {
-    if (path.startsWith('http') || path.startsWith('data:')) return path;
-    return `${API_BASE.replace(/\/$/, '')}${path}`;
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {evidence.map((url, i) => (
-        <a
-          key={i}
-          href={mediaUrl(url)}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-        >
-          <img
-            src={mediaUrl(url)}
-            alt={`evidence-${i}`}
-            className="w-16 h-16 object-cover rounded-md border border-gray-200 hover:border-blue-400"
-          />
-        </a>
-      ))}
-    </div>
   );
 }
 
@@ -154,7 +111,7 @@ function ReportDetail({ order, onClose, onResolved }) {
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1">Reason</p>
-              <ReasonBadge reason={order.issue_reason} />
+              <ReasonBadge reason={order.issue_reason} styles={ESCALATION_REASON_STYLES} />
             </div>
           </div>
 
@@ -169,7 +126,10 @@ function ReportDetail({ order, onClose, onResolved }) {
 
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Evidence photos</p>
-            <EvidenceThumbnails evidence={order.issue_evidence} />
+            <EvidenceThumbnails
+              evidence={order.issue_evidence || []}
+              emptyFallback={<span className="text-xs text-gray-400">No photos</span>}
+            />
           </div>
 
           {!isResolved && (
@@ -224,7 +184,7 @@ function EscalationDetail({ order, onClose, onAcknowledged }) {
             <div className="flex items-center gap-2 flex-wrap">
               <BellRing size={18} className={isAcked ? 'text-green-600' : 'text-purple-600'} />
               <h2 className="text-base font-bold text-gray-900">Driver Report — {orderRef}</h2>
-              {order.issue_reason && <ReasonBadge reason={order.issue_reason} />}
+              {order.issue_reason && <ReasonBadge reason={order.issue_reason} styles={ESCALATION_REASON_STYLES} />}
               {isAcked ? (
                 <span className="flex items-center text-xs text-green-700 font-medium bg-green-100 px-2 py-0.5 rounded-full">
                   <CheckCircle size={11} className="mr-1" /> Acknowledged
@@ -326,7 +286,7 @@ function IssueRow({ issue, highlightId, isEscalation, onClick }) {
       {!isEscalation && (
         <td className="px-4 py-3"><PriorityBadge level={issue.issue_priority_level} /></td>
       )}
-      <td className="px-4 py-3"><ReasonBadge reason={issue.issue_reason} /></td>
+      <td className="px-4 py-3"><ReasonBadge reason={issue.issue_reason} styles={ESCALATION_REASON_STYLES} /></td>
       <td className="px-4 py-3">{statusBadge}</td>
       <td className="px-4 py-3 text-sm text-gray-500">{formatDate(issue.updated_at || issue.created_at)}</td>
     </tr>
@@ -383,9 +343,6 @@ export default function DeliveryIssues() {
   const [searchParams] = useSearchParams();
   const highlightId    = searchParams.get('orderId');
 
-  const [allIssues,     setAllIssues]     = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [error,         setError]         = useState(null);
   const [selectedIssue, setSelectedIssue] = useState(null);
 
   // Escalation section filters
@@ -395,35 +352,23 @@ export default function DeliveryIssues() {
   const [statusFilter,   setStatusFilter]   = useState('all'); // all | open | resolved
   const [priorityFilter, setPriorityFilter] = useState('all');
 
+  // Fetch everything; client partitions into two sections
   const fetchIssues = useCallback(async () => {
-    setError(null);
-    try {
-      // Fetch everything; client partitions into two sections
-      const res = await fetch(`${API_BASE}/api/orders/delivery-issues?status=all`);
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 120)}` : ''}`);
-      }
-      const data = await res.json();
-      setAllIssues(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error('Delivery issues fetch failed:', err);
-      setError(
-        err?.message?.includes('404')
-          ? 'Delivery Issues API not found — restart the server (cd server && npm start).'
-          : 'Failed to load delivery issues.'
-      );
-    } finally {
-      setLoading(false);
+    const res = await fetch(`${API_BASE}/api/orders/delivery-issues?status=all`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 120)}` : ''}`);
     }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   }, []);
 
-  useEffect(() => {
-    setLoading(true);
-    fetchIssues();
-    const timer = setInterval(fetchIssues, 15000);
-    return () => clearInterval(timer);
-  }, [fetchIssues]);
+  const { data: allIssues, setData: setAllIssues, loading, error, refetch } = useIssuePolling(fetchIssues);
+  const errorMessage = error
+    ? (error.message?.includes('404')
+        ? 'Delivery Issues API not found — restart the server (cd server && npm start).'
+        : 'Failed to load delivery issues.')
+    : null;
 
   useEffect(() => {
     if (highlightId && allIssues.length > 0) {
@@ -493,17 +438,17 @@ export default function DeliveryIssues() {
       )}
 
       <div className="w-full px-4 sm:px-6 py-4 space-y-6">
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">{error}</div>
+        {errorMessage && (
+          <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">{errorMessage}</div>
         )}
 
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Truck className="text-orange-500" size={20} />
-            Delivery Issues
+            Driver Escalations
           </h1>
           <button
-            onClick={fetchIssues}
+            onClick={refetch}
             className="flex items-center px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
           >
             <RefreshCw size={13} className="mr-1.5" /> Refresh
@@ -512,34 +457,10 @@ export default function DeliveryIssues() {
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-purple-100 rounded-lg"><BellRing className="w-5 h-5 text-purple-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Pending escalations</p>
-              <p className="text-xl font-bold text-gray-900">{pendingEscalations}</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-orange-100 rounded-lg"><AlertTriangle className="w-5 h-5 text-orange-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Open reports</p>
-              <p className="text-xl font-bold text-gray-900">{openReports}</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-green-100 rounded-lg"><CheckCircle className="w-5 h-5 text-green-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Resolved reports</p>
-              <p className="text-xl font-bold text-gray-900">{resolvedReports}</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg"><FileText className="w-5 h-5 text-blue-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Total</p>
-              <p className="text-xl font-bold text-gray-900">{allIssues.length}</p>
-            </div>
-          </div>
+          <StatCard label="Pending escalations" value={pendingEscalations} icon={BellRing}      tone="purple" />
+          <StatCard label="Open reports"        value={openReports}        icon={AlertTriangle} tone="orange" />
+          <StatCard label="Resolved reports"    value={resolvedReports}    icon={CheckCircle}   tone="green" />
+          <StatCard label="Total"               value={allIssues.length}   icon={FileText}      tone="blue" />
         </div>
 
         {/* ── Section 1: Escalations ─────────────────────────────────── */}

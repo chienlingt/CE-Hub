@@ -86,7 +86,7 @@ export default function TripDetailDrawer({ trip, loading, error, onClose, refres
           </button>
           <span className="text-gray-300">|</span>
           <button
-            onClick={() => navigate('/cases/sync-monitor')}
+            onClick={() => navigate('/exceptions/sync-monitor')}
             className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 transition-colors"
           >
             <ExternalLink className="h-3.5 w-3.5" />

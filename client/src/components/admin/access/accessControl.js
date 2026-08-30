@@ -27,7 +27,7 @@ const mockNavItems = [
   { key: 'dashboard', name: 'Dashboard', description: 'Main dashboard overview', icon: '📊' },
   { key: 'schedule', name: 'Schedule', description: 'Schedule management and delivery planning', icon: '📅' },
   { key: 'info', name: 'Information', description: 'Employee, team, and building data', icon: '📦' },
-  { key: 'cases', name: 'Cases', description: 'Cases reported by employees', icon: '📈' },
+  { key: 'cases', name: 'Exceptions', description: 'Failed deliveries, driver escalations, and sync health', icon: '📈' },
   { key: 'access', name: 'Access Control', description: 'Role and permission management', icon: '🛡️' },
   { key: 'delivery', name: 'Delivery Schedule', description: 'Delivery schedule management', icon: '🚚' },
   // Hidden from sidebar — kept for easy re-enable.

@@ -103,10 +103,10 @@ export default function ReportIssue() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 flex items-center">
             <AlertCircle className="w-8 h-8 mr-3 text-blue-600" />
-            Report an Issue
+            Report a System / App Problem
           </h1>
           <p className="mt-2 text-gray-600">
-            Report any issues or concerns you encounter. Track your submitted reports below.
+            Report bugs or problems with the CE Hub app itself. Track your submitted reports below.
           </p>
         </div>
 
@@ -138,11 +138,15 @@ export default function ReportIssue() {
                 id="content"
                 rows="5"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                placeholder="Please provide details about the issue you're experiencing..."
+                placeholder="Please provide details about the app problem you're experiencing..."
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 disabled={submitting}
               />
+              <p className="mt-2 text-xs text-gray-500">
+                For delivery problems (failed delivery, road blockage, customer issues), use the driver
+                dashboard's Fail Delivery or Report actions instead — those reach the dispatch team directly.
+              </p>
             </div>
             <button
               type="submit"

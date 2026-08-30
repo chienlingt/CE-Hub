@@ -8,7 +8,6 @@ import {
   CheckCircle,
   ChevronRight,
   FileText,
-  Image,
   MapPin,
   MessageCircle,
   Package, RefreshCw,
@@ -19,15 +18,13 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
-import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
-
-const REASON_STYLES = {
-  'Customer Unreachable': 'bg-orange-100 text-orange-800',
-  'Access Blocked':       'bg-red-100 text-red-800',
-  'Customer Rejected':    'bg-purple-100 text-purple-800',
-  'Incorrect Address':    'bg-yellow-100 text-yellow-800',
-};
+import { useAuth } from '../../../contexts/AuthContext';
+import { API_BASE_URL as API_BASE } from '../../../utils/apiBaseUrl';
+import { formatDate } from './shared/formatters';
+import { ReasonBadge, FAILED_DELIVERY_REASON_STYLES } from './shared/badges';
+import EvidenceThumbnails from './shared/EvidenceThumbnails';
+import StatCard from './shared/StatCard';
+import useIssuePolling from './shared/useIssuePolling';
 
 const ITEM_STATUS = {
   pending:   { label: 'Pending',   color: 'bg-gray-100 text-gray-600',   dot: 'bg-gray-400'   },
@@ -41,25 +38,6 @@ const CHATTER_STATUS = {
   failed:  { label: 'Failed to post',                cls: 'bg-red-100 text-red-700'     },
   skipped: { label: 'Skipped — Odoo not configured', cls: 'bg-gray-100 text-gray-600'   },
 };
-
-function formatDate(str) {
-  if (!str) return 'N/A';
-  const d = new Date(str);
-  if (isNaN(d.getTime())) return String(str);
-  return d.toLocaleString('en-MY', {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-}
-
-function ReasonBadge({ reason }) {
-  const style = REASON_STYLES[reason] || 'bg-gray-100 text-gray-700';
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style}`}>
-      {reason || 'Unknown'}
-    </span>
-  );
-}
 
 // "Resolved" badge — hover reveals who resolved it and when (audit trail)
 function ResolvedBadge({ resolvedByName, resolvedAt, children }) {
@@ -94,34 +72,6 @@ function SortTh({ children, field, sort, onSort, className = '' }) {
         <Icon size={12} className={active ? 'text-blue-500' : 'text-gray-300 group-hover:text-gray-400'} />
       </div>
     </th>
-  );
-}
-
-// Evidence photos a driver uploads when marking an order as failed (issue_evidence)
-function EvidenceThumbnails({ evidence = [] }) {
-  if (!evidence.length) return null;
-  function mediaUrl(path) {
-    if (path.startsWith('http') || path.startsWith('data:')) return path;
-    return `${API_BASE.replace(/\/$/, '')}${path}`;
-  }
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1.5">
-        <Image size={12} className="text-gray-400" />
-        {evidence.length} photo{evidence.length !== 1 ? 's' : ''}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {evidence.map((url, i) => (
-          <a key={i} href={mediaUrl(url)} target="_blank" rel="noopener noreferrer">
-            <img
-              src={mediaUrl(url)}
-              alt={`evidence-${i}`}
-              className="w-16 h-16 object-cover rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
-            />
-          </a>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -277,7 +227,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
                 </span>
               </ResolvedBadge>
             ) : order.issue_reason ? (
-              <span className="shrink-0"><ReasonBadge reason={order.issue_reason} /></span>
+              <span className="shrink-0"><ReasonBadge reason={order.issue_reason} styles={FAILED_DELIVERY_REASON_STYLES} /></span>
             ) : null}
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-black/5 shrink-0">
@@ -318,7 +268,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
           )}
 
           {/* Evidence photos — uploaded by driver when marking the order as failed */}
-          <EvidenceThumbnails evidence={order.issue_evidence} />
+          <EvidenceThumbnails evidence={order.issue_evidence || []} showCount />
 
           {/* Reschedule link — replacement order created from this case, if any */}
           {Array.isArray(order.rescheduled_to) && order.rescheduled_to.length > 0 && (
@@ -502,9 +452,6 @@ const IssueManagement = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightId     = searchParams.get('orderId');
 
-  const [issues,       setIssues]       = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [error,        setError]        = useState(null);
   const [selectedIssue,setSelectedIssue]= useState(null);
   const [filter,       setFilter]       = useState('all');
   const [search,       setSearch]       = useState('');
@@ -516,24 +463,13 @@ const IssueManagement = () => {
     setSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' });
 
   const fetchIssues = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/orders?issues_only=true&sort=created_desc&include_products=true`);
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-      const data = await res.json();
-      setIssues(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setError('Failed to load order issues.');
-    } finally {
-      setLoading(false);
-    }
+    const res = await fetch(`${API_BASE}/api/orders?issues_only=true&sort=created_desc&include_products=true`);
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   }, []);
 
-  useEffect(() => {
-    fetchIssues();
-    const timer = setInterval(fetchIssues, 15000);
-    return () => clearInterval(timer);
-  }, [fetchIssues]);
+  const { data: issues, setData: setIssues, loading, error, refetch } = useIssuePolling(fetchIssues);
 
   // Auto-open case if navigated from notification bell. The orderId param is
   // cleared immediately after opening — otherwise the 15s poll keeps updating
@@ -653,17 +589,17 @@ const IssueManagement = () => {
 
       <div className="w-full px-4 sm:px-6 py-4">
         {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">{error}</div>
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">Failed to load order issues.</div>
         )}
 
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <AlertTriangle className="text-red-500" size={20} />
-            Order Issues
+            Failed Deliveries
           </h1>
           <button
-            onClick={fetchIssues}
+            onClick={refetch}
             className="flex items-center px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
           >
             <RefreshCw size={13} className="mr-1.5" /> Refresh
@@ -672,27 +608,9 @@ const IssueManagement = () => {
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-4">
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-red-100 rounded-lg"><AlertTriangle className="w-5 h-5 text-red-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Open</p>
-              <p className="text-xl font-bold text-gray-900">{pendingCount}</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-green-100 rounded-lg"><CheckCircle className="w-5 h-5 text-green-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Resolved</p>
-              <p className="text-xl font-bold text-gray-900">{resolvedCount}</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg"><FileText className="w-5 h-5 text-blue-600" /></div>
-            <div>
-              <p className="text-xs text-gray-500">Total</p>
-              <p className="text-xl font-bold text-gray-900">{issues.length}</p>
-            </div>
-          </div>
+          <StatCard label="Open"     value={pendingCount}  icon={AlertTriangle} tone="red" />
+          <StatCard label="Resolved" value={resolvedCount} icon={CheckCircle}   tone="green" />
+          <StatCard label="Total"    value={issues.length} icon={FileText}      tone="blue" />
         </div>
 
         {/* Search + date filter */}
@@ -810,7 +728,7 @@ const IssueManagement = () => {
                       </td>
                       <td className="px-4 py-3">
                         {issue.issue_reason
-                          ? <ReasonBadge reason={issue.issue_reason} />
+                          ? <ReasonBadge reason={issue.issue_reason} styles={FAILED_DELIVERY_REASON_STYLES} />
                           : <span className="text-sm text-gray-400">—</span>
                         }
                       </td>
