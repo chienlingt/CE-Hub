@@ -40,6 +40,8 @@ model employees {
   trucks_trucks_driver_idToemployees    trucks[]                    @relation("trucks_driver_idToemployees")
   lorry_trips_assistant_idToemployees   lorry_trips[]               @relation("lorry_trips_assistant_idToemployees")
   lorry_trips_driver_idToemployees      lorry_trips[]               @relation("lorry_trips_driver_idToemployees")
+  teams_primary_driverToemployees       teams[]                     @relation("teams_primary_driverToemployees")
+  teams_assistant_driverToemployees     teams[]                     @relation("teams_assistant_driverToemployees")
 }
 
 model teams {
@@ -47,10 +49,16 @@ model teams {
   team_type              String?
   created_at             DateTime                    @default(now())
   available_flag         Boolean                     @default(true)
+  primary_driver_id      String?                     @db.Uuid
+  assistant_driver_id    String?                     @db.Uuid
+  truck_id               String?                     @db.Uuid
   assignments            employee_team_assignments[]
   installation_schedules installation_schedules[]
   delivery_timeslots     time_slots[]                @relation("DeliveryTeamSlots")
   warehouse_timeslots    time_slots[]                @relation("WarehouseTeamSlots")
+  primary_driver         employees?                  @relation("teams_primary_driverToemployees", fields: [primary_driver_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_team_primary_driver")
+  assistant_driver       employees?                  @relation("teams_assistant_driverToemployees", fields: [assistant_driver_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_team_assistant_driver")
+  truck                  trucks?                     @relation("teams_truckTotrucks", fields: [truck_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_team_truck")
 }
 
 model employee_team_assignments {
@@ -261,6 +269,7 @@ model orders {
   delivered_by               String?                   @db.Uuid
   notified_d1_at             DateTime?                 @db.Timestamp(6)
   notified_on_the_way_at     DateTime?                 @db.Timestamp(6)
+  overdue_reminder_sent_at   DateTime?                 @db.Timestamp(6)
   salesperson_name           String?                   @db.VarChar(255)
   salesperson_phone          String?                   @db.VarChar(50)
   is_escalation_acknowledged Boolean?                  @default(false)
@@ -368,6 +377,7 @@ model trucks {
   truck_zones                              truck_zones[]
   employees_trucks_assistant_idToemployees employees?    @relation("trucks_assistant_idToemployees", fields: [assistant_id], references: [id], onUpdate: NoAction, map: "fk_assistant")
   employees_trucks_driver_idToemployees    employees?    @relation("trucks_driver_idToemployees", fields: [driver_id], references: [id], onUpdate: NoAction, map: "fk_driver")
+  teams                                    teams[]       @relation("teams_truckTotrucks")
 }
 
 model installation_schedules {

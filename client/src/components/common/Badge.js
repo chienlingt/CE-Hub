@@ -31,3 +31,17 @@ export function TeamBadge({ teamType }) {
         </span>
     );
 }
+
+export function RoleBadge({ role }) {
+    const getRoleStyle = (r) => {
+        if (r === 'Primary Driver') return 'bg-blue-100 text-blue-800';
+        if (r === 'Assistant Driver') return 'bg-purple-100 text-purple-800';
+        return 'bg-gray-100 text-gray-600';
+    };
+
+    return (
+        <span className={`inline-flex items-center px-2 py-1 rounded-full font-medium text-xs ${getRoleStyle(role)}`}>
+            {role}
+        </span>
+    );
+}

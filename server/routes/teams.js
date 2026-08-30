@@ -3,6 +3,76 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 
+const TEAM_INCLUDE = {
+  assignments: { include: { employee: true } },
+  primary_driver: true,
+  assistant_driver: true,
+  truck: true,
+};
+
+function isDeliveryTeamType(teamType) {
+  return (teamType || '').toLowerCase().includes('delivery');
+}
+
+// Shared validation for the Primary Driver / Assistant Driver pair on Delivery teams.
+// Enforces: the two ids differ, both reference active employees, and neither is already
+// paired (as primary or assistant) on another active Delivery team.
+// Throws an Error with a `.status` (400/409) that route handlers turn into an HTTP response.
+async function validateDeliveryPair(tx, { primary_driver_id, assistant_driver_id, excludeTeamId }) {
+  if (primary_driver_id && assistant_driver_id && primary_driver_id === assistant_driver_id) {
+    const err = new Error('Primary Driver and Assistant Driver must be different employees.');
+    err.status = 400;
+    throw err;
+  }
+
+  const idsToCheck = [primary_driver_id, assistant_driver_id].filter(Boolean);
+  if (idsToCheck.length > 0) {
+    const activeEmployees = await tx.employees.findMany({
+      where: { id: { in: idsToCheck }, active_flag: true },
+      select: { id: true },
+    });
+    if (activeEmployees.length !== idsToCheck.length) {
+      const err = new Error('Primary Driver and Assistant Driver must be active employees.');
+      err.status = 400;
+      throw err;
+    }
+  }
+
+  if (idsToCheck.length > 0) {
+    const conflictingTeam = await tx.teams.findFirst({
+      where: {
+        available_flag: true,
+        ...(excludeTeamId ? { id: { not: excludeTeamId } } : {}),
+        OR: [
+          { primary_driver_id: { in: idsToCheck } },
+          { assistant_driver_id: { in: idsToCheck } },
+        ],
+      },
+      select: { id: true, team_type: true, primary_driver_id: true, assistant_driver_id: true },
+    });
+    if (conflictingTeam && isDeliveryTeamType(conflictingTeam.team_type)) {
+      const err = new Error('One of the selected employees is already assigned to another active Delivery team.');
+      err.status = 409;
+      throw err;
+    }
+  }
+}
+
+// Mirrors the given Delivery pair into employee_team_assignments so existing consumers
+// that read team.assignments (e.g. the Delivery Schedule contacts aggregate, deletability
+// checks) keep working unmodified. Intentional two-sources-of-truth tradeoff: primary_driver_id/
+// assistant_driver_id are canonical, employee_team_assignments is a kept-in-sync mirror.
+async function syncDeliveryPairAssignments(tx, teamId, { primary_driver_id, assistant_driver_id }) {
+  await tx.employee_team_assignments.deleteMany({ where: { team_id: teamId } });
+  const pairIds = [primary_driver_id, assistant_driver_id].filter(Boolean);
+  if (pairIds.length > 0) {
+    await tx.employee_team_assignments.deleteMany({ where: { employee_id: { in: pairIds } } });
+    await tx.employee_team_assignments.createMany({
+      data: pairIds.map((eid) => ({ employee_id: eid, team_id: teamId })),
+    });
+  }
+}
+
 router.get('/', async (req, res) => {
   try {
     const { sortBy, sortOrder } = req.query;
@@ -12,7 +82,7 @@ router.get('/', async (req, res) => {
     }
 
     const teams = await prisma.teams.findMany({
-      include: { assignments: { include: { employee: true } } },
+      include: TEAM_INCLUDE,
       orderBy: orderBy
     });
     res.json(teams);
@@ -24,9 +94,25 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { team_type, employeeIds } = req.body;
+    const { team_type, employeeIds, primary_driver_id, assistant_driver_id, truck_id } = req.body;
+    const isDeliveryTeam = isDeliveryTeamType(team_type);
 
     const team = await prisma.$transaction(async (tx) => {
+      if (isDeliveryTeam) {
+        await validateDeliveryPair(tx, { primary_driver_id, assistant_driver_id });
+
+        const created = await tx.teams.create({
+          data: {
+            team_type,
+            primary_driver_id: primary_driver_id || null,
+            assistant_driver_id: assistant_driver_id || null,
+            truck_id: truck_id || null,
+          },
+        });
+        await syncDeliveryPairAssignments(tx, created.id, { primary_driver_id, assistant_driver_id });
+        return tx.teams.findUnique({ where: { id: created.id }, include: TEAM_INCLUDE });
+      }
+
       if (employeeIds?.length > 0) {
         await tx.employee_team_assignments.deleteMany({
           where: { employee_id: { in: employeeIds } },
@@ -44,12 +130,15 @@ router.post('/', async (req, res) => {
               }
             : {}),
         },
-        include: { assignments: { include: { employee: true } } },
+        include: TEAM_INCLUDE,
       });
     });
 
     res.status(201).json(team);
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     console.error('POST /api/teams error', err);
     res.status(500).json({ error: 'Failed to create team' });
   }
@@ -57,14 +146,17 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   const teamId = req.params.id;
-  const { team_type, available_flag, employeeIds } = req.body;
+  const { team_type, available_flag, employeeIds, primary_driver_id, assistant_driver_id, truck_id } = req.body;
 
   // Manual deactivation is a simple case
   if (available_flag === false) {
       try {
           await prisma.$transaction([
               prisma.employee_team_assignments.deleteMany({ where: { team_id: teamId } }),
-              prisma.teams.update({ where: { id: teamId }, data: { available_flag: false } }),
+              prisma.teams.update({
+                where: { id: teamId },
+                data: { available_flag: false, primary_driver_id: null, assistant_driver_id: null },
+              }),
           ]);
           return res.json({ message: 'Team has been manually deactivated.' });
       } catch (err) {
@@ -72,7 +164,7 @@ router.put('/:id', async (req, res) => {
           return res.status(500).json({ error: 'Failed to deactivate team' });
       }
   }
-  
+
   try {
     const team = await prisma.teams.findUnique({
       where: { id: teamId },
@@ -88,6 +180,8 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Team not found' });
     }
 
+    const isDeliveryTeam = isDeliveryTeamType(team_type || team.team_type);
+
     const hasHistory =
       team.assignments.length > 0 ||
       team.installation_schedules.length > 0 ||
@@ -97,6 +191,21 @@ router.put('/:id', async (req, res) => {
     // Case 1: No history, just update in place
     if (!hasHistory) {
       const updatedTeam = await prisma.$transaction(async (tx) => {
+        if (isDeliveryTeam) {
+          await validateDeliveryPair(tx, { primary_driver_id, assistant_driver_id, excludeTeamId: teamId });
+          const updated = await tx.teams.update({
+            where: { id: teamId },
+            data: {
+              team_type,
+              primary_driver_id: primary_driver_id || null,
+              assistant_driver_id: assistant_driver_id || null,
+              truck_id: truck_id || null,
+            },
+          });
+          await syncDeliveryPairAssignments(tx, teamId, { primary_driver_id, assistant_driver_id });
+          return updated;
+        }
+
         if (employeeIds) {
           await tx.employee_team_assignments.deleteMany({ where: { employee_id: { in: employeeIds } } });
           await tx.employee_team_assignments.deleteMany({ where: { team_id: teamId } });
@@ -117,6 +226,10 @@ router.put('/:id', async (req, res) => {
 
     // Case 2: Has history, so "retire and create new"
     const result = await prisma.$transaction(async (tx) => {
+      if (isDeliveryTeam) {
+        await validateDeliveryPair(tx, { primary_driver_id, assistant_driver_id, excludeTeamId: teamId });
+      }
+
       // 1. Retire old team
       await tx.teams.update({
         where: { id: teamId },
@@ -124,14 +237,27 @@ router.put('/:id', async (req, res) => {
       });
 
       // 2. Create new team
-      const newTeam = await tx.teams.create({
-        data: {
-          team_type: team_type || team.team_type,
-          assignments: {
-            create: employeeIds ? employeeIds.map((eid) => ({ employee_id: eid })) : [],
-          },
-        },
-      });
+      const newTeam = isDeliveryTeam
+        ? await tx.teams.create({
+            data: {
+              team_type: team_type || team.team_type,
+              primary_driver_id: primary_driver_id || null,
+              assistant_driver_id: assistant_driver_id || null,
+              truck_id: truck_id || null,
+            },
+          })
+        : await tx.teams.create({
+            data: {
+              team_type: team_type || team.team_type,
+              assignments: {
+                create: employeeIds ? employeeIds.map((eid) => ({ employee_id: eid })) : [],
+              },
+            },
+          });
+
+      if (isDeliveryTeam) {
+        await syncDeliveryPairAssignments(tx, newTeam.id, { primary_driver_id, assistant_driver_id });
+      }
 
       const todayISO = new Date().toISOString().split('T')[0];
 
@@ -158,6 +284,9 @@ router.put('/:id', async (req, res) => {
     });
 
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     console.error('PUT /api/teams/:id error', err);
     res.status(500).json({ error: 'Failed to update team' });
   }
@@ -274,9 +403,9 @@ router.delete('/:id', async (req, res) => {
     // Case 3: Has only past schedules OR only members -> Soft delete
     await prisma.teams.update({
       where: { id: teamId },
-      data: { available_flag: false },
+      data: { available_flag: false, primary_driver_id: null, assistant_driver_id: null },
     });
-    
+
     // Also remove team members from the now-inactive team
     if (hasAssignments) {
       await prisma.employee_team_assignments.deleteMany({

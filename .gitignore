@@ -34,7 +34,9 @@ server/.env
 
 # Claude Code
 CLAUDE.md
+.claude
 
 # User-uploaded runtime files (POD photos, failure evidence, etc.)
 server/uploads/
 docs/
+graphify-out
