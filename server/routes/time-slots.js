@@ -91,6 +91,92 @@ router.get('/active', async (req, res) => {
   }
 });
 
+// Same delivery-team test as server/routes/driver.js (private there; kept in sync manually).
+function isDeliveryTeamType(team) {
+  return (team?.team_type || '').toLowerCase().includes('delivery');
+}
+
+// ── GET /api/time-slots/schedule ───────────────────────────────────────────
+// Full execution payload for the Delivery Schedule page: every slot status for
+// one date, with the per-order detail the schedule view renders and scans
+// against. Distinct from /active, which stays a lean out_for_delivery summary
+// for LiveDeliveries. Must be declared BEFORE /:id routes.
+//
+// Query params:
+//   ?date=YYYY-MM-DD  — slot date (absent or 'today' → today in Asia/KL)
+//   ?team_id=<uuid>   — filter to one delivery team ('all' or absent → no filter)
+//   ?employee_id=<id> — resolve this employee's delivery-team assignments only;
+//                       never filters slots (office staff can browse any team)
+//
+// Slots whose orders are all outside the execution statuses are omitted, so a
+// slot with only Cancelled/Failed orders disappears from the page (matches the
+// old client-side grouping behavior).
+router.get('/schedule', async (req, res) => {
+  try {
+    const { date: dateParam, team_id: teamId, employee_id: employeeId } = req.query;
+
+    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+    const resolvedDate = (!dateParam || dateParam === 'today') ? todayKL : dateParam;
+
+    const EXEC_STATUSES = ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Delivered'];
+
+    const teamsP = prisma.teams.findMany({
+      where: { available_flag: true, team_type: { contains: 'delivery', mode: 'insensitive' } },
+      select: { id: true, team_type: true },
+    });
+
+    const assignmentsP = employeeId
+      ? prisma.employee_team_assignments.findMany({
+          where: { employee_id: employeeId },
+          include: { team: { select: { id: true, team_type: true } } },
+        })
+      : Promise.resolve([]);
+
+    const slotsP = prisma.time_slots.findMany({
+      where: {
+        date: resolvedDate,
+        ...(teamId && teamId !== 'all' ? { delivery_team_id: teamId } : {}),
+      },
+      include: {
+        truck:          { select: { plate_no: true } },
+        delivery_team:  { select: { id: true, team_type: true } },
+        warehouse_team: { select: { id: true, team_type: true } },
+        orders: {
+          where:   { order_status: { in: EXEC_STATUSES } },
+          orderBy: [{ truck_loading_sequence: 'asc' }, { scheduled_start_date_time: 'asc' }],
+          select: {
+            id: true, order_status: true, odoo_order_ref: true, truck_loading_sequence: true,
+            delivery_address: true, original_delivery_address: true, remarks_delivery_address: true,
+            remarks_contact_name: true, remarks_contact_phone: true,
+            delivery_notes: true, remarks_driver_notes: true,
+            delivery_start_date_time: true, delivery_end_date_time: true,
+            customer_rating: true, customer_feedback: true, proof_of_delivery_url: true,
+            customers: { select: { full_name: true, phone: true, address: true, city: true, state: true } },
+            buildings: { select: { building_name: true } },
+            order_products: {
+              select: {
+                id: true, quantity: true, picking_status: true, assigned_serial: true, odoo_product_name: true,
+                products: { select: { id: true, product_name: true, estimated_installation_time_min: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { time_window_start: 'asc' },
+    });
+
+    const [teams, assignments, slots] = await Promise.all([teamsP, assignmentsP, slotsP]);
+    const assigned_team_ids = [...new Set(
+      assignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id)
+    )];
+
+    res.json({ teams, assigned_team_ids, slots: slots.filter(s => s.orders.length > 0) });
+  } catch (err) {
+    console.error('GET /api/time-slots/schedule error', err);
+    res.status(500).json({ error: 'Failed to fetch delivery schedule', details: err.message });
+  }
+});
+
 // ── GET /api/time-slots/:id/status  (A.3.7) ────────────────────────────────
 // Single slot summary with order breakdown.
 router.get('/:id/status', async (req, res) => {
