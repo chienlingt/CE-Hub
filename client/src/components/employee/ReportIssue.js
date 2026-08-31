@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, Send, CheckCircle, Clock, FileText } from 'lucide-react';
+import { AlertCircle, Send, CheckCircle, Clock, FileText, Plus, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import Modal from '../common/Modal';
 
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
+
+// A report can only be edited/deleted by its author while admin hasn't acted on it yet;
+// once marked resolved it's part of the admin record and shouldn't be altered client-side.
+const isEditable = (report) => (report.status || 'pending').toLowerCase() === 'pending';
 
 export default function ReportIssue() {
   const { employeeData } = useAuth();
@@ -11,7 +16,11 @@ export default function ReportIssue() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const [editingReportId, setEditingReportId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   // Fetch only the current employee's reports
   useEffect(() => {
@@ -36,42 +45,100 @@ export default function ReportIssue() {
     fetchMyReports();
   }, [employeeData?.id]);
 
+  const showSuccess = (message) => {
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(''), 3000);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!content.trim()) {
-      setError('Please enter a description of the issue');
+      setSubmitError('Please enter a description of the issue');
       return;
     }
 
     setSubmitting(true);
-    setError(null);
-    setSuccess(false);
+    setSubmitError(null);
+    setSuccessMessage('');
+
+    const isEditing = !!editingReportId;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/reports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employee_id: employeeData.id,
-          content: content.trim(),
-          status: 'pending',
-          created_at: new Date().toISOString()
-        })
-      });
+      const response = await fetch(
+        `${API_BASE_URL}/api/reports${isEditing ? `/${editingReportId}` : ''}`,
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isEditing
+              ? { content: content.trim() }
+              : {
+                  employee_id: employeeData.id,
+                  content: content.trim(),
+                  status: 'pending',
+                  created_at: new Date().toISOString()
+                }
+          )
+        }
+      );
 
-      if (!response.ok) throw new Error('Failed to submit report');
+      if (!response.ok) throw new Error(isEditing ? 'Failed to update report' : 'Failed to submit report');
 
-      const newReport = await response.json();
-      setMyReports([newReport, ...myReports]);
+      const savedReport = await response.json();
+      setMyReports(
+        isEditing
+          ? myReports.map((r) => (r.id === savedReport.id ? savedReport : r))
+          : [savedReport, ...myReports]
+      );
       setContent('');
-      setSuccess(true);
-
-      setTimeout(() => setSuccess(false), 3000);
+      setEditingReportId(null);
+      setIsModalOpen(false);
+      showSuccess(isEditing ? 'Your report has been updated successfully!' : 'Your report has been submitted successfully!');
     } catch (err) {
-      console.error('Error submitting report:', err);
-      setError('Failed to submit your report. Please try again.');
+      console.error('Error saving report:', err);
+      setSubmitError(isEditing ? 'Failed to update your report. Please try again.' : 'Failed to submit your report. Please try again.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleOpenNewReport = () => {
+    setEditingReportId(null);
+    setContent('');
+    setSubmitError(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (report) => {
+    setEditingReportId(report.id);
+    setContent(report.content || '');
+    setSubmitError(null);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setContent('');
+    setSubmitError(null);
+    setEditingReportId(null);
+  };
+
+  const handleDelete = async (report) => {
+    if (!window.confirm('Delete this report? This cannot be undone.')) return;
+
+    setDeletingId(report.id);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reports/${report.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Failed to delete report');
+
+      setMyReports(myReports.filter((r) => r.id !== report.id));
+      showSuccess('Report deleted successfully!');
+    } catch (err) {
+      console.error('Error deleting report:', err);
+      setError('Failed to delete the report. Please try again.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -111,10 +178,10 @@ export default function ReportIssue() {
         </div>
 
         {/* Success Message */}
-        {success && (
+        {successMessage && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center">
             <CheckCircle className="w-5 h-5 text-green-600 mr-3" />
-            <span className="text-green-800">Your report has been submitted successfully!</span>
+            <span className="text-green-800">{successMessage}</span>
           </div>
         )}
 
@@ -126,9 +193,31 @@ export default function ReportIssue() {
           </div>
         )}
 
-        {/* Report Form */}
+        {/* Report Form trigger */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Submit New Report</h2>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Submit New Report</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Report a bug or problem with the CE Hub app itself.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenNewReport}
+              className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              New Report
+            </button>
+          </div>
+        </div>
+
+        {/* Report Form popup */}
+        <Modal show={isModalOpen} onClose={handleCloseModal} maxWidth="max-w-lg">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">
+            {editingReportId ? 'Edit Report' : 'Submit New Report'}
+          </h2>
           <form onSubmit={handleSubmit}>
             <div className="mb-4">
               <label htmlFor="content" className="block text-sm font-medium text-gray-700 mb-2">
@@ -142,22 +231,33 @@ export default function ReportIssue() {
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 disabled={submitting}
+                autoFocus
               />
               <p className="mt-2 text-xs text-gray-500">
                 For delivery problems (failed delivery, road blockage, customer issues), use the driver
                 dashboard's Fail Delivery or Report actions instead — those reach the dispatch team directly.
               </p>
             </div>
+
+            {submitError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center">
+                <AlertCircle className="w-4 h-4 text-red-600 mr-2 flex-shrink-0" />
+                <span className="text-sm text-red-800">{submitError}</span>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={submitting || !content.trim()}
               className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
               <Send className="w-4 h-4 mr-2" />
-              {submitting ? 'Submitting...' : 'Submit Report'}
+              {submitting
+                ? (editingReportId ? 'Saving...' : 'Submitting...')
+                : (editingReportId ? 'Save Changes' : 'Submit Report')}
             </button>
           </form>
-        </div>
+        </Modal>
 
         {/* My Reports */}
         <div className="bg-white rounded-lg shadow-md p-6">
@@ -195,6 +295,27 @@ export default function ReportIssue() {
                     </span>
                   </div>
                   <p className="text-gray-700 whitespace-pre-wrap">{report.content}</p>
+                  {isEditable(report) && (
+                    <div className="mt-3 flex gap-2 border-t border-gray-100 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(report)}
+                        className="flex items-center text-sm text-gray-600 hover:text-blue-600 transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-1" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(report)}
+                        disabled={deletingId === report.id}
+                        className="flex items-center text-sm text-gray-600 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1" />
+                        {deletingId === report.id ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
