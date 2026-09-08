@@ -352,7 +352,7 @@ export default function TeamInfo() {
                                 }`}
                             >
                                 <span className="block text-sm font-medium text-gray-800">Normal Team</span>
-                                <span className="block text-xs text-gray-500 mt-0.5">Storekeeper / Warehouse / Installation</span>
+                                <span className="block text-xs text-gray-500 mt-0.5">Installation</span>
                             </button>
                             <button
                                 type="button"
@@ -372,7 +372,7 @@ export default function TeamInfo() {
                     label={isDeliveryModal ? "Team Name" : "Team Type"}
                     value={modalData.team_type}
                     onChange={handleModalChange}
-                    placeholder={isDeliveryModal ? "e.g. HS Delivery Team" : "e.g. Installation Team, Warehouse Team"}
+                    placeholder={isDeliveryModal ? "e.g. HS Delivery Team" : "e.g. Installation Team"}
                     guidance={isDeliveryModal ? 'Must include the word "Delivery" (e.g. "Zone A Delivery Team").' : undefined}
                     required
                     error={formErrors.team_type}

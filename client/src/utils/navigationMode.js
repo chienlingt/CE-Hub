@@ -1,4 +1,4 @@
-export const FIELD_KEYS = ['driver', 'delivery', 'installation', 'warehouse', 'scanning'];
+export const FIELD_KEYS = ['driver', 'delivery', 'installation', 'scanning'];
 
 export const OFFICE_KEYS = ['dashboard', 'access', 'info', 'cases', 'schedule', 'settings'];
 

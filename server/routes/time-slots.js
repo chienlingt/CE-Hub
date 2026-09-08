@@ -140,7 +140,6 @@ router.get('/schedule', async (req, res) => {
       include: {
         truck:          { select: { plate_no: true } },
         delivery_team:  { select: { id: true, team_type: true } },
-        warehouse_team: { select: { id: true, team_type: true } },
         orders: {
           where:   { order_status: { in: EXEC_STATUSES } },
           orderBy: [{ truck_loading_sequence: 'asc' }, { scheduled_start_date_time: 'asc' }],

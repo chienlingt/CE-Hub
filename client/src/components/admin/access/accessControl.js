@@ -32,7 +32,6 @@ const mockNavItems = [
   { key: 'delivery', name: 'Delivery Schedule', description: 'Delivery schedule management', icon: '🚚' },
   // Hidden from sidebar — kept for easy re-enable.
   // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
-  // { key: 'warehouse', name: 'Warehouse Schedule', description: 'Warehouse loading and operations', icon: '🏭' },
   { key: 'customer',  name: 'Place Order',   description: 'Demo to place order', icon: '' },
   { key: 'scanning',  name: 'Scan Station',  description: 'Item picking and loading scan confirmation', icon: '📷' },
   { key: 'settings',  name: 'Settings',      description: 'Notification and system settings', icon: '⚙️' },

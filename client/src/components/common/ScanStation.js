@@ -1,15 +1,10 @@
 /**
- * ScanStation — A2 Truck Loading Enforcement + A5.7 Return Receiving
+ * ScanStation — A2 Truck Loading Enforcement
  *
  * Driver → Loading / Unloading toggle
- * Admin  → Loading / Unloading / Returns / Audit view
- * Warehouse/Storekeeper → Loading / Unloading / Returns
+ * Admin  → Loading / Unloading / Audit view
  *
  * Picking is handled by Odoo/warehouse — CE Hub starts from Loading.
- * Returns (forcedStage="returns") is the A5.7 storekeeper scan-to-receive screen for
- * failed-delivery items coming back off the vehicle — separate from the forward
- * Loading/Unloading flow, scoped to order_status: 'Failed' orders and item_delivery_status:
- * 'failed' line items only. See routes/order-products.js PATCH /:id/return-status.
  */
 
 import {
@@ -19,7 +14,6 @@ import {
   ArrowUpDown,
   CalendarDays,
   Camera, ClipboardList,
-  PackageCheck,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -51,9 +45,8 @@ function orderDate(order) {
 function useRole(employeeData) {
   const n = (employeeData?.role?.name || employeeData?.role || '').toString().toLowerCase();
   return {
-    isAdmin:     n.includes('admin'),
-    isWarehouse: n.includes('warehouse') || n.includes('storekeeper'),
-    isDriver:    n.includes('delivery')  || n.includes('driver'),
+    isAdmin:  n.includes('admin'),
+    isDriver: n.includes('delivery') || n.includes('driver'),
   };
 }
 
@@ -133,56 +126,6 @@ function StatusPill({ item }) {
   );
 }
 
-// ─── Return status pill (A5.7) ─────────────────────────────────────────────────
-
-function ReturnStatusPill({ item }) {
-  const status = item?.return_status || 'pending';
-  const cfg = {
-    pending:  { label: 'Pending',  cls: 'bg-gray-100 text-gray-500', dot: 'bg-gray-400' },
-    received: { label: 'Received', cls: 'bg-teal-100 text-teal-700', dot: 'bg-teal-500' },
-  };
-  const { label, cls, dot } = cfg[status] || cfg.pending;
-  const pill = (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-default ${cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
-      {label}
-    </span>
-  );
-  if (status !== 'received' || !item.returned_by_name) return pill;
-  return (
-    <span className="relative group inline-flex">
-      {pill}
-      <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 z-50
-                       hidden group-hover:flex flex-col
-                       bg-gray-900 text-white text-xs rounded-lg shadow-xl px-2.5 py-2
-                       min-w-[160px] max-w-[220px]">
-        <span className="font-semibold">Received by {item.returned_by_name}</span>
-        {item.returned_at && <span className="text-gray-300 mt-0.5">{fmt(item.returned_at)}</span>}
-        <span className="absolute top-full left-3 border-4 border-transparent border-t-gray-900" />
-      </span>
-    </span>
-  );
-}
-
-// ─── Serial badge ─────────────────────────────────────────────────────────────
-
-function SerialBadge({ label, value, color }) {
-  const colors = {
-    amber:   'bg-amber-50 text-amber-700 border-amber-200',
-    blue:    'bg-blue-50 text-blue-700 border-blue-200',
-    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    purple:  'bg-purple-50 text-purple-700 border-purple-200',
-  };
-  return (
-    <div className="flex items-center gap-1">
-      <span className="text-[10px] text-gray-400 w-14 flex-shrink-0">{label}:</span>
-      <span className={`font-mono text-xs px-1.5 py-0.5 rounded border ${colors[color] || colors.amber}`}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
 // ─── Error-only feedback ──────────────────────────────────────────────────────
 
 function ErrorBanner({ fb, onDismiss }) {
@@ -212,17 +155,11 @@ function ErrorBanner({ fb, onDismiss }) {
 }
 
 // ─── Scan submit ──────────────────────────────────────────────────────────────
-// `stage` 'loading'/'unloading' hits picking-status (A2); 'returns' hits the separate
-// return-status endpoint (A5.7), which has no `stage` field of its own since it only
-// ever means one thing: scan-to-receive.
+// `stage` is 'loading' or 'unloading', hitting picking-status (A2).
 
 async function submitScan({ itemId, stage, employeeId, serialNumber }) {
-  const isReturn = stage === 'returns';
-  const endpoint = isReturn ? 'return-status' : 'picking-status';
-  const body = isReturn
-    ? { employee_id: employeeId || null, serial_number: serialNumber.trim() }
-    : { stage, employee_id: employeeId || null, serial_number: serialNumber.trim() };
-  const res  = await fetch(`${API_BASE}/api/order-products/${itemId}/${endpoint}`, {
+  const body = { stage, employee_id: employeeId || null, serial_number: serialNumber.trim() };
+  const res  = await fetch(`${API_BASE}/api/order-products/${itemId}/picking-status`, {
     method:  'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
@@ -544,201 +481,6 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   );
 }
 
-// ─── Returns table (A5.7 storekeeper scan-to-receive) ─────────────────────────
-// Mirrors ItemTable's grouped-by-order layout (like the unloading tab), but on
-// return_status/returned_serial instead of picking_status, and scoped to failed items
-// only (parent `rows` prop is already filtered by item_delivery_status === 'failed').
-
-function ReturnsTable({ rows, employeeId, onUpdated, globalScanSerial, onGlobalScanError }) {
-  const [rowFb, setRowFb] = useState({});
-  const [busy,  setBusy]  = useState({});
-  const [sort,  setSort]  = useState({ field: 'do', dir: 'asc' });
-
-  useEffect(() => {
-    if (!globalScanSerial || !rows.length) return;
-    const serial = globalScanSerial.trim();
-    const match = rows.find(r => r.return_status !== 'received' && r.unloaded_serial === serial)
-      || rows.find(r => r.return_status !== 'received');
-    if (!match) { onGlobalScanError?.({ ok: false, msg: `Serial "${serial}" not found in list.` }); return; }
-    handleSubmit(match.id, match._orderId, serial);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [globalScanSerial]);
-
-  const handleSubmit = async (itemId, orderId, serial) => {
-    if (!serial?.trim()) return;
-    setBusy(p => ({ ...p, [itemId]: true }));
-    setRowFb(p => ({ ...p, [itemId]: null }));
-    try {
-      const updated = await submitScan({ itemId, stage: 'returns', employeeId, serialNumber: serial });
-      onUpdated(orderId, updated);
-    } catch (err) {
-      const fb = { ok: false, msg: err.error || 'Scan failed', code: err.code, expected: err.expected, scanned: err.scanned };
-      setRowFb(p => ({ ...p, [itemId]: fb }));
-    } finally {
-      setBusy(p => ({ ...p, [itemId]: false }));
-    }
-  };
-
-  const handleSort = (field) =>
-    setSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' });
-
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      let va, vb;
-      if (sort.field === 'do')          { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
-      else if (sort.field === 'name')   { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
-      else if (sort.field === 'serial') { va = a.unloaded_serial || ''; vb = b.unloaded_serial || ''; }
-      else if (sort.field === 'status') {
-        const o = ['pending', 'received'];
-        va = o.indexOf(a.return_status || 'pending'); vb = o.indexOf(b.return_status || 'pending');
-        return sort.dir === 'asc' ? va - vb : vb - va;
-      }
-      else return 0;
-      const c = String(va).localeCompare(String(vb), undefined, { numeric: true });
-      return sort.dir === 'asc' ? c : -c;
-    });
-  }, [rows, sort]);
-
-  // groups must be computed unconditionally (before any early return) — all hooks in a
-  // component must run in the same order on every render.
-  const groups = useMemo(() => {
-    const map = {};
-    const out = [];
-    sorted.forEach(row => {
-      if (!map[row._orderId]) {
-        const g = { orderId: row._orderId, order: row._order, rows: [] };
-        map[row._orderId] = g;
-        out.push(g);
-      }
-      map[row._orderId].rows.push(row);
-    });
-    return out;
-  }, [sorted]);
-
-  if (!sorted.length) return null;
-
-  let globalIdx = 0;
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 md:hidden flex-wrap">
-        <span className="text-xs text-gray-400 font-medium">Sort:</span>
-        {[{ id: 'do', label: 'DO' }, { id: 'serial', label: 'Serial' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
-          const active = sort.field === f.id;
-          const Icon   = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
-          return (
-            <button key={f.id} onClick={() => handleSort(f.id)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border transition-colors
-                ${active ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-200 hover:border-teal-300'}`}>
-              {f.label}<Icon size={10} />
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10">
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
-              <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
-              <SortTh field="do"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">DO Number</SortTh>
-              <SortTh field="serial" sort={sort} onSort={handleSort} className="hidden md:table-cell">Expected Serial</SortTh>
-              <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {groups.map(({ orderId, order, rows: gRows }) => {
-              const allReceived = gRows.every(r => r.return_status === 'received');
-              const doRef = order?.odoo_order_ref || 'Not Synced';
-              return (
-                <React.Fragment key={orderId}>
-                  <tr className="bg-gray-50 border-t-2 border-gray-200">
-                    <td colSpan={5} className="px-4 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-mono text-xs font-bold text-gray-700 truncate">{doRef}</span>
-                          {order?.customers?.full_name && (
-                            <span className="text-xs text-gray-400 flex items-center gap-1 flex-shrink-0">
-                              <User size={9} />{order.customers.full_name}
-                            </span>
-                          )}
-                        </div>
-                        <span className={`flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-                          ${allReceived ? 'bg-teal-100 text-teal-700' : 'bg-amber-100 text-amber-700'}`}>
-                          {allReceived ? 'All Received' : 'Awaiting Return'}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                  {gRows.map(row => {
-                    const idx = globalIdx++;
-                    const isActionable = row.return_status !== 'received';
-                    const fb = rowFb[row.id];
-                    return (
-                      <React.Fragment key={row.id}>
-                        <tr className={`transition-colors ${isActionable ? 'bg-teal-50/40' : 'hover:bg-gray-50'}`}>
-                          <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
-                          <td className="px-4 py-3">
-                            <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
-                            <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
-                            <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">{doRef}</p>
-                            {row.unloaded_serial && (
-                              <span className="md:hidden inline-block font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 bg-teal-50 text-teal-700 border-teal-200">
-                                {row.unloaded_serial}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 hidden sm:table-cell">
-                            <span className="font-mono text-xs font-bold text-gray-700">{doRef}</span>
-                          </td>
-                          <td className="px-4 py-3 hidden md:table-cell">
-                            {row.unloaded_serial
-                              ? <span className="font-mono text-xs px-2 py-0.5 rounded border bg-teal-50 text-teal-700 border-teal-200">{row.unloaded_serial}</span>
-                              : <span className="text-xs text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            <ReturnStatusPill item={row} />
-                          </td>
-                        </tr>
-                        {isActionable && (
-                          <tr className="border-0">
-                            <td colSpan={5} className="px-4 pb-2.5 pt-0">
-                              <div className="flex items-center gap-2 pl-9">
-                                <input
-                                  type="text"
-                                  placeholder="Scan or enter serial number"
-                                  disabled={busy[row.id]}
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') handleSubmit(row.id, row._orderId, e.currentTarget.value);
-                                  }}
-                                  className="flex-1 max-w-xs px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400"
-                                />
-                                {busy[row.id] && <RefreshCw size={14} className="animate-spin text-gray-400" />}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                        {fb && !fb.ok && (
-                          <tr className="border-0">
-                            <td colSpan={5} className="px-4 pb-2 pt-0">
-                              <ErrorBanner fb={fb} onDismiss={() => setRowFb(p => ({ ...p, [row.id]: null }))} />
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 // ─── Audit table (read-only, admin only) ──────────────────────────────────────
 
 function AuditCell({ name, at, serial, color }) {
@@ -976,33 +718,28 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
 
 export default function ScanStation({ forcedStage }) {
   const { employeeData, loadingPermissions } = useAuth();
-  const { isAdmin, isWarehouse, isDriver } = useRole(employeeData);
+  const { isAdmin, isDriver } = useRole(employeeData);
 
   const today = new Date().toLocaleDateString('en-CA');
 
   // ─ role beats forcedStage for non-admin users ──────────────────
   const tabOptions = useMemo(() => {
-    const roleKnown = isAdmin || isWarehouse || isDriver;
+    const roleKnown = isAdmin || isDriver;
     if (roleKnown && !isAdmin) {
-      const base = [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
-      // Returns (A5.7) is storekeeper/warehouse scoped — drivers don't scan returns.
-      if (isWarehouse) base.push({ id: 'returns', label: 'Returns' });
-      return base;
+      return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     }
     // Admin: respect forcedStage or show all
     if (forcedStage === 'unloading') return [{ id: 'unloading', label: 'Unloading' }];
-    if (forcedStage === 'returns')   return [{ id: 'returns', label: 'Returns' }];
     if (forcedStage === 'driver')    return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     if (forcedStage === 'audit')     return [{ id: 'audit', label: 'Audit' }];
     if (isAdmin) return [{ id: 'loading', label: 'Loading' }, { id: 'unloading', label: 'Unloading' }];
     return [{ id: 'loading', label: 'Loading' }]; // safe default
-  }, [forcedStage, isAdmin, isDriver, isWarehouse]);
+  }, [forcedStage, isAdmin, isDriver]);
 
   // forcedStage determines the initial active tab regardless of role order
   const [tab, setTab] = useState(() => {
     if (forcedStage === 'unloading') return 'unloading';
     if (forcedStage === 'audit')     return 'audit';
-    if (forcedStage === 'returns')   return 'returns';
     return tabOptions[0].id;
   });
 
@@ -1017,12 +754,10 @@ export default function ScanStation({ forcedStage }) {
     if (forcedStage === 'unloading') setTab('unloading');
     else if (forcedStage === 'driver') setTab('loading');
     else if (forcedStage === 'audit') setTab('audit');
-    else if (forcedStage === 'returns') setTab('returns');
   }, [forcedStage]);
 
   const orderStatus = tab === 'unloading' ? 'Delivering,Delivered'
     : tab === 'audit'   ? 'all'
-    : tab === 'returns' ? 'Failed'
     : 'Scheduled';
 
   // ── Data ─────────────────────────────────────────────────────────────────────
@@ -1055,10 +790,7 @@ export default function ScanStation({ forcedStage }) {
   const rows = useMemo(() => {
     const allRows = filteredOrders.flatMap(order => {
       const items = itemMap[order.id]?.items || order.order_products || [];
-      // Returns tab is scoped to failed line items only — successfully delivered
-      // items on a partially-failed order never enter the return workflow.
-      const scoped = tab === 'returns' ? items.filter(i => i.item_delivery_status === 'failed') : items;
-      return scoped.map(item => ({ ...item, _orderId: order.id, _order: order }));
+      return items.map(item => ({ ...item, _orderId: order.id, _order: order }));
     });
     if (!search) return allRows;
     const s = search.toLowerCase();
@@ -1066,13 +798,13 @@ export default function ScanStation({ forcedStage }) {
       const name   = (row.products?.product_name || row.odoo_product_name || '').toLowerCase();
       const so     = row._order?.odoo_order_ref?.toLowerCase() || row._order?.id?.toLowerCase() || '';
       const cust   = row._order?.customers?.full_name?.toLowerCase() || '';
-      const serial = [row.assigned_serial, row.loaded_serial, row.unloaded_serial, row.returned_serial]
+      const serial = [row.assigned_serial, row.loaded_serial, row.unloaded_serial]
                        .filter(Boolean).join(' ').toLowerCase();
       return name.includes(s) || so.includes(s) || cust.includes(s) || serial.includes(s);
     });
-  }, [filteredOrders, itemMap, search, tab]);
+  }, [filteredOrders, itemMap, search]);
 
-  const tabLabel = tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : tab === 'returns' ? 'Returns' : 'Audit';
+  const tabLabel = tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : 'Audit';
 
   // Global scan — loading and unloading tabs
   const [showGlobalCam,    setShowGlobalCam]    = useState(false);
@@ -1130,7 +862,7 @@ export default function ScanStation({ forcedStage }) {
       {/* Global scanner modal (loading/unloading) */}
       {showGlobalCam && (
         <ScannerModal
-          itemName={`Scan item to ${tab === 'loading' ? 'load' : tab === 'returns' ? 'receive' : 'unload'}`}
+          itemName={`Scan item to ${tab === 'loading' ? 'load' : 'unload'}`}
           onScan={v => { setShowGlobalCam(false); setGlobalScanSerial(v); setTimeout(() => setGlobalScanSerial(null), 200); }}
           onClose={() => setShowGlobalCam(false)}
         />
@@ -1163,12 +895,10 @@ export default function ScanStation({ forcedStage }) {
         ) : rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
             {tab === 'audit' ? <ClipboardList size={48} className="opacity-20" />
-              : tab === 'returns' ? <PackageCheck size={48} className="opacity-20" />
               : <Truck size={48} className="opacity-20" />}
             <p className="text-base font-medium text-gray-500">
               {search ? 'No items match your search.'
                 : tab === 'audit'   ? 'No items for this date.'
-                : tab === 'returns' ? 'No items awaiting return for this date.'
                 : `No ${tabLabel.toLowerCase()} items for this date.`}
             </p>
           </div>
@@ -1182,14 +912,6 @@ export default function ScanStation({ forcedStage }) {
             )}
             {tab === 'audit' ? (
               <AuditTable rows={rows} isAdmin={isAdmin} onUpdated={updateItem} />
-            ) : tab === 'returns' ? (
-              <ReturnsTable
-                rows={rows}
-                employeeId={employeeData?.id || null}
-                onUpdated={updateItem}
-                globalScanSerial={globalScanSerial}
-                onGlobalScanError={setGlobalError}
-              />
             ) : (
               <ItemTable
                 rows={rows}

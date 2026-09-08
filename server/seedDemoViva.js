@@ -1,7 +1,7 @@
 // server/seedDemoViva.js
 //
 // Seeds demo orders across 3 time slots on 20 June 2026 for the FYP viva demo.
-// All 3 slots share one truck + delivery team + warehouse team.
+// All 3 slots share one truck + delivery team.
 //
 //   09:00–12:00  → DEMO-001  Sofa (assigned_serial enforced) + Fridge (no serial)
 //                  DEMO-002  Fridge only (single-item order)
@@ -10,7 +10,6 @@
 //
 // Truck      : HS0823 (1 tonne)
 // Delivery   : HS Delivery Team
-// Warehouse  : HS Warehouse/Storekeeper Team
 //
 // Safe to re-run — removes prior DEMO-* orders first.
 //
@@ -26,7 +25,6 @@ const prisma = require('./prismaClient');
 const DEMO_PREFIX     = 'DEMO';
 const SLOT_DATE       = '2026-06-30';
 const DRIVER_EMAIL    = 'drivertan@gmail.com';
-const WAREHOUSE_EMAIL = 'warehousetan@gmail.com';
 const ADMIN_EMAIL     = 'testerAdmin@gmail.com';
 
 const SALESPERSON_NAME  = 'Salesperson Tan';
@@ -36,7 +34,6 @@ const CUSTOMER_PHONE    = '01156751977';
 const TRUCK_PLATE         = 'HS0823';
 const TRUCK_TONE          = 1;
 const DELIVERY_TEAM_TYPE  = 'HS Delivery Team';
-const WAREHOUSE_TEAM_TYPE = 'HS Warehouse/ Storekeeper Team';
 
 async function cleanup() {
   const orders = await prisma.orders.findMany({
@@ -81,14 +78,13 @@ async function upsertTeam(teamType) {
   return team;
 }
 
-async function createSlot({ timeStart, timeEnd, deliveryTeamId, warehouseTeamId, truckId }) {
+async function createSlot({ timeStart, timeEnd, deliveryTeamId, truckId }) {
   const slot = await prisma.time_slots.create({
     data: {
       date:               SLOT_DATE,
       time_window_start:  timeStart,
       time_window_end:    timeEnd,
       delivery_team_id:   deliveryTeamId,
-      warehouse_team_id:  warehouseTeamId,
       truck_id:           truckId,
       slot_status:        'scheduled',
       available_flag:     true,
@@ -107,9 +103,6 @@ async function main() {
   // ── Resolve existing accounts (run seedDriverTestData.js first) ────────────
   const driver = await prisma.employees.findFirst({ where: { email: DRIVER_EMAIL } });
   if (!driver) throw new Error('Driver account not found — run seedDriverTestData.js first');
-
-  const warehouse = await prisma.employees.findFirst({ where: { email: WAREHOUSE_EMAIL } });
-  if (!warehouse) throw new Error('Warehouse account not found — run seedDriverTestData.js first');
 
   const admin = await prisma.employees.findFirst({ where: { email: ADMIN_EMAIL } });
   if (!admin) throw new Error('Admin account not found — run seedDriverTestData.js first');
@@ -134,8 +127,7 @@ async function main() {
   // ── Truck + teams (shared across all 3 slots) ──────────────────────────────
   const truck        = await upsertTruck({ plateNo: TRUCK_PLATE, tone: TRUCK_TONE });
   const deliveryTeam  = await upsertTeam(DELIVERY_TEAM_TYPE);
-  const warehouseTeam = await upsertTeam(WAREHOUSE_TEAM_TYPE);
-  console.log(`[seed] Truck: ${truck.plate_no} (${truck.tone}T) | Delivery: ${DELIVERY_TEAM_TYPE} | Warehouse: ${WAREHOUSE_TEAM_TYPE}`);
+  console.log(`[seed] Truck: ${truck.plate_no} (${truck.tone}T) | Delivery: ${DELIVERY_TEAM_TYPE}`);
 
   // ── Products ──────────────────────────────────────────────────────────────
   const sofa = await prisma.products.findFirst({ where: { product_name: 'NOVA L-Shape Sofa 3+2 Seater' } })
@@ -173,9 +165,9 @@ async function main() {
     }});
 
   // ── Time slots: 09:00–12:00, 13:00–17:00, 19:00–21:00 — all on SLOT_DATE ───
-  const slot9to12  = await createSlot({ timeStart: '09:00', timeEnd: '12:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
-  const slot13to17 = await createSlot({ timeStart: '13:00', timeEnd: '17:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
-  const slot19to21 = await createSlot({ timeStart: '19:00', timeEnd: '21:00', deliveryTeamId: deliveryTeam.id, warehouseTeamId: warehouseTeam.id, truckId: truck.id });
+  const slot9to12  = await createSlot({ timeStart: '09:00', timeEnd: '12:00', deliveryTeamId: deliveryTeam.id, truckId: truck.id });
+  const slot13to17 = await createSlot({ timeStart: '13:00', timeEnd: '17:00', deliveryTeamId: deliveryTeam.id, truckId: truck.id });
+  const slot19to21 = await createSlot({ timeStart: '19:00', timeEnd: '21:00', deliveryTeamId: deliveryTeam.id, truckId: truck.id });
 
   // ── Order helper ─────────────────────────────────────────────────────────
   async function createOrder({ ref, slot, startTime, endTime, notes }) {
@@ -251,8 +243,6 @@ async function main() {
   console.log(`  Date        : ${SLOT_DATE}`);
   console.log(`  Truck       : ${truck.plate_no} (${truck.tone}T)`);
   console.log(`  Delivery    : ${DELIVERY_TEAM_TYPE}`);
-  console.log(`  Warehouse   : ${WAREHOUSE_TEAM_TYPE}`);
-  console.log(`  Storekeeper : ${WAREHOUSE_EMAIL} / Driver@123  (Scan Station → Picking)`);
   console.log(`  Driver      : ${DRIVER_EMAIL} / Driver@123  (Scan Station → Loading/Unloading, Leave Warehouse)`);
   console.log(`  Admin       : ${ADMIN_EMAIL} / Admin@123  (Cases → Order Issues)`);
   console.log(`  Customer    : ${customer.full_name} / ${customer.phone}`);

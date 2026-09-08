@@ -1,0 +1,37 @@
+# server/docker-compose.demo.yml
+#
+# Throwaway Postgres instance for demo/presentation seed data ONLY.
+#
+# This is completely disconnected from server/.env — nothing in the running
+# app ever reads this file, and starting/stopping it cannot touch PRODUCTION
+# or SANDBOX. Port 5433 (not 5432) so it never collides with a local Postgres
+# install either.
+#
+# Start   : docker compose -f docker-compose.demo.yml up -d
+# Stop    : docker compose -f docker-compose.demo.yml stop        (keeps data, frees CPU/RAM)
+# Destroy : docker compose -f docker-compose.demo.yml down -v     (wipes the volume — irreversible)
+#
+# See DEMO.md for the full walkthrough (migrate, seed, point the app at it, teardown).
+
+services:
+  tbm-demo-db:
+    image: postgres:16-alpine
+    container_name: tbm-demo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tbm_demo
+      POSTGRES_PASSWORD: tbm_demo
+      POSTGRES_DB: tbm_demo
+    ports:
+      - "5433:5432"
+    volumes:
+      - tbm_demo_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tbm_demo -d tbm_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tbm_demo_data:
+    name: tbm_demo_data

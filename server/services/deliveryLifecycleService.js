@@ -261,7 +261,6 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
       time_slot_id:      timeSlotId,
       truck_id:          slot.truck_id || null,
       delivery_team_id:  slot.delivery_team_id || null,
-      warehouse_team_id: slot.warehouse_team_id || null,
       driver_id:         slot.truck?.driver_id ?? null,
       assistant_id:      slot.truck?.assistant_id ?? null,
       status:            'active',

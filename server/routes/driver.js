@@ -60,19 +60,7 @@ router.get('/jobs', async (req, res) => {
         order_products: { include: { products: { select: { product_name: true } } } },
         customers:      { select: { full_name: true, phone: true } },
         buildings:      { select: { building_name: true } },
-        time_slots: {
-          include: {
-            warehouse_team: {
-              include: {
-                assignments: {
-                  where:   { employee: { active_flag: true } },
-                  include: { employee: { select: { name: true, display_name: true, contact_number: true } } },
-                  take:    1,
-                },
-              },
-            },
-          },
-        },
+        time_slots:     true,
       },
       orderBy: { scheduled_start_date_time: 'asc' },
     });
@@ -96,10 +84,6 @@ router.get('/jobs', async (req, res) => {
         o.delivery_postcode,
         o.delivery_state,
       ].filter(Boolean).join(', ');
-
-      // Pick first warehouse-team member with a contact number
-      const warehouseAssignment = o.time_slots?.warehouse_team?.assignments?.[0];
-      const warehouseEmployee   = warehouseAssignment?.employee;
 
       const slotDateKey = o.time_slots?.date ? toAppDateKey(o.time_slots.date) : null;
       const assignedDate = slotDateKey
@@ -127,10 +111,6 @@ router.get('/jobs', async (req, res) => {
         odoo_order_ref:           o.odoo_order_ref || null,
         salesperson_name:         o.salesperson_name  || null,
         salesperson_phone:        o.salesperson_phone || null,
-        warehouse_contact_name:   warehouseEmployee
-          ? (warehouseEmployee.display_name || warehouseEmployee.name || null)
-          : null,
-        warehouse_contact_phone:  warehouseEmployee?.contact_number || null,
         issue_priority_level:     o.issue_priority_level || null,
         issue_reason:             o.issue_reason         || null,
         issue_desc:               o.issue_desc           || null,

@@ -493,24 +493,12 @@ async function fetchTeams() {
   const deliveryTeams = allTeams.filter(team =>
     (team.team_type || '').toLowerCase().includes('delivery') && teamHasSomeRoles(team, 'delivery')
   );
-  const warehouseTeams = allTeams.filter(team => teamHasSomeRoles(team, 'storekeeper'));
   const installationTeams = allTeams.filter(team => teamHasSomeRoles(team, 'installation'));
 
   console.log(`Delivery teams: ${deliveryTeams.length}`);
-  console.log(`Warehouse teams: ${warehouseTeams.length}`);
   console.log(`Installation teams: ${installationTeams.length}`);
 
-  return { deliveryTeams, warehouseTeams, installationTeams };
-}
-
-function teamHasAllRoles(team, keyword) {
-  const key = String(keyword || '').toLowerCase();
-  const members = team?.assignments || [];
-  if (members.length === 0) return false;
-  return members.every(a => {
-    const roleName = a?.employee?.role?.name || '';
-    return roleName.toLowerCase().includes(key);
-  });
+  return { deliveryTeams, installationTeams };
 }
 
 function teamHasSomeRoles(team, keyword) {
@@ -591,7 +579,7 @@ async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, truck
     console.log(`[ensureTimeslotAssignments] No orders in timeslot. Clearing assignments.`);
     await prisma.time_slots.update({
       where: { id: timeslotId },
-      data: { delivery_team_id: null, warehouse_team_id: null, truck_id: null }
+      data: { delivery_team_id: null, truck_id: null }
     });
     return;
   }
@@ -604,29 +592,20 @@ async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, truck
 
   // --- Start Debug Logging ---
   console.log('[ensureTimeslotAssignments] All delivery teams fetched:', JSON.stringify(teams.deliveryTeams, null, 2));
-  console.log('[ensureTimeslotAssignments] All warehouse teams fetched:', JSON.stringify(teams.warehouseTeams, null, 2));
 
   const deliveryCandidates = (teams.deliveryTeams || []).filter(t => teamHasSomeRoles(t, 'delivery'));
-  const warehouseCandidates = (teams.warehouseTeams || []).filter(t => teamHasSomeRoles(t, 'storekeeper'));
 
   console.log('[ensureTimeslotAssignments] Delivery team candidates after filtering:', JSON.stringify(deliveryCandidates, null, 2));
-  console.log('[ensureTimeslotAssignments] Warehouse team candidates after filtering:', JSON.stringify(warehouseCandidates, null, 2));
   // --- End Debug Logging ---
 
   const deliveryCounts = await getTeamAssignmentCounts(deliveryCandidates.map(t => t.id), 'delivery_team_id');
-  const warehouseCounts = await getTeamAssignmentCounts(warehouseCandidates.map(t => t.id), 'warehouse_team_id');
 
   const deliveryTeam = timeslot.delivery_team_id && deliveryCandidates.some(t => t.id === timeslot.delivery_team_id)
     ? deliveryCandidates.find(t => t.id === timeslot.delivery_team_id)
     : pickLeastUsedTeam(deliveryCandidates, deliveryCounts);
 
-  const warehouseTeam = timeslot.warehouse_team_id && warehouseCandidates.some(t => t.id === timeslot.warehouse_team_id)
-    ? warehouseCandidates.find(t => t.id === timeslot.warehouse_team_id)
-    : pickLeastUsedTeam(warehouseCandidates, warehouseCounts);
-    
   // --- More Debug Logging ---
   console.log('[ensureTimeslotAssignments] Chosen delivery team:', JSON.stringify(deliveryTeam, null, 2));
-  console.log('[ensureTimeslotAssignments] Chosen warehouse team:', JSON.stringify(warehouseTeam, null, 2));
   // --- End Debug Logging ---
 
   const requiredTone = slotVolumeCm3 > 0 ? (slotVolumeCm3 > getTruckCapacitySummary(trucks).maxOneTonCapacity ? 3 : 1) : 1;
@@ -635,13 +614,12 @@ async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, truck
   const currentTruckFits = currentTruck && Number(currentTruck?.tone || 0) >= requiredTone && getTruckVolumeCm3(currentTruck) >= slotVolumeCm3;
   const chosenTruck = currentTruckFits ? currentTruck : pickLeastUsedTruck(trucks, truckCounts, requiredTone, slotVolumeCm3);
 
-  console.log(`[ensureTimeslotAssignments] Updating timeslot with DeliveryTeamID: ${deliveryTeam?.id || null}, WarehouseTeamID: ${warehouseTeam?.id || null}`);
+  console.log(`[ensureTimeslotAssignments] Updating timeslot with DeliveryTeamID: ${deliveryTeam?.id || null}`);
 
   await prisma.time_slots.update({
     where: { id: timeslotId },
     data: {
       delivery_team_id: deliveryTeam?.id || null,
-      warehouse_team_id: warehouseTeam?.id || null,
       truck_id: chosenTruck?.id || null
     }
   });

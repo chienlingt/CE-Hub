@@ -39,7 +39,6 @@ import RoleAccessControl from './admin/access/accessControl';
 import AutoScheduleReview from './admin/schedule/AutoScheduleReview';
 import DeliverySchedule from './delivery/DelSchedule';
 import InstallationSchedule from './installer/InsSchedule';
-import WarehouseLoadingSchedule from './warehouse/truckSchedule';
 import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
 import DriverDashboard from './driver/DriverDashboard';
@@ -50,7 +49,6 @@ import DeliveryIssues from './admin/exceptions/DeliveryIssues';
 // Scan Station wrappers — stage locked by tab selection
 const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
 const ScanStationUnloading = () => <ScanStation forcedStage="unloading" />;
-const ScanStationReturns   = () => <ScanStation forcedStage="returns" />;
 const ScanStationAudit     = () => <ScanStation forcedStage="audit" />;
 
 /**
@@ -165,14 +163,6 @@ const Layout = () => {
     //     { id: 'installation', label: 'Installation Schedule', path: '', component: InstallationSchedule },
     //   ],
     // },
-    // warehouse: {
-    //   title: 'Warehouse Schedule',
-    //   icon: Users,
-    //   route: '/warehouse',
-    //   topNavItems: [
-    //     { id: 'warehouse', label: 'Warehouse Schedule', path: '', component: WarehouseLoadingSchedule },
-    //   ],
-    // },
     customer: {
       title: 'Order Management',
       icon: Users,
@@ -187,11 +177,8 @@ const Layout = () => {
       icon: Scan,
       route: '/scanning',
       topNavItems: [
-        { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver', 'warehouse', 'storekeeper'] },
-        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver', 'warehouse', 'storekeeper'] },
-        // A5.7 — storekeeper scan-to-receive for failed-delivery returns. Not driver-scoped
-        // (returns happen at the warehouse, not in the field).
-        { id: 'returns',   label: 'Returns',   path: 'returns',   component: ScanStationReturns,   allowedRoles: ['admin', 'warehouse', 'storekeeper'] },
+        { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
+        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
       ],
     },

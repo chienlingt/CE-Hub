@@ -23,6 +23,7 @@ iisnode/
 .env.test.local
 .env.production.local
 server/.env
+server/.env.demo
 !server/.env.example
 
 # IIS logs

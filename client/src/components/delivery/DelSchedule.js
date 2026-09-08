@@ -266,11 +266,6 @@ export default function DeliverySchedule() {
                                 Delivery: {slot.delivery_team.team_type}
                               </span>
                             )}
-                            {slot.warehouse_team && (
-                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
-                                Warehouse: {slot.warehouse_team.team_type}
-                              </span>
-                            )}
                             {slot.truck && (
                               <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded">
                                 Truck: {slot.truck.plate_no}

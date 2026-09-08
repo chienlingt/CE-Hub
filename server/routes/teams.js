@@ -172,7 +172,6 @@ router.put('/:id', async (req, res) => {
         assignments: true,
         installation_schedules: true,
         delivery_timeslots: true,
-        warehouse_timeslots: true,
       },
     });
 
@@ -185,8 +184,7 @@ router.put('/:id', async (req, res) => {
     const hasHistory =
       team.assignments.length > 0 ||
       team.installation_schedules.length > 0 ||
-      team.delivery_timeslots.length > 0 ||
-      team.warehouse_timeslots.length > 0;
+      team.delivery_timeslots.length > 0;
 
     // Case 1: No history, just update in place
     if (!hasHistory) {
@@ -270,11 +268,7 @@ router.put('/:id', async (req, res) => {
         where: { delivery_team_id: teamId, date: { gte: todayISO } },
         data: { delivery_team_id: newTeam.id },
       });
-      await tx.time_slots.updateMany({
-        where: { warehouse_team_id: teamId, date: { gte: todayISO } },
-        data: { warehouse_team_id: newTeam.id },
-      });
-      
+
       return newTeam;
     });
 
@@ -301,7 +295,6 @@ router.get('/:id/deletability', async (req, res) => {
         assignments: { select: { id: true } }, // Also check for members
         installation_schedules: { select: { status: true } },
         delivery_timeslots: { select: { date: true } },
-        warehouse_timeslots: { select: { date: true } },
       },
     });
 
@@ -312,8 +305,7 @@ router.get('/:id/deletability', async (req, res) => {
     const hasAssignments = team.assignments.length > 0;
     const hasSchedules =
       team.installation_schedules.length > 0 ||
-      team.delivery_timeslots.length > 0 ||
-      team.warehouse_timeslots.length > 0;
+      team.delivery_timeslots.length > 0;
 
     if (!hasSchedules && !hasAssignments) {
       return res.json({
@@ -328,8 +320,7 @@ router.get('/:id/deletability', async (req, res) => {
 
     const hasFutureSchedules =
       team.installation_schedules.some((s) => s.status === 'Scheduled') ||
-      team.delivery_timeslots.some((s) => s.date >= todayISO) ||
-      team.warehouse_timeslots.some((s) => s.date >= todayISO);
+      team.delivery_timeslots.some((s) => s.date >= todayISO);
 
     if (hasFutureSchedules) {
       return res.json({
@@ -364,7 +355,6 @@ router.delete('/:id', async (req, res) => {
         assignments: { select: { id: true } },
         installation_schedules: { select: { status: true } },
         delivery_timeslots: { select: { date: true } },
-        warehouse_timeslots: { select: { date: true } },
       },
     });
 
@@ -375,8 +365,7 @@ router.delete('/:id', async (req, res) => {
     const hasAssignments = team.assignments.length > 0;
     const hasSchedules =
       team.installation_schedules.length > 0 ||
-      team.delivery_timeslots.length > 0 ||
-      team.warehouse_timeslots.length > 0;
+      team.delivery_timeslots.length > 0;
 
     // Case 1: No schedules and no members -> Hard delete
     if (!hasSchedules && !hasAssignments) {
@@ -390,8 +379,7 @@ router.delete('/:id', async (req, res) => {
 
     const hasFutureSchedules =
       team.installation_schedules.some((s) => s.status === 'Scheduled') ||
-      team.delivery_timeslots.some((s) => s.date >= todayISO) ||
-      team.warehouse_timeslots.some((s) => s.date >= todayISO);
+      team.delivery_timeslots.some((s) => s.date >= todayISO);
 
     // Case 2: Has future schedules -> Block
     if (hasFutureSchedules) {

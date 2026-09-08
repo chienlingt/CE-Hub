@@ -26,8 +26,6 @@ const LIVEOPS_ASSIST_EMAIL  = 'liveops.assist@cehub.local';
 const LIVEOPS_MEMBER_EMAIL  = 'liveops.member@cehub.local';
 const TEST_TRUCK_PLATE      = 'TEST-DRV-T1';
 const LIVEOPS_TEAM_TYPE     = 'TEST-DRV Live Ops Team';
-const WAREHOUSE_TEAM_TYPE   = 'TEST-DRV Warehouse Team';
-const WAREHOUSE_STAFF_EMAIL = 'warehouse.test@cehub.local';
 
 /** Default salesperson on every test order (overridable per scenario). */
 const DEFAULT_SALESPERSON = {
@@ -182,13 +180,6 @@ async function cleanup() {
   if (liveOpsTeam) {
     await prisma.employee_team_assignments.deleteMany({ where: { team_id: liveOpsTeam.id } }).catch(() => {});
     await prisma.teams.delete({ where: { id: liveOpsTeam.id } }).catch(() => {});
-  }
-
-  // Clean up warehouse demo team
-  const warehouseTeam = await prisma.teams.findFirst({ where: { team_type: WAREHOUSE_TEAM_TYPE } });
-  if (warehouseTeam) {
-    await prisma.employee_team_assignments.deleteMany({ where: { team_id: warehouseTeam.id } }).catch(() => {});
-    await prisma.teams.delete({ where: { id: warehouseTeam.id } }).catch(() => {});
   }
 
   console.log(`[seed] Cleaned ${orderIds.length} prior test orders`);
@@ -400,7 +391,6 @@ async function seedCustomers() {
 async function createSlot({
   date,
   deliveryTeamId,
-  warehouseTeamId = null,
   slotStatus = 'scheduled',
   truckId    = null,
   startedBy  = null,
@@ -413,7 +403,6 @@ async function createSlot({
       time_window_start: timeStart,
       time_window_end:   timeEnd,
       delivery_team_id:  deliveryTeamId,
-      warehouse_team_id: warehouseTeamId,
       truck_id:          truckId,
       slot_status:       slotStatus,
       available_flag:    true,
@@ -540,18 +529,6 @@ async function main() {
   const deliveryTeam = await resolveDeliveryOpsTeam();
   await assignTeam(driver.id, deliveryTeam.id);
 
-  // Warehouse team + coordinator — warehouse contact in driver Report modal (via slot)
-  const warehouseTeam = await upsertTeam(WAREHOUSE_TEAM_TYPE);
-  const warehouseStaff = await upsertEmployee({
-    email:         WAREHOUSE_STAFF_EMAIL,
-    name:          'Farid Warehouse',
-    password:      DRIVER_PASS,
-    roleId:        driverRole.id,
-    contactNumber: '601156751977',
-  });
-  await assignTeam(warehouseStaff.id, warehouseTeam.id);
-  console.log(`[seed] Warehouse contact: ${warehouseStaff.name} (${warehouseStaff.contact_number})`);
-
   // ── Live Ops demo accounts (contact feature, A.3.7+) ─────────────────────
   // Razif: truck driver AND started_by → tests role dedup (Trip lead + Truck driver → 1 row)
   const razif = await upsertEmployee({
@@ -604,7 +581,6 @@ async function main() {
   const slotScheduled = await createSlot({
     date,
     deliveryTeamId:  deliveryTeam.id,
-    warehouseTeamId: warehouseTeam.id,
     slotStatus:      'scheduled',
   });
 
@@ -612,7 +588,6 @@ async function main() {
   const slotActive = await createSlot({
     date,
     deliveryTeamId:  deliveryTeam.id,
-    warehouseTeamId: warehouseTeam.id,
     slotStatus:      'out_for_delivery',
     timeStart:       '13:00',
     timeEnd:         '18:00',
@@ -630,7 +605,6 @@ async function main() {
   const slotPending = await createSlot({
     date,
     deliveryTeamId:  deliveryTeam.id,
-    warehouseTeamId: warehouseTeam.id,
     slotStatus:      'scheduled',
     timeStart:       '08:00',
     timeEnd:         '11:00',
@@ -644,7 +618,6 @@ async function main() {
   const slotDemo = await createSlot({
     date,
     deliveryTeamId:  liveOpsTeam.id,
-    warehouseTeamId: warehouseTeam.id,
     slotStatus:      'out_for_delivery',
     truckId:         truck.id,
     startedBy:       razif.id,   // Razif departed → appears as "Trip lead"
@@ -1032,7 +1005,6 @@ async function main() {
   console.log(`Driver employee_id: ${driver.id}`);
   console.log(`Date filter (today): ${date}`);
   console.log(`Salesperson (default): ${DEFAULT_SALESPERSON.name} / ${DEFAULT_SALESPERSON.phone}`);
-  console.log(`Warehouse (slotted orders): ${warehouseStaff.name} / ${warehouseStaff.contact_number}`);
 
   console.log('\n--- Live Ops demo contacts (slot C / TEST-DRV-LIVE-*) ---');
   console.log(`  Truck        : ${TEST_TRUCK_PLATE}`);
@@ -1062,7 +1034,7 @@ async function main() {
   console.log('  TEST 13   Cases → Order Issues (A6-style failure, no driver report)');
   console.log('  Notify    Bell: TEST 10 → Delivery Issues; TEST 13 → Order Issues');
   console.log('');
-  console.log('  --- Pending-to-Pick (Warehouse Loading Schedule) ---');
+  console.log('  --- Pending-to-Pick (Scan Station → Loading) ---');
   console.log('  PICK 1    Single item (fridge) — picking_status: pending');
   console.log('  PICK 2    Bundle (washer + dryer) — both pending');
   console.log('  PICK 3    Install item (oven) — pending');

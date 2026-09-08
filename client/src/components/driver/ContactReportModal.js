@@ -1,10 +1,10 @@
 // client/src/components/driver/ContactReportModal.js
-// Driver contact / escalation menu: call or WhatsApp salesperson/warehouse,
+// Driver contact / escalation menu: call or WhatsApp the salesperson,
 // or send a report escalation to admin with a mandatory reason + note.
 import { useState } from 'react';
 import { X, Phone, MessageCircle, AlertTriangle, ChevronRight, CheckCircle } from 'lucide-react';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
-import { salespersonIssueTemplate, warehouseIssueTemplate } from '../../utils/templateMessages';
+import { salespersonIssueTemplate } from '../../utils/templateMessages';
 import { ESCALATION_REASONS, ESCALATION_REASON_STYLES } from '../../utils/escalationReasons';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
@@ -35,7 +35,6 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
   const shortId = job.odoo_order_ref?.toUpperCase() || 'Not Synced';
 
   const hasSalesperson = !!job.salesperson_phone;
-  const hasWarehouse   = !!job.warehouse_contact_phone;
 
   function handleCallSalesperson() {
     callCustomer(job.salesperson_phone);
@@ -44,15 +43,6 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
   function handleWhatsAppSalesperson() {
     const msg = salespersonIssueTemplate(shortId, job.customer_name, job.address, job.status);
     openWhatsApp(job.salesperson_phone, msg);
-  }
-
-  function handleCallWarehouse() {
-    callCustomer(job.warehouse_contact_phone);
-  }
-
-  function handleWhatsAppWarehouse() {
-    const msg = warehouseIssueTemplate(shortId, job.product, job.address);
-    openWhatsApp(job.warehouse_contact_phone, msg);
   }
 
   async function handleAdminEscalate() {
@@ -213,39 +203,6 @@ export default function ContactReportModal({ job, employeeId, onClose, onSuccess
               type="button"
               disabled={!hasSalesperson}
               onClick={handleWhatsAppSalesperson}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-sm text-green-700 hover:bg-green-50 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <MessageCircle className="w-4 h-4" /> WhatsApp
-            </button>
-          </div>
-        </div>
-
-        {/* Contact Warehouse */}
-        <div className="py-3">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">Contact Warehouse</p>
-              {job.warehouse_contact_name && (
-                <p className="text-xs text-gray-500">{job.warehouse_contact_name}</p>
-              )}
-              {!hasWarehouse && (
-                <p className="text-xs text-gray-400 italic">No contact available</p>
-              )}
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={!hasWarehouse}
-              onClick={handleCallWarehouse}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <Phone className="w-4 h-4" /> Call
-            </button>
-            <button
-              type="button"
-              disabled={!hasWarehouse}
-              onClick={handleWhatsAppWarehouse}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-sm text-green-700 hover:bg-green-50 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <MessageCircle className="w-4 h-4" /> WhatsApp

@@ -425,13 +425,6 @@ export default function Schedule() {
       delivery_team_id: teamId
     }));
   };
-  const handleAssignWarehouseTeam = (teamId) => {
-    setEditingTimeSlot(ts => ({
-      ...ts,
-      warehouse_team_id: teamId
-    }));
-  };
-
   // --- Order reassignment handlers ---
   const handleEditOrder = (order) => {
     // Extract time from ISO string if available
@@ -1078,14 +1071,6 @@ export default function Schedule() {
               <p className="text-xs text-gray-500 mt-1">Select delivery team for this time slot</p>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Assign Warehouse Team</label>
-              <select value={editingTimeSlot.warehouse_team_id || ''} onChange={e => handleAssignWarehouseTeam(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md text-sm">
-                <option value="">-- Select Team --</option>
-                {teams.filter(t => field.teamType(t)?.toLowerCase().includes('warehouse')).map(team => <option key={`w-${String(field.teamId(team))}`} value={field.teamId(team)}>{field.teamType(team)}</option>)}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Select warehouse team for loading</p>
-            </div>
           </div>
 
           <div className="flex gap-2 mt-4">

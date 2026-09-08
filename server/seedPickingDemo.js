@@ -3,7 +3,7 @@
 // Seeds a single picking-demo order for 9 June 2026, slot 09:00–12:00.
 //
 // Two items:
-//   1. LG Fridge  — assigned_serial = 'FRIDGE-SN-001'  (storekeeper MUST scan exact match)
+//   1. LG Fridge  — assigned_serial = 'FRIDGE-SN-001'  (scanner MUST scan exact match)
 //   2. L-Shape Sofa — assigned_serial = null             (any scan accepted)
 //
 // Usage:  node seedPickingDemo.js
@@ -136,7 +136,7 @@ async function main() {
       product_id:      fridge.id,
       quantity:        1,
       picking_status:  'pending',
-      assigned_serial: 'FRIDGE-SN-001',   // storekeeper MUST scan this exact serial
+      assigned_serial: 'FRIDGE-SN-001',   // scanner MUST scan this exact serial
       service_type:    'delivery_only',
     },
   });
@@ -164,7 +164,7 @@ async function main() {
   console.log('');
   console.log('  Item 1  LG Fridge');
   console.log('          assigned_serial = FRIDGE-SN-001');
-  console.log('          → Storekeeper must scan exactly "FRIDGE-SN-001" to pick');
+  console.log('          → Scanner must scan exactly "FRIDGE-SN-001" to pick');
   console.log('');
   console.log('  Item 2  NOVA L-Shape Sofa');
   console.log('          assigned_serial = (none)');

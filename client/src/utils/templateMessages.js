@@ -28,13 +28,6 @@ export function salespersonIssueTemplate(orderId, customerName = '', address = '
 }
 
 /**
- * Template sent to warehouse when a driver needs assistance.
- */
-export function warehouseIssueTemplate(orderId, product = '', address = '') {
-  return `Hi Warehouse team, I need help with Order #${orderId} — ${product} — delivery to ${address}. Please contact me as soon as possible.`;
-}
-
-/**
  * "On the way" template — matches admin template_on_the_way copy.
  */
 export function onTheWayTemplate({

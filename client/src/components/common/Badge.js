@@ -21,7 +21,6 @@ export function TeamBadge({ teamType }) {
         const lowerType = type.toLowerCase();
         if (lowerType.includes('delivery')) return 'bg-blue-100 text-blue-800';
         if (lowerType.includes('installation')) return 'bg-purple-100 text-purple-800';
-        if (lowerType.includes('warehouse')) return 'bg-orange-100 text-orange-800';
         return 'bg-gray-100 text-gray-800';
     };
 

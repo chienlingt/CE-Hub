@@ -19,7 +19,6 @@ const prisma = require('../prismaClient');
 const { sendDeliveryFailureNotifications } = require('./notificationService');
 const { enqueue } = require('./integrationOutboxService');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
-const { createReturnRecord } = require('./returnWorkflowService');
 
 // FR-05-001 — five permitted failure reasons; "Other" requires a description
 const FAILURE_REASONS = [
@@ -198,10 +197,6 @@ async function confirmFailure(orderId, {
     },
   });
 
-  // 8d. Open the Phase 2 return record — CE-Hub-local state, starts 'pending'
-  // regardless of whether the Odoo-side calls below are wired up yet (A5.5).
-  await createReturnRecord(failureEvent.id);
-
   // ── 9. A6 notifications (fire-and-forget, non-fatal) ──────────────────────
   sendDeliveryFailureNotifications(orderId).catch(err =>
     console.error('[A5] sendDeliveryFailureNotifications error:', err.message)
@@ -218,15 +213,6 @@ async function confirmFailure(orderId, {
       idempotencyKey: `order:${orderId}:odoo:Failed`,
     });
   }
-
-  // ── 11. Outbox: RETURN_DO_CREATE (A5.5 — Odoo call is a TODO stub; the CE-Hub
-  // side of the chain — delivery_returns state — is real, see returnWorkflowService) ──
-  await enqueue({
-    eventType:      'RETURN_DO_CREATE',
-    target:         'odoo',
-    payload:        { orderId, odooRef: order.odoo_order_ref || null, failureEventId: failureEvent.id },
-    idempotencyKey: `order:${orderId}:return_do`,
-  });
 
   return updatedOrder;
 }
