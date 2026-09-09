@@ -117,7 +117,6 @@ export default function Schedule() {
     timeSlotAvailable: (ts) => (ts?.available_flag ?? ts?.AvailableFlag ?? ts?.Available ?? true),
     timeSlotTruckId: (ts) => ts?.truck_id ?? ts?.TruckID ?? ts?.truckId,
     timeSlotDeliveryTeamId: (ts) => ts?.delivery_team_id ?? ts?.DeliveryTeamID ?? ts?.deliveryTeamId,
-    timeSlotWarehouseTeamId: (ts) => ts?.warehouse_team_id ?? ts?.WarehouseTeamID ?? ts?.warehouseTeamId,
 
     // Truck
     truckId: (t) => t?.id ?? t?.truck_id ?? t?.TruckID,
@@ -347,8 +346,7 @@ export default function Schedule() {
       TimeWindowEnd: field.timeSlotEnd(slot),
       AvailableFlag: field.timeSlotAvailable(slot),
       truck_id: field.timeSlotTruckId(slot),
-      delivery_team_id: field.timeSlotDeliveryTeamId(slot),
-      warehouse_team_id: field.timeSlotWarehouseTeamId(slot)
+      delivery_team_id: field.timeSlotDeliveryTeamId(slot)
     });
     setShowAddModal(true);
   };
@@ -372,8 +370,7 @@ export default function Schedule() {
       TimeWindowEnd: '',
       AvailableFlag: true,
       truck_id: null,
-      delivery_team_id: null,
-      warehouse_team_id: null
+      delivery_team_id: null
     });
     setShowAddModal(true);
   };
@@ -389,8 +386,7 @@ export default function Schedule() {
         time_window_end: editingTimeSlot.TimeWindowEnd,
         available_flag: !!editingTimeSlot.AvailableFlag,
         truck_id: editingTimeSlot.truck_id || null,
-        delivery_team_id: editingTimeSlot.delivery_team_id || null,
-        warehouse_team_id: editingTimeSlot.warehouse_team_id || null
+        delivery_team_id: editingTimeSlot.delivery_team_id || null
       };
 
       if (addOrEdit === 'edit') {
@@ -702,15 +698,12 @@ export default function Schedule() {
                 // Get truck/team IDs directly from time_slots table
                 const truckId = field.timeSlotTruckId(slot);
                 const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
-                const warehouseTeamId = field.timeSlotWarehouseTeamId(slot);
 
                 const truck = getTruck(truckId) || {};
                 const deliveryTeam = getTeam(deliveryTeamId) || {};
-                const warehouseTeam = getTeam(warehouseTeamId) || {};
 
                 const deliveryTeamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
-                const warehouseTeamMembers = getEmployeesForTeam(field.teamId(warehouseTeam)) || [];
-                
+
                 const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
                   const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
                   const building = buildings.find(b => String(field.buildingId(b)) === String(field.orderBuildingId(order))) || {};
@@ -762,13 +755,11 @@ export default function Schedule() {
                       <div className="flex items-center gap-1"><Package size={10} />{slotOrders.length} orders</div>
                       <div className="flex items-center gap-1"><Truck size={10} />{field.truckPlate(truck) || 'N/A'}</div>
                       {deliveryTeamId && <div className="flex items-center gap-1"><Users size={10} />D: {field.teamType(deliveryTeam) || 'N/A'}</div>}
-                      {warehouseTeamId && <div className="flex items-center gap-1"><Users size={10} />W: {field.teamType(warehouseTeam) || 'N/A'}</div>}
                     </div>
 
                     {expandedSlots.has(slotId) && (
                       <div className="mt-2 pt-2 border-t border-gray-200 text-xs space-y-1">
                         {deliveryTeamId && <div><strong>Delivery Team:</strong> {field.teamType(deliveryTeam) || '—'} ({deliveryTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'})</div>}
-                        {warehouseTeamId && <div><strong>Warehouse Team:</strong> {field.teamType(warehouseTeam) || '—'} ({warehouseTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'})</div>}
                         <div><strong>Truck:</strong> {field.truckTone(truck)}T - {field.truckPlate(truck)}</div>
                         {slotOrders.map((order, orderIdx) => {
                           const orderKey = field.orderId(order) || `${slotId}-order-${orderIdx}`;
@@ -827,14 +818,11 @@ export default function Schedule() {
             // Get truck/team IDs directly from time_slots table
             const truckId = field.timeSlotTruckId(slot);
             const deliveryTeamId = field.timeSlotDeliveryTeamId(slot);
-            const warehouseTeamId = field.timeSlotWarehouseTeamId(slot);
 
             const truck = getTruck(truckId) || {};
             const deliveryTeam = getTeam(deliveryTeamId) || {};
-            const warehouseTeam = getTeam(warehouseTeamId) || {};
 
             const deliveryTeamMembers = getEmployeesForTeam(field.teamId(deliveryTeam)) || [];
-            const warehouseTeamMembers = getEmployeesForTeam(field.teamId(warehouseTeam)) || [];
 
             const slotOrders = getOrdersForSlot(field.timeSlotId(slot)).map(order => {
               const customer = customers.find(c => String(field.customerId(c)) === String(field.orderCustomerId(order))) || {};
@@ -896,17 +884,6 @@ export default function Schedule() {
                         <div><strong>Type:</strong> {field.teamType(deliveryTeam) || 'N/A'}</div>
                         <div><strong>ID:</strong> {field.teamId(deliveryTeam) || 'N/A'}</div>
                         <div><strong>Members:</strong> {deliveryTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'}</div>
-                      </div>
-                    </div>
-                  )}
-
-                  {warehouseTeamId && (
-                    <div className="space-y-2">
-                      <h3 className="font-medium text-sm flex items-center gap-2 text-gray-700"><Users size={16} /> Warehouse Team</h3>
-                      <div className="bg-white p-3 rounded-md border text-sm">
-                        <div><strong>Type:</strong> {field.teamType(warehouseTeam) || 'N/A'}</div>
-                        <div><strong>ID:</strong> {field.teamId(warehouseTeam) || 'N/A'}</div>
-                        <div><strong>Members:</strong> {warehouseTeamMembers.map(e => field.employeeName(e)).join(', ') || 'None'}</div>
                       </div>
                     </div>
                   )}

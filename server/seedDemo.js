@@ -70,7 +70,7 @@ function atTime(day, hhmm) {
 async function truncateAll() {
   const tables = [
     'access_logs', 'chats', 'notifications', 'integration_outbox',
-    'delivery_workflows', 'delivery_returns', 'delivery_failure_events',
+    'delivery_failure_events',
     'rating', 'complaint', 'reports', 'installation_schedules',
     'order_products', 'orders', 'lorry_trips', 'time_slots',
     'employee_team_assignments', 'teams', 'truck_zones', 'trucks',
