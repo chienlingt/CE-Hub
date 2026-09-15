@@ -154,7 +154,7 @@ router.get('/schedule', async (req, res) => {
             buildings: { select: { building_name: true } },
             order_products: {
               select: {
-                id: true, quantity: true, picking_status: true, assigned_serial: true, odoo_product_name: true,
+                id: true, quantity: true, handling_status: true, assigned_serial: true, odoo_product_name: true,
                 products: { select: { id: true, product_name: true, estimated_installation_time_min: true } },
               },
             },

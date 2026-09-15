@@ -186,11 +186,8 @@ model order_products {
   item_delivery_status         String?   @default("pending") @db.VarChar(20)
   loaded_at                    DateTime?
   loaded_by                    String?   @db.Uuid
-  picked_at                    DateTime?
-  picked_by                    String?   @db.Uuid
-  picking_status               String?   @default("pending") @db.VarChar(20)
+  handling_status              String?   @default("pending") @db.VarChar(20)
   loaded_serial                String?
-  picked_serial                String?
   assigned_serial              String?
   unloaded_at                  DateTime?
   unloaded_by                  String?   @db.Uuid

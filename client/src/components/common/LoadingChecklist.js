@@ -32,7 +32,7 @@ function formatDateTime(str) {
 
 // ── Item status row (read-only) ───────────────────────────────────────────────
 function ItemStatusRow({ item, stage, idx }) {
-  const status    = item.picking_status || 'pending';
+  const status    = item.handling_status || 'pending';
   const isLoaded  = status === 'loaded';
   const isPending = status === 'pending';
   const isWaiting = stage === 'driver' && isPending;

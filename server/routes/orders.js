@@ -1310,8 +1310,8 @@ router.get('/:id/loading-status', async (req, res) => {
       unloaded_by_name: item.unloaded_by ? (empMap[item.unloaded_by] || 'Unknown') : null,
     }));
 
-    const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.picking_status));
-    const all_unloaded = enriched.every(i => i.picking_status === 'unloaded');
+    const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.handling_status));
+    const all_unloaded = enriched.every(i => i.handling_status === 'unloaded');
 
     // Fetch order-level status + delivery info
     const order = await prisma.orders.findUnique({
@@ -1334,8 +1334,8 @@ router.get('/:id/loading-status', async (req, res) => {
       all_unloaded,
       ready_to_dispatch: all_loaded,
       ready_to_deliver:  all_unloaded,
-      loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
-      unloaded_count: enriched.filter(i => i.picking_status === 'unloaded').length,
+      loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.handling_status)).length,
+      unloaded_count: enriched.filter(i => i.handling_status === 'unloaded').length,
       total:          enriched.length,
       order_status:   order?.order_status || null,
       delivered_by_name: deliveredByName,
@@ -1385,7 +1385,7 @@ router.post('/:id/dispatch', async (req, res) => {
       include: { products: { select: { product_name: true } } },
     });
 
-    const unloaded = items.filter(i => i.picking_status !== 'loaded');
+    const unloaded = items.filter(i => i.handling_status !== 'loaded');
     if (unloaded.length > 0) {
       return res.status(400).json({
         error:    'Cannot dispatch — not all items have been loaded onto the truck.',
@@ -1393,7 +1393,7 @@ router.post('/:id/dispatch', async (req, res) => {
         unloaded: unloaded.map(i => ({
           id:           i.id,
           product_name: i.products?.product_name,
-          status:       i.picking_status,
+          status:       i.handling_status,
         })),
       });
     }
@@ -1477,12 +1477,12 @@ router.post('/:id/deliver', upload.fields([
       include: { products: { select: { product_name: true } } },
     });
 
-    const notUnloaded = items.filter(i => i.picking_status !== 'unloaded');
+    const notUnloaded = items.filter(i => i.handling_status !== 'unloaded');
     if (notUnloaded.length > 0) {
       return res.status(400).json({
         error:        'Cannot mark as delivered — not all items have been unloaded.',
         code:         'ITEMS_NOT_UNLOADED',
-        not_unloaded: notUnloaded.map(i => ({ id: i.id, product_name: i.products?.product_name, status: i.picking_status })),
+        not_unloaded: notUnloaded.map(i => ({ id: i.id, product_name: i.products?.product_name, status: i.handling_status })),
       });
     }
 
@@ -1856,8 +1856,7 @@ router.delete('/:id/scan-session', async (req, res) => {
     const result = await prisma.order_products.updateMany({
       where: { order_id: req.params.id },
       data: {
-        picking_status:  'pending',
-        picked_serial:   null, picked_by:   null, picked_at:   null,
+        handling_status:  'pending',
         loaded_serial:   null, loaded_by:   null, loaded_at:   null,
         unloaded_serial: null, unloaded_by: null, unloaded_at: null,
       },

@@ -6,7 +6,7 @@
 // scheduled, in-transit, delivered-with-rating, failed-with-return-and-reentry,
 // escalated/overdue, rescheduled, and cancelled — so every dashboard, filter,
 // and report screen has something real to show. Also seeds two orders dated
-// today specifically so every Scan Station tab (Loading/Unloading/Returns/Audit)
+// today specifically so every current Scan Station tab (Loading/Unloading/Audit)
 // has rows without touching the date picker — see DEMO.md's Scan Station table.
 //
 // SAFETY: this script only ever talks to the URL in server/.env.demo, and
@@ -50,7 +50,14 @@ assertDemoDatabase();
 const prisma = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
 
 const DEMO_PASSWORD = 'Demo@1234';
-const now = dayjs();
+
+// Pin the current recording dataset to 10 September 2026 in Malaysia.
+// DEMO_DATE may still override this when a different rehearsal date is needed.
+const demoDate = process.env.DEMO_DATE || '2026-09-10';
+if (!/^\d{4}-\d{2}-\d{2}$/.test(demoDate) || !dayjs(demoDate).isValid()) {
+  throw new Error(`Invalid DEMO_DATE "${demoDate}"; expected YYYY-MM-DD`);
+}
+const now = dayjs(`${demoDate}T12:00:00+08:00`);
 
 // Dates relative to "today" so the demo always looks current whenever it's run.
 const D = {
@@ -84,6 +91,7 @@ async function truncateAll() {
 
 async function main() {
   console.log(`\n=== TBM Demo Seed — writing to ${process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@')} ===\n`);
+  console.log(`[seedDemo] Demo date: ${D.today.format('YYYY-MM-DD')} (Asia/Kuala_Lumpur)`);
 
   await truncateAll();
 
@@ -384,10 +392,17 @@ async function main() {
     departed_at: atTime(D.today, '09:00'), started_by: driver1.id,
     route_polyline: null, route_distance_m: 18400, route_duration_s: 2760, route_computed_at: atTime(D.today, '08:45'),
   }});
-  // Today, still loading at the warehouse (picking/loading dashboard demo)
+  // Today, still loading at the warehouse (loading dashboard demo)
   const slotTodayLoading = await prisma.time_slots.create({ data: {
     date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '18:00',
     delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
+    available_flag: false, slot_status: 'scheduled', created_at: D.today.subtract(2, 'day').toDate(),
+    loading_start_date_time: atTime(D.today, '12:00'),
+  }});
+  // Dedicated loading/departure demo for Razif / Delivery Team A.
+  const slotTodayDemoLoading = await prisma.time_slots.create({ data: {
+    date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '18:00',
+    delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: false, slot_status: 'scheduled', created_at: D.today.subtract(2, 'day').toDate(),
     loading_start_date_time: atTime(D.today, '12:00'),
   }});
@@ -412,7 +427,7 @@ async function main() {
     date: D.future3.format('YYYY-MM-DD'), time_window_start: '15:00', time_window_end: '19:00',
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
-  console.log('[seedDemo] 8 time slots created');
+  console.log('[seedDemo] 9 time slots created');
 
   // ── Lorry trips (only for slots that have actually departed) ───────────
   const tripPastCompleted = await prisma.lorry_trips.create({ data: {
@@ -444,7 +459,7 @@ async function main() {
 
   // 1. Pending / unassigned — fresh from Odoo, not yet scheduled
   const order1 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1001', odoo_sales_ref: 'S00101',
+    odoo_order_ref: 'DEMO-DO-1001', odoo_sales_ref: 'S00101',
     customer_id: custPriya.id, building_id: buildingCondoLift.id,
     order_status: 'Pending', assignment_status: 'unassigned',
     delivery_address: custPriya.address, delivery_city: custPriya.city,
@@ -458,7 +473,7 @@ async function main() {
 
   // 2. Scheduled — approved for a future slot
   const order2 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1002', odoo_sales_ref: 'S00102',
+    odoo_order_ref: 'DEMO-DO-1002', odoo_sales_ref: 'S00102',
     customer_id: custTan.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotFuture1.id, order_status: 'Scheduled', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.future3, '09:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
@@ -474,7 +489,7 @@ async function main() {
 
   // 3. Scheduled with installer required — has an installation_schedules row
   const order3 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1003', odoo_sales_ref: 'S00103',
+    odoo_order_ref: 'DEMO-DO-1003', odoo_sales_ref: 'S00103',
     customer_id: custWong.id, building_id: buildingCondoLift.id, employee_id: driver2.id,
     time_slot_id: slotFuture2.id, order_status: 'Scheduled', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.future5, '10:00'), scheduled_end_date_time: atTime(D.future5, '14:00'),
@@ -496,7 +511,7 @@ async function main() {
 
   // 4. In transit right now — on tripTodayOut
   const order4 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1004', odoo_sales_ref: 'S00104',
+    odoo_order_ref: 'DEMO-DO-1004', odoo_sales_ref: 'S00104',
     customer_id: custLee.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Delivering', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
@@ -510,14 +525,13 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order4.id, product_id: pFridge.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'pending', picking_status: 'loaded',
-    picked_at: atTime(D.today, '07:40'), picked_by: assistant1.id, picked_serial: 'FR-88213',
+    service_type: 'delivery_only', item_delivery_status: 'pending', handling_status: 'loaded',
     loaded_at: atTime(D.today, '08:20'), loaded_by: assistant1.id, loaded_serial: 'FR-88213',
   }});
 
   // 5. Also on tripTodayOut — multi-line order, second stop
   const order5 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1005', odoo_sales_ref: 'S00105',
+    odoo_order_ref: 'DEMO-DO-1005', odoo_sales_ref: 'S00105',
     customer_id: custCorp.id, building_id: buildingCommercial.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Delivering', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
@@ -532,19 +546,17 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order5.id, product_id: pDining.id, quantity: 2, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'pending', picking_status: 'loaded',
-    picked_at: atTime(D.today, '07:45'), picked_by: assistant1.id,
+    service_type: 'delivery_only', item_delivery_status: 'pending', handling_status: 'loaded',
     loaded_at: atTime(D.today, '08:25'), loaded_by: assistant1.id,
   }});
   await prisma.order_products.create({ data: {
     order_id: order5.id, product_id: pTvConsole.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'pending', picking_status: 'picked', // not loaded yet — still at warehouse
-    picked_at: atTime(D.today, '07:50'), picked_by: assistant1.id,
+    service_type: 'delivery_only', item_delivery_status: 'pending', handling_status: 'pending', // not loaded yet — still at warehouse
   }});
 
   // 6. Delivered successfully — POD, feedback, high rating
   const order6 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1006', odoo_sales_ref: 'S00106',
+    odoo_order_ref: 'DEMO-DO-1006', odoo_sales_ref: 'S00106',
     customer_id: custWong.id, building_id: buildingCondoLift.id, employee_id: driver2.id,
     time_slot_id: slotPastDelivered.id, order_status: 'Delivered', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '18:00'),
@@ -563,8 +575,7 @@ async function main() {
   }});
   const order6Line = await prisma.order_products.create({ data: {
     order_id: order6.id, product_id: pMattress.id, quantity: 1, delivered_quantity: 1,
-    service_type: 'delivery_only', item_delivery_status: 'delivered', picking_status: 'unloaded',
-    picked_at: atTime(D.past3, '12:20'), picked_by: assistant2.id, picked_serial: 'MT-55210',
+    service_type: 'delivery_only', item_delivery_status: 'delivered', handling_status: 'unloaded',
     loaded_at: atTime(D.past3, '13:10'), loaded_by: assistant2.id, loaded_serial: 'MT-55210',
     unloaded_at: atTime(D.past3, '15:20'), unloaded_by: assistant2.id, unloaded_serial: 'MT-55210',
   }});
@@ -577,7 +588,7 @@ async function main() {
 
   // 7. Delivered but customer filed a complaint afterwards (resolved)
   const order7 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1007', odoo_sales_ref: 'S00107',
+    odoo_order_ref: 'DEMO-DO-1007', odoo_sales_ref: 'S00107',
     customer_id: custTan.id, building_id: buildingLanded.id, employee_id: driver2.id,
     time_slot_id: slotPastDelivered.id, order_status: 'Delivered', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '18:00'),
@@ -593,7 +604,7 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order7.id, product_id: pDining.id, quantity: 1, delivered_quantity: 1,
-    service_type: 'delivery_only', item_delivery_status: 'delivered', picking_status: 'unloaded',
+    service_type: 'delivery_only', item_delivery_status: 'delivered', handling_status: 'unloaded',
   }});
   await prisma.rating.create({ data: {
     customer_id: custTan.id, order_id: order7.id, product_name: pDining.product_name,
@@ -613,7 +624,7 @@ async function main() {
 
   // 8. Delivery failed — return pending pickup (not yet processed)
   const order8 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1008', odoo_sales_ref: 'S00108',
+    odoo_order_ref: 'DEMO-DO-1008', odoo_sales_ref: 'S00108',
     customer_id: custNorain.id, building_id: buildingCondoNoLift.id, employee_id: driver1.id,
     time_slot_id: slotPastCompleted.id, order_status: 'Failed', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.past6, '09:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
@@ -628,7 +639,7 @@ async function main() {
   }});
   const order8Line = await prisma.order_products.create({ data: {
     order_id: order8.id, product_id: pWardrobe.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_installation', item_delivery_status: 'failed', picking_status: 'unloaded',
+    service_type: 'delivery_installation', item_delivery_status: 'failed', handling_status: 'unloaded',
   }});
   const failure8 = await prisma.delivery_failure_events.create({ data: {
     order_id: order8.id, failure_reason: 'Customer not around',
@@ -639,7 +650,7 @@ async function main() {
 
   // 9. Delivery failed — item damaged in transit, admin manually reset for rescheduling
   const order9 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1009', odoo_sales_ref: 'S00109',
+    odoo_order_ref: 'DEMO-DO-1009', odoo_sales_ref: 'S00109',
     customer_id: custMuthu.id, building_id: buildingShoplot.id,
     order_status: 'Pending', assignment_status: 'unassigned', // reset in place by admin after failure
     delivery_address: buildingShoplot.address, delivery_city: 'Klang',
@@ -649,7 +660,7 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order9.id, product_id: pFridge.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'pending', picking_status: 'pending',
+    service_type: 'delivery_only', item_delivery_status: 'pending', handling_status: 'pending',
   }});
   const failure9 = await prisma.delivery_failure_events.create({ data: {
     order_id: order9.id, failure_reason: 'Item damaged in transit',
@@ -660,7 +671,7 @@ async function main() {
 
   // 10. Escalated / overdue — awaiting acknowledgement
   const order10 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1010', odoo_sales_ref: 'S00110',
+    odoo_order_ref: 'DEMO-DO-1010', odoo_sales_ref: 'S00110',
     customer_id: custSiti.id, building_id: buildingGated.id, employee_id: driver2.id,
     time_slot_id: slotTodayLoading.id, order_status: 'Issue', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '18:00'),
@@ -675,17 +686,17 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order10.id, product_id: pWasher.id, quantity: 1, service_type: 'delivery_only',
-    picking_status: 'loaded', item_delivery_status: 'pending',
+    handling_status: 'loaded', item_delivery_status: 'pending',
   }});
 
   // 11. Rescheduled — original order cancelled, points forward to order 12
   const order11 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1011', odoo_sales_ref: 'S00111',
+    odoo_order_ref: 'DEMO-DO-1011', odoo_sales_ref: 'S00111',
     customer_id: custPriya.id, building_id: buildingCondoLift.id,
     order_status: 'Cancelled', assignment_status: 'unassigned',
     delivery_address: custPriya.address, delivery_city: custPriya.city,
     delivery_postcode: custPriya.postcode, delivery_state: custPriya.state,
-    delivery_notes: 'Customer requested a later date — rescheduled, see linked order DEMO-SO-1012.',
+    delivery_notes: 'Customer requested a later date — rescheduled, see linked order DEMO-DO-1012.',
     salesperson_name: 'Grace Tan', salesperson_phone: '0171112222',
     created_at: D.today.subtract(4, 'day').toDate(), updated_at: D.today.subtract(1, 'day').toDate(),
   }});
@@ -693,7 +704,7 @@ async function main() {
     order_id: order11.id, product_id: pTvConsole.id, quantity: 1, service_type: 'delivery_only',
   }});
   const order12 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1012', odoo_sales_ref: 'S00111-R1',
+    odoo_order_ref: 'DEMO-DO-1012', odoo_sales_ref: 'S00111-R1',
     customer_id: custPriya.id, building_id: buildingCondoLift.id,
     rescheduled_from_order_id: order11.id, time_slot_id: slotFuture3.id,
     order_status: 'Scheduled', assignment_status: 'approved',
@@ -709,7 +720,7 @@ async function main() {
 
   // 13. Cancelled outright — no reschedule
   const order13 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1013', odoo_sales_ref: 'S00113',
+    odoo_order_ref: 'DEMO-DO-1013', odoo_sales_ref: 'S00113',
     customer_id: custMuthu.id, building_id: buildingShoplot.id,
     order_status: 'Cancelled', assignment_status: 'unassigned',
     delivery_address: buildingShoplot.address, delivery_city: 'Klang',
@@ -724,7 +735,7 @@ async function main() {
 
   // 14. LLM-parsed driver remarks differ from the original address (A1.3 remark parser demo)
   const order14 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1014', odoo_sales_ref: 'S00114',
+    odoo_order_ref: 'DEMO-DO-1014', odoo_sales_ref: 'S00114',
     customer_id: custLee.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotFuture1.id, order_status: 'Scheduled', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.future3, '09:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
@@ -743,7 +754,7 @@ async function main() {
 
   // 15. Delivered with a low rating, no complaint filed
   const order15 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1015', odoo_sales_ref: 'S00115',
+    odoo_order_ref: 'DEMO-DO-1015', odoo_sales_ref: 'S00115',
     customer_id: custSiti.id, building_id: buildingGated.id, employee_id: driver1.id,
     time_slot_id: slotPastCompleted.id, order_status: 'Delivered', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.past6, '09:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
@@ -758,7 +769,7 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order15.id, product_id: pMattress.id, quantity: 1, delivered_quantity: 1,
-    service_type: 'delivery_only', item_delivery_status: 'delivered', picking_status: 'unloaded',
+    service_type: 'delivery_only', item_delivery_status: 'delivered', handling_status: 'unloaded',
   }});
   await prisma.rating.create({ data: {
     customer_id: custSiti.id, order_id: order15.id, product_name: pMattress.product_name,
@@ -768,12 +779,12 @@ async function main() {
   }});
 
   // 16. Scheduled for TODAY, still at the warehouse — Scan Station "Loading" tab:
-  //     2 line items awaiting pick/load (order_status must be exactly 'Scheduled'
+  //     2 line items awaiting loading (order_status must be exactly 'Scheduled'
   //     and dated today for ScanStation's Loading tab to pick it up).
   const order16 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1016', odoo_sales_ref: 'S00116',
-    customer_id: custNorain.id, building_id: buildingCondoNoLift.id, employee_id: driver2.id,
-    time_slot_id: slotTodayLoading.id, order_status: 'Scheduled', assignment_status: 'approved',
+    odoo_order_ref: 'DEMO-DO-1016', odoo_sales_ref: 'S00116',
+    customer_id: custNorain.id, building_id: buildingCondoNoLift.id, employee_id: driver1.id,
+    time_slot_id: slotTodayDemoLoading.id, order_status: 'Scheduled', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '18:00'),
     delivery_address: buildingCondoNoLift.address, delivery_city: 'Petaling Jaya',
     delivery_postcode: buildingCondoNoLift.postal_code, delivery_state: 'Selangor',
@@ -783,18 +794,30 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order16.id, product_id: pWardrobe.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_installation', item_delivery_status: 'pending', picking_status: 'pending', // not yet touched — Loading tab action item
+    service_type: 'delivery_installation', item_delivery_status: 'pending', handling_status: 'pending',
+    assigned_serial: 'DEMO-SERIAL-1016-A', // exact serial required for this item
   }});
   await prisma.order_products.create({ data: {
     order_id: order16.id, product_id: pDining.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'pending', picking_status: 'picked', // picked, still needs loading
-    picked_at: atTime(D.today, '12:10'), picked_by: assistant2.id,
+    service_type: 'delivery_only', item_delivery_status: 'pending', handling_status: 'pending',
+    assigned_serial: 'DEMO-SERIAL-1016-B', // exact serial required for the second item
   }});
+
+  // Guard the video-demo workflow against accidental reassignment in future
+  // seed edits. A successful seed must leave DEMO-DO-1016 assigned to Razif.
+  const verifiedOrder16 = await prisma.orders.findUnique({
+    where: { id: order16.id },
+    select: { employee_id: true },
+  });
+  if (verifiedOrder16?.employee_id !== driver1.id) {
+    throw new Error('[seedDemo] DEMO-DO-1016 must be assigned to Razif');
+  }
+  console.log('[seedDemo]   DEMO-DO-1016 assigned to Razif (razif.driver@demo.tbm.local)');
 
   // 17. Delivery failed TODAY, mid-trip — Cases → Delivery Issues: item marked
   //     'failed' (order_status 'Failed', dated today).
   const order17 = await prisma.orders.create({ data: {
-    odoo_order_ref: 'DEMO-SO-1017', odoo_sales_ref: 'S00117',
+    odoo_order_ref: 'DEMO-DO-1017', odoo_sales_ref: 'S00117',
     customer_id: custMuthu.id, building_id: buildingShoplot.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Failed', assignment_status: 'approved',
     scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
@@ -809,7 +832,7 @@ async function main() {
   }});
   await prisma.order_products.create({ data: {
     order_id: order17.id, product_id: pSofa.id, quantity: 1, delivered_quantity: 0,
-    service_type: 'delivery_only', item_delivery_status: 'failed', picking_status: 'unloaded',
+    service_type: 'delivery_only', item_delivery_status: 'failed', handling_status: 'unloaded',
   }});
   await prisma.delivery_failure_events.create({ data: {
     order_id: order17.id, failure_reason: 'Wrong item delivered',
@@ -819,7 +842,8 @@ async function main() {
   }});
 
   console.log('[seedDemo] 17 orders created spanning the full lifecycle');
-  console.log('[seedDemo]   incl. Scan Station coverage for today: Loading (DEMO-SO-1016), Unloading (DEMO-SO-1004/1005), Audit (all of today\'s orders)');
+  console.log('[seedDemo]   incl. Scan Station coverage for today: Loading (DEMO-DO-1016), Unloading (DEMO-DO-1004/1005), Audit (all of today\'s orders)');
+  console.log('[seedDemo]   DEMO-DO-1016 serial test: DEMO-SERIAL-1016-A + DEMO-SERIAL-1016-B');
 
   // ── A general (non order-specific) complaint ────────────────────────────
   await prisma.complaint.create({ data: {
@@ -839,9 +863,9 @@ async function main() {
 
   // ── Notifications ────────────────────────────────────────────────────────
   await prisma.notifications.createMany({ data: [
-    { user_id: driver1.id, order_id: order2.id, type: 'info', message: 'New delivery assigned: DEMO-SO-1002 on ' + D.future3.format('D MMM YYYY'), is_read: false, created_at: D.today.toDate() },
-    { user_id: admin.id, order_id: order10.id, type: 'warning', message: 'Order DEMO-SO-1010 overdue — vehicle breakdown reported, needs acknowledgement.', is_read: false, created_at: D.today.subtract(1, 'hour').toDate() },
-    { user_id: dispatcher.id, order_id: order7.id, type: 'warning', message: 'New complaint filed for order DEMO-SO-1007.', is_read: true, created_at: atTime(D.past3, '19:05') },
+    { user_id: driver1.id, order_id: order2.id, type: 'info', message: 'New delivery assigned: DEMO-DO-1002 on ' + D.future3.format('D MMM YYYY'), is_read: false, created_at: D.today.toDate() },
+    { user_id: admin.id, order_id: order10.id, type: 'warning', message: 'Order DEMO-DO-1010 overdue — vehicle breakdown reported, needs acknowledgement.', is_read: false, created_at: D.today.subtract(1, 'hour').toDate() },
+    { user_id: dispatcher.id, order_id: order7.id, type: 'warning', message: 'New complaint filed for order DEMO-DO-1007.', is_read: true, created_at: atTime(D.past3, '19:05') },
     { user_id: driver1.id, order_id: order4.id, type: 'info', message: 'Trip departed — 2 stops on today’s 09:00 slot.', is_read: true, created_at: atTime(D.today, '09:00') },
   ]});
 
@@ -885,6 +909,8 @@ async function main() {
   console.log('\n=== Demo seed complete ===');
   console.log(`Login as admin:      ${admin.email} / ${DEMO_PASSWORD}`);
   console.log(`Login as driver:     ${driver1.email} / ${DEMO_PASSWORD}`);
+  console.log(`Login as driver 2:   ${driver2.email} / ${DEMO_PASSWORD}`);
+  console.log(`Login as assistant:  ${assistant1.email} / ${DEMO_PASSWORD}`);
   console.log(`Login as installer:  ${installerEmp.email} / ${DEMO_PASSWORD}`);
   console.log('\nOpen with:  set -a; source .env.demo; set +a && npx prisma studio');
   console.log('Or run the app against it:  DATABASE_URL="' + process.env.DATABASE_URL + '" npm run dev\n');

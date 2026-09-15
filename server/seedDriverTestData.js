@@ -424,7 +424,7 @@ async function createOrder({
   slotId,
   scheduledAt,
   products,
-  pickingStatus,
+  handlingStatus,
   extra = {},
 }) {
   const customer = await prisma.customers.findUnique({
@@ -454,13 +454,13 @@ async function createOrder({
   });
 
   for (const line of products) {
-    const ps = line.pickingStatus ?? pickingStatus;
+    const ps = line.handlingStatus ?? handlingStatus;
     await prisma.order_products.create({
       data: {
         order_id:       order.id,
         product_id:     line.product.id,
         quantity:       1,
-        picking_status: ps,
+        handling_status: ps,
         service_type:   line.product.installer_team_required_flag ? 'delivery_installation' : 'delivery_only',
         ...(ps === 'unloaded' ? { unloaded_at: new Date() } : {}),
         ...(ps === 'loaded'   ? { loaded_at:   new Date() } : {}),
@@ -471,14 +471,14 @@ async function createOrder({
   return order;
 }
 
-function resolveProducts(catalog, catalogKeys, defaultPickingStatus) {
+function resolveProducts(catalog, catalogKeys, defaultHandlingStatus) {
   return catalogKeys.map(entry => {
     if (typeof entry === 'string') {
-      return { product: catalog[entry], pickingStatus: defaultPickingStatus };
+      return { product: catalog[entry], handlingStatus: defaultHandlingStatus };
     }
     return {
       product:       catalog[entry.key],
-      pickingStatus: entry.pickingStatus ?? defaultPickingStatus,
+      handlingStatus: entry.handlingStatus ?? defaultHandlingStatus,
     };
   });
 }
@@ -601,7 +601,7 @@ async function main() {
     },
   });
 
-  // Slot D — Pending-to-pick: scheduled tomorrow morning, items not yet picked
+  // Slot D — Awaiting loading: scheduled tomorrow morning, items not yet loaded
   const slotPending = await createSlot({
     date,
     deliveryTeamId:  deliveryTeam.id,
@@ -647,7 +647,7 @@ async function main() {
       slotId:        slotScheduled.id,
       hour:          9,
       catalogKeys:   ['washer', 'microwave'],
-      pickingStatus: 'loaded',
+      handlingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-COMPLETE`,
@@ -658,7 +658,7 @@ async function main() {
       slotId:        null,
       hour:          10,
       catalogKeys:   ['tv'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-INSTALL`,
@@ -669,7 +669,7 @@ async function main() {
       slotId:        null,
       hour:          11,
       catalogKeys:   ['wardrobe'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-BLOCKED`,
@@ -680,7 +680,7 @@ async function main() {
       slotId:        null,
       hour:          12,
       catalogKeys:   ['fridge'],
-      pickingStatus: 'loaded',
+      handlingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-TEAM`,
@@ -691,7 +691,7 @@ async function main() {
       slotId:        slotActive.id,
       hour:          13,
       catalogKeys:   ['tv', 'soundbar'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-ISSUE`,
@@ -702,7 +702,7 @@ async function main() {
       slotId:        null,
       hour:          14,
       catalogKeys:   ['sofa'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
         issue_reason:           'Traffic Delay',
@@ -720,7 +720,7 @@ async function main() {
       slotId:        null,
       hour:          8,
       catalogKeys:   ['washer'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         delivered_by:           driver.id,
         delivery_end_date_time: todayAt(8, 30),
@@ -737,7 +737,7 @@ async function main() {
       slotId:        slotScheduled.id,
       hour:          15,
       catalogKeys:   ['dryer'],
-      pickingStatus: 'loaded',
+      handlingStatus: 'loaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-PARTIAL-A`,
@@ -748,7 +748,7 @@ async function main() {
       slotId:        slotActive.id,
       hour:          16,
       catalogKeys:   ['microwave'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         delivered_by:           driver.id,
         delivery_end_date_time: todayAt(16, 0),
@@ -763,7 +763,7 @@ async function main() {
       slotId:        slotActive.id,
       hour:          17,
       catalogKeys:   ['fridge', 'riceCooker'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-REPORT`,
@@ -774,7 +774,7 @@ async function main() {
       slotId:        null,
       hour:          18,
       catalogKeys:   ['oven'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
         issue_priority_level:   'high',
@@ -794,7 +794,7 @@ async function main() {
       slotId:        null,
       hour:          19,
       catalogKeys:   ['dryer'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         is_complaint_submitted: true,
         issue_priority_level:   'medium',
@@ -813,7 +813,7 @@ async function main() {
       slotId:        null,
       hour:          20,
       catalogKeys:   ['tv'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         is_complaint_submitted:     true,
         is_escalation_acknowledged: false,
@@ -832,7 +832,7 @@ async function main() {
       slotId:        null,
       hour:          21,
       catalogKeys:   ['soundbar'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         issue_reason: 'Access Denied',
         issue_desc:   null,
@@ -850,7 +850,7 @@ async function main() {
       slotId:        slotPending.id,
       hour:          8,
       catalogKeys:   ['fridge'],
-      pickingStatus: 'pending',
+      handlingStatus: 'pending',
     },
     {
       odooRef:       `${TEST_PREFIX}-PICK-B`,
@@ -861,7 +861,7 @@ async function main() {
       slotId:        slotPending.id,
       hour:          8,
       catalogKeys:   ['washer', 'dryer'],
-      pickingStatus: 'pending',
+      handlingStatus: 'pending',
     },
     {
       odooRef:       `${TEST_PREFIX}-PICK-C`,
@@ -872,32 +872,32 @@ async function main() {
       slotId:        slotPending.id,
       hour:          9,
       catalogKeys:   ['oven'],
-      pickingStatus: 'pending',
+      handlingStatus: 'pending',
     },
     {
       odooRef:       `${TEST_PREFIX}-PICK-D`,
-      label:         '[PICK 4] Partial — TV picked, soundbar still pending',
+      label:         '[LOAD 4] Both items awaiting loading',
       status:        'Scheduled',
       driverId:      driver.id,
       customerKey:   'raj',
       slotId:        slotPending.id,
       hour:          9,
       catalogKeys:   [
-        { key: 'tv',       pickingStatus: 'picked' },
-        { key: 'soundbar', pickingStatus: 'pending' },
+        { key: 'tv',       handlingStatus: 'pending' },
+        { key: 'soundbar', handlingStatus: 'pending' },
       ],
-      pickingStatus: 'pending',
+      handlingStatus: 'pending',
     },
     {
       odooRef:       `${TEST_PREFIX}-PICK-E`,
-      label:         '[PICK 5] All picked, not yet loaded — sofa + rice cooker',
+      label:         '[LOAD 5] Both items awaiting loading — sofa + rice cooker',
       status:        'Scheduled',
       driverId:      driver.id,
       customerKey:   'hassan',
       slotId:        slotPending.id,
       hour:          10,
       catalogKeys:   ['sofa', 'riceCooker'],
-      pickingStatus: 'picked',
+      handlingStatus: 'pending',
     },
 
     // ── Live Deliveries (A.3.7+) scenarios — slot C / slotDemo ──────────────
@@ -911,7 +911,7 @@ async function main() {
       slotId:        slotDemo.id,
       hour:          14,
       catalogKeys:   ['washer', 'dryer'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
     },
     {
       odooRef:       `${TEST_PREFIX}-LIVE-B`,
@@ -922,7 +922,7 @@ async function main() {
       slotId:        slotDemo.id,
       hour:          15,
       catalogKeys:   ['sofa'],
-      pickingStatus: 'unloaded',
+      handlingStatus: 'unloaded',
       extra: {
         delivered_by:           razif.id,
         delivery_end_date_time: todayAt(15, 30),
@@ -942,8 +942,8 @@ async function main() {
       customerId:    customers[s.customerKey].id,
       slotId:        s.slotId,
       scheduledAt:   todayAt(s.hour),
-      products:      resolveProducts(catalog, s.catalogKeys, s.pickingStatus),
-      pickingStatus: s.pickingStatus,
+      products:      resolveProducts(catalog, s.catalogKeys, s.handlingStatus),
+      handlingStatus: s.handlingStatus,
       extra: {
         salesperson_name:  DEFAULT_SALESPERSON.name,
         salesperson_phone: DEFAULT_SALESPERSON.phone,
@@ -1035,11 +1035,11 @@ async function main() {
   console.log('  Notify    Bell: TEST 10 → Delivery Issues; TEST 13 → Order Issues');
   console.log('');
   console.log('  --- Pending-to-Pick (Scan Station → Loading) ---');
-  console.log('  PICK 1    Single item (fridge) — picking_status: pending');
+  console.log('  PICK 1    Single item (fridge) — handling_status: pending');
   console.log('  PICK 2    Bundle (washer + dryer) — both pending');
   console.log('  PICK 3    Install item (oven) — pending');
-  console.log('  PICK 4    Partial — TV picked, soundbar still pending');
-  console.log('  PICK 5    All picked, not yet loaded (sofa + rice cooker)');
+  console.log('  LOAD 4    Both items awaiting loading');
+  console.log('  LOAD 5    Both items awaiting loading (sofa + rice cooker)');
   console.log('');
   console.log('  --- Live Deliveries (Admin /dashboard/live-ops) ---');
   console.log('  TEST 14   Admin opens slot C drawer → contacts section shows:');

@@ -24,7 +24,7 @@ function toMytIso(date) {
 
 // Serial number for a line: prefer the latest lifecycle stage that recorded one.
 function resolveSerial(item) {
-  return item.unloaded_serial || item.assigned_serial || item.picked_serial || item.loaded_serial || null;
+  return item.unloaded_serial || item.assigned_serial || item.loaded_serial || null;
 }
 
 function employeeDisplayName(emp) {

@@ -34,7 +34,7 @@ async function resolveBuilding(address, zip, fallbackName = '') {
  * Diff an order's existing order_products against a fresh set of Odoo order
  * lines. Lines are matched by odoo_line_id (Odoo sale.order.line ID).
  * Lines removed from Odoo are deleted UNLESS the item already has progress
- * (picked/loaded/unloaded) — those are kept and logged, never silently destroyed.
+ * (loaded/unloaded) — those are kept and logged, never silently destroyed.
  */
 async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
   const existing = await prisma.order_products.findMany({ where: { order_id: orderId } });
@@ -56,7 +56,7 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
   for (const ex of existing) {
     if (!ex.odoo_line_id || incomingIds.has(ex.odoo_line_id)) continue;
 
-    const hasProgress = ex.item_delivery_status === 'delivered' || ex.picking_status !== 'pending';
+    const hasProgress = ex.item_delivery_status === 'delivered' || ex.handling_status !== 'pending';
     if (hasProgress) {
       protectedCount++;
       const ref = odooOrderRef || orderId;
@@ -97,7 +97,7 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
       continue;
     }
 
-    if (match.picking_status === 'pending') {
+    if (match.handling_status === 'pending') {
       await prisma.order_products.update({
         where: { id: match.id },
         data:  {

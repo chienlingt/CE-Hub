@@ -58,7 +58,58 @@ router.put('/:id', async (req, res) => {
 
 // PATCH /api/order-products/:id/picking-status — A2
 // stage: 'picking' or 'loading' (Scan Station)
-router.patch('/:id/picking-status', async (req, res) => {
+// Admin-only: add or edit an item's serial from Scan Station.
+router.patch('/:id/assigned-serial', async (req, res) => {
+  try {
+    const itemId = parseInt(req.params.id);
+    const { employee_id, serial_number } = req.body || {};
+    const serial = serial_number?.trim();
+
+    if (!employee_id) return res.status(400).json({ error: 'Employee ID is required.' });
+    if (!serial) return res.status(400).json({ error: 'Serial number is required.' });
+
+    const employee = await prisma.employees.findUnique({
+      where: { id: employee_id },
+      include: { role: { select: { name: true } } },
+    });
+    if (!employee || employee.role?.name?.trim().toLowerCase() !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required.' });
+    }
+
+    const item = await prisma.order_products.findUnique({ where: { id: itemId } });
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    const duplicate = await prisma.order_products.findFirst({
+      where: {
+        id: { not: itemId },
+        OR: [
+          { assigned_serial: { equals: serial, mode: 'insensitive' } },
+          { loaded_serial:   { equals: serial, mode: 'insensitive' } },
+          { unloaded_serial: { equals: serial, mode: 'insensitive' } },
+        ],
+      },
+    });
+    if (duplicate) {
+      return res.status(409).json({ error: `Serial "${serial}" is duplicated.`, code: 'SERIAL_DUPLICATE' });
+    }
+
+    const serialData = { assigned_serial: serial };
+    if (['loaded', 'unloaded'].includes(item.handling_status)) serialData.loaded_serial = serial;
+    if (item.handling_status === 'unloaded') serialData.unloaded_serial = serial;
+
+    const updated = await prisma.order_products.update({
+      where: { id: itemId },
+      data: serialData,
+      include: { products: { select: { id: true, product_name: true } } },
+    });
+    res.json({ success: true, orderProduct: updated });
+  } catch (err) {
+    if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
+    console.error('PATCH /api/order-products/:id/assigned-serial error', err);
+    res.status(500).json({ error: 'Failed to assign serial number', details: err.message });
+  }
+});
+
+const updateHandlingStatus = async (req, res) => {
   try {
     const { stage, employee_id, serial_number } = req.body;
 
@@ -73,13 +124,14 @@ router.patch('/:id/picking-status', async (req, res) => {
     if (!item) return res.status(404).json({ error: 'Item not found' });
 
     // Stage prerequisite: unloading requires loaded; loading has no prerequisite (first stage)
-    if (stage === 'unloading' && item.picking_status !== 'loaded') {
+    if (stage === 'unloading' && item.handling_status !== 'loaded') {
       return res.status(400).json({ error: 'Item must be loaded before it can be unloaded.', code: 'NOT_LOADED' });
     }
 
     // ── Serial number validation ─────────────────────────────────────────────
     if (serial_number) {
       const productName = item.products?.product_name || 'item';
+      const normalizedSerial = serial_number.trim();
 
       if (stage === 'loading' && item.assigned_serial) {
         // Loading: validate against Odoo-assigned serial if one exists
@@ -111,9 +163,9 @@ router.patch('/:id/picking-status', async (req, res) => {
         where: {
           id:  { not: item.id },
           OR: [
-            { assigned_serial: serial_number },
-            { loaded_serial:   serial_number },
-            { unloaded_serial: serial_number },
+            { assigned_serial: { equals: normalizedSerial, mode: 'insensitive' } },
+            { loaded_serial:   { equals: normalizedSerial, mode: 'insensitive' } },
+            { unloaded_serial: { equals: normalizedSerial, mode: 'insensitive' } },
           ],
         },
         include: { orders: { select: { odoo_order_ref: true, id: true, order_status: true } } },
@@ -126,8 +178,8 @@ router.patch('/:id/picking-status', async (req, res) => {
       if (conflict) {
         const ref = conflict.orders?.odoo_order_ref || 'another order (Not Synced)';
         return res.status(409).json({
-          error:  `Serial number "${serial_number}" is already assigned to ${ref}. A serial cannot be used across orders.`,
-          code:   'SERIAL_CROSS_ORDER_CONFLICT',
+          error:  `Serial "${normalizedSerial}" is duplicated. It is already used by ${ref}.`,
+          code:   'SERIAL_DUPLICATE',
           conflict_order_ref: ref,
         });
       }
@@ -136,8 +188,8 @@ router.patch('/:id/picking-status', async (req, res) => {
     const now  = new Date();
     const data =
       stage === 'loading'
-        ? { picking_status: 'loaded',   loaded_by:   employee_id || null, loaded_at:   now, loaded_serial:   serial_number || null }
-        : { picking_status: 'unloaded', unloaded_by: employee_id || null, unloaded_at: now, unloaded_serial: serial_number || null };
+        ? { handling_status: 'loaded',   loaded_by:   employee_id || null, loaded_at:   now, loaded_serial:   serial_number || null }
+        : { handling_status: 'unloaded', unloaded_by: employee_id || null, unloaded_at: now, unloaded_serial: serial_number || null };
 
     const updated = await prisma.order_products.update({
       where:   { id: parseInt(req.params.id) },
@@ -148,11 +200,11 @@ router.patch('/:id/picking-status', async (req, res) => {
     // ── Status callbacks: fire when all items reach a milestone ──────────────────
     const siblings = await prisma.order_products.findMany({
       where:  { order_id: item.order_id },
-      select: { picking_status: true },
+      select: { handling_status: true },
     });
 
     if (stage === 'loading') {
-      const allLoaded = siblings.every(s => ['loaded', 'unloaded'].includes(s.picking_status));
+      const allLoaded = siblings.every(s => ['loaded', 'unloaded'].includes(s.handling_status));
       if (allLoaded) {
         const order = await prisma.orders.findUnique({
           where:  { id: item.order_id },
@@ -170,7 +222,7 @@ router.patch('/:id/picking-status', async (req, res) => {
     }
 
     if (stage === 'unloading') {
-      const allUnloaded = siblings.every(s => s.picking_status === 'unloaded');
+      const allUnloaded = siblings.every(s => s.handling_status === 'unloaded');
       if (allUnloaded) {
         const order = await prisma.orders.findUnique({
           where:  { id: item.order_id },
@@ -191,9 +243,13 @@ router.patch('/:id/picking-status', async (req, res) => {
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Item not found' });
     console.error('PATCH /api/order-products/:id/picking-status error', err);
-    res.status(500).json({ error: 'Failed to update picking status', details: err.message });
+    res.status(500).json({ error: 'Failed to update handling status', details: err.message });
   }
-});
+};
+
+router.patch('/:id/handling-status', updateHandlingStatus);
+// Temporary compatibility alias for older clients.
+router.patch('/:id/picking-status', updateHandlingStatus);
 
 // DELETE /api/order-products/:id/scan — A2: admin fully resets one item's scan progress back to pending
 router.delete('/:id/scan', async (req, res) => {
@@ -203,15 +259,14 @@ router.delete('/:id/scan', async (req, res) => {
       include: { products: { select: { product_name: true } } },
     });
     if (!item) return res.status(404).json({ error: 'Item not found' });
-    if (item.picking_status === 'pending') {
+    if (item.handling_status === 'pending') {
       return res.status(400).json({ error: 'Item has no scan progress to reset' });
     }
 
     const updated = await prisma.order_products.update({
       where: { id: parseInt(req.params.id) },
       data: {
-        picking_status:  'pending',
-        picked_serial:   null, picked_by:   null, picked_at:   null,
+        handling_status:  'pending',
         loaded_serial:   null, loaded_by:   null, loaded_at:   null,
         unloaded_serial: null, unloaded_by: null, unloaded_at: null,
       },
@@ -249,16 +304,16 @@ router.patch('/:id/cancel-scan', async (req, res) => {
     const stageStatusMap  = { loading: 'loaded',  unloading: 'unloaded' };
     const revertStatusMap = { loading: 'pending', unloading: 'loaded'   };
 
-    if (item.picking_status !== stageStatusMap[stage]) {
+    if (item.handling_status !== stageStatusMap[stage]) {
       return res.status(400).json({
-        error: `Cannot cancel ${stage} — item is currently '${item.picking_status}', not '${stageStatusMap[stage]}'`,
+        error: `Cannot cancel ${stage} — item is currently '${item.handling_status}', not '${stageStatusMap[stage]}'`,
       });
     }
 
     const clearData =
       stage === 'loading'
-        ? { picking_status: 'pending', loaded_serial:   null, loaded_by:   null, loaded_at:   null }
-        : { picking_status: 'loaded',  unloaded_serial: null, unloaded_by: null, unloaded_at: null };
+        ? { handling_status: 'pending', loaded_serial:   null, loaded_by:   null, loaded_at:   null }
+        : { handling_status: 'loaded',  unloaded_serial: null, unloaded_by: null, unloaded_at: null };
 
     const updated = await prisma.order_products.update({
       where:   { id: parseInt(req.params.id) },

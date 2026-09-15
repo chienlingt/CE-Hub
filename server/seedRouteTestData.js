@@ -209,7 +209,7 @@ async function main() {
           product_id:          product.id,
           quantity:            1,
           service_type:        'delivery',
-          picking_status:      'pending',
+          handling_status:      'pending',
           item_delivery_status: 'pending',
         },
       });

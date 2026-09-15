@@ -11,13 +11,13 @@ const PRE_DEPART_ORDER_STATUSES = ['Pending', 'Scheduled', 'Loaded'];
 /**
  * Compute loading counts from an array of order_products rows.
  *
- * @param {Array<{ picking_status: string }>} orderProducts
+ * @param {Array<{ handling_status: string }>} orderProducts
  * @returns {{ total: number, loaded_count: number, all_loaded: boolean }}
  */
 function computeOrderLoadingStats(orderProducts) {
   const total = orderProducts.length;
   const loaded_count = orderProducts.filter(i =>
-    i.picking_status === 'loaded'
+    i.handling_status === 'loaded'
   ).length;
   const all_loaded = total > 0 && loaded_count === total;
   return { total, loaded_count, all_loaded };

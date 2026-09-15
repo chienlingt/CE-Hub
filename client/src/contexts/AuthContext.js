@@ -190,7 +190,29 @@ export function AuthProvider({ children }) {
         const isAuth = sessionStorage.getItem('isAuthenticated');
 
         if (storedData && isAuth === 'true') {
-          const parsed = JSON.parse(storedData);
+          let parsed = JSON.parse(storedData);
+
+          // Demo reseeding recreates employees with new UUIDs. Validate the
+          // stored employee before restoring it so an obsolete UUID cannot
+          // make scoped pages silently show an empty data set.
+          const storedEmployeeId = parsed.EmployeeID || parsed.id || '';
+          const verifyResponse = await fetch(`${REACT_APP_API_BASE_URL}/api/auth/verify-session`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '1',
+            },
+            body: JSON.stringify({ employeeId: storedEmployeeId }),
+          });
+
+          if (!verifyResponse.ok) {
+            logout();
+            return;
+          }
+
+          const verified = await verifyResponse.json();
+          parsed = verified.employee || parsed;
+          sessionStorage.setItem('employeeData', JSON.stringify(parsed));
           if (!mounted) return;
 
           setEmployeeData(parsed);

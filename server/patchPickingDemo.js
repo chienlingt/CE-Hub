@@ -25,7 +25,7 @@ async function patch() {
   // Reset items to loaded (on truck, not yet unloaded)
   await prisma.order_products.updateMany({
     where: { order_id: order.id },
-    data:  { picking_status: 'loaded', unloaded_by: null, unloaded_at: null, unloaded_serial: null },
+    data:  { handling_status: 'loaded', unloaded_by: null, unloaded_at: null, unloaded_serial: null },
   });
   console.log('Items → loaded (on truck)');
 

@@ -33,7 +33,7 @@ const mockNavItems = [
   // Hidden from sidebar — kept for easy re-enable.
   // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
   { key: 'customer',  name: 'Place Order',   description: 'Demo to place order', icon: '' },
-  { key: 'scanning',  name: 'Scan Station',  description: 'Item picking and loading scan confirmation', icon: '📷' },
+  { key: 'scanning',  name: 'Scan Station',  description: 'Item loading and unloading scan confirmation', icon: '📷' },
   { key: 'settings',  name: 'Settings',      description: 'Notification and system settings', icon: '⚙️' },
   { key: 'driver',    name: 'Driver Dashboard', description: 'Mobile driver task dashboard (delivery staff only)', icon: '🚛' },
 ];

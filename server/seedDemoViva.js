@@ -202,7 +202,7 @@ async function main() {
         order_id:        orderId,
         product_id:      product.id,
         quantity:        1,
-        picking_status:  'pending',
+        handling_status:  'pending',
         assigned_serial: assignedSerial,
         service_type:    'delivery_only',
       },
@@ -212,7 +212,7 @@ async function main() {
   // ── 09:00–12:00 — DEMO-001: Sofa (serial enforced) + Fridge (no serial) ────
   const order1 = await createOrder({
     ref: `${DEMO_PREFIX}-001`, slot: slot9to12, startTime: '09:00', endTime: '12:00',
-    notes: '[DEMO] Sofa (serial enforced) + Fridge (any scan) — pick → load → unload → report failure',
+    notes: '[DEMO] Sofa (serial enforced) + Fridge (any scan) — load → unload → report failure',
   });
   const item1 = await addItem(order1.id, sofa,   'SN-LSOFA-001');
   const item2 = await addItem(order1.id, fridge, null);

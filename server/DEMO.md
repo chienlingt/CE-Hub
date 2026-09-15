@@ -35,10 +35,18 @@ The Prisma CLI reads `DATABASE_URL` from the environment, not from `.env.demo`
 automatically — export it into the current shell first (inline env vars beat
 `.env` files, so this can never leak into a command that omits it):
 
+PowerShell:
+
+```powershell
+$env:DATABASE_URL = "postgresql://tbm_demo:tbm_demo@localhost:5433/tbm_demo?schema=public"
+npx prisma db push
+```
+
+Bash:
+
 ```bash
 set -a; source .env.demo; set +a
-
-npx prisma db push --skip-generate
+npx prisma db push
 ```
 
 This creates all 30 tables in `tbm_demo` exactly as defined in `prisma/schema.prisma`
@@ -67,6 +75,17 @@ node seedDemo.js
 # or: npm run seed:demo
 ```
 
+To pin all relative dates to a specific recording date in PowerShell:
+
+```powershell
+$env:DEMO_DATE = "2026-09-10"
+npm.cmd run seed:demo
+```
+
+With that anchor, today's operational records use 10 September 2026; historical
+records use 4 and 7 September; and future schedules use 13, 15, and 17 September.
+If `DEMO_DATE` is omitted, the seed defaults to 10 September 2026.
+
 `seedDemo.js` loads `.env.demo` itself (no `source` needed for this step) and
 **refuses to run** unless `DATABASE_URL` contains `tbm_demo` + `localhost` — a
 guard rail against ever pointing it at SANDBOX/PRODUCTION by accident.
@@ -80,7 +99,7 @@ What you get — 17 orders walking through the entire delivery lifecycle:
 - **Pending / unassigned** — a fresh order awaiting scheduling
 - **Scheduled** (plain, and one requiring installer team + `installation_schedules`)
 - **In transit right now** — 2 orders on a truck that "departed" today, one
-  still mid-pick (shows the picking/loading dashboard)
+  still awaiting loading (shows the loading dashboard)
 - **Delivered** — with POD photo, signature, 5★ rating
 - **Delivered + complaint** — resolved complaint referencing the same order
 - **Delivery failed** — `delivery_failure_events` audit row, item marked failed
@@ -92,17 +111,17 @@ What you get — 17 orders walking through the entire delivery lifecycle:
 - **Cancelled** outright
 - **LLM remark parser demo** — `remarks_*` fields differing from the original address
 - **Delivered, low rating, no complaint**
-- **Scheduled for today, still awaiting pick/load** — 2 line items pending
+- **Scheduled for today, still awaiting loading** — 2 line items pending
 - **Failed today, mid-trip** — item refused at the door
 
-The last two exist specifically so **Scan Station** has something in all three tabs
+The last two exist specifically so **Scan Station** has something in all three current tabs
 the moment you open it (no need to change the date picker off "today"):
 
 | Tab | Order | What you'll see |
 |---|---|---|
-| Loading | DEMO-SO-1016 | 2 items pending pick/load |
-| Unloading | DEMO-SO-1004, DEMO-SO-1005 | items loaded, awaiting unload on today's out-for-delivery trip |
-| Audit (admin only) | all of the above + DEMO-SO-1010, DEMO-SO-1017 | full scan trail for today across every status |
+| Loading | DEMO-DO-1016 | 2 items: one requires `DEMO-SERIAL-1016-A`, one has a blank assigned serial |
+| Unloading | DEMO-DO-1004, DEMO-DO-1005 | items loaded, awaiting unload on today's out-for-delivery trip |
+| Audit (admin only) | all of the above + DEMO-DO-1010, DEMO-DO-1017 | full scan trail for today across every status |
 
 Plus 3 roles, 2 outlets, 8 employees (1 deactivated), 3 zones, 6 buildings
 (landed / condo-with-lift / walk-up / commercial / shoplot / gated), 3 trucks,
@@ -122,8 +141,8 @@ Demo logins (printed again at the end of the seed run), password `Demo@1234` for
 
 **GUI, no app needed:**
 
-```bash
-set -a; source .env.demo; set +a
+```powershell
+$env:DATABASE_URL = "postgresql://tbm_demo:tbm_demo@localhost:5433/tbm_demo?schema=public"
 npx prisma studio
 ```
 
@@ -131,9 +150,10 @@ npx prisma studio
 inline env var wins over dotenv's `.env` load, so this is fully reversible by
 just running the command again without the prefix:
 
-```bash
+```powershell
 # server
-DATABASE_URL="postgresql://tbm_demo:tbm_demo@localhost:5433/tbm_demo?schema=public" npm run dev
+$env:DATABASE_URL = "postgresql://tbm_demo:tbm_demo@localhost:5433/tbm_demo?schema=public"
+npm run dev
 ```
 
 ```bash

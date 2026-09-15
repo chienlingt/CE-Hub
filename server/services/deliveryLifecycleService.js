@@ -193,9 +193,9 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
 
   const unloadedItems = [];
   for (const order of preDepartOrders) {
-    const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
+    const notLoaded = order.order_products.filter(p => p.handling_status !== 'loaded');
     for (const item of notLoaded) {
-      unloadedItems.push({ order_id: order.id, order_products_id: item.id, picking_status: item.picking_status });
+      unloadedItems.push({ order_id: order.id, order_products_id: item.id, handling_status: item.handling_status });
     }
   }
 
@@ -245,7 +245,7 @@ async function departTimeSlot(timeSlotId, { employeeId } = {}) {
   });
   for (const order of remainingPreDepart) {
     if (updatedOrders.some(u => u.id === order.id)) continue;
-    const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
+    const notLoaded = order.order_products.filter(p => p.handling_status !== 'loaded');
     if (notLoaded.length > 0) continue;
     const updated = await markOrderDelivering(order.id, { employeeId, now });
     updatedOrders.push(updated);
@@ -384,7 +384,7 @@ async function healStrandedOrdersOnDepartedSlots({ employeeId, deliveryTeamIds }
   const skipped = [];
 
   for (const order of stranded) {
-    const notLoaded = order.order_products.filter(p => p.picking_status !== 'loaded');
+    const notLoaded = order.order_products.filter(p => p.handling_status !== 'loaded');
     if (notLoaded.length > 0) {
       skipped.push({ id: order.id, reason: 'not_loaded', unloadedCount: notLoaded.length });
       continue;

@@ -2,7 +2,7 @@
 //
 // Seeds a single loading-demo order for 28 July 2026, slot 09:00–12:00.
 // Represents an order that has arrived at the warehouse and is READY FOR
-// DRIVER LOADING — picking_status is 'pending' for all items.
+// DRIVER LOADING — handling_status is 'pending' for all items.
 //
 // Two items:
 //   1. LG Fridge   — assigned_serial = 'FRIDGE-SN-001'
@@ -172,7 +172,7 @@ async function main() {
       order_id:        order.id,
       product_id:      fridge.id,
       quantity:        1,
-      picking_status:  'pending',
+      handling_status:  'pending',
       assigned_serial: 'FRIDGE-SN-010',
       service_type:    'delivery_only',
     },
@@ -185,7 +185,7 @@ async function main() {
       order_id:        order.id,
       product_id:      sofa.id,
       quantity:        1,
-      picking_status:  'pending',
+      handling_status:  'pending',
       assigned_serial: null,
       service_type:    'delivery_only',
     },

@@ -66,7 +66,7 @@ async function callModel(model, method, args = [], kwargs = {}) {
  * @param {string} localStatus   - CE Hub status string
  */
 // Shared CE Hub → Odoo x_delivery_status mapping.
-// Picked and Completed have no Odoo counterpart — they return null (no-op).
+// Completed has no Odoo counterpart — it returns null (no-op).
 const CE_HUB_STATUS_MAP = {
   Loaded:     'loaded',
   Unloaded:   'unloaded',
@@ -88,7 +88,7 @@ async function pushDeliveryStatus(odooPickingId, localStatus) {
  * Returns null (non-fatal) if Odoo is unreachable or the picking is not found.
  *
  * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
- * @param {string} localStatus   - CE Hub status (Loaded|Arrived|Delivering|Delivered|Failed); Picked and Completed are no-ops
+ * @param {string} localStatus   - CE Hub status (Loaded|Arrived|Delivering|Delivered|Failed); Completed is a no-op
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;

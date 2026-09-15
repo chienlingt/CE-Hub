@@ -184,12 +184,12 @@ async function processDeliveryCompletion(orderId, {
   }
 
   // ── Step 2: Scan gate — all items must be unloaded ────────────────────────
-  const notUnloaded = order.order_products.filter(i => i.picking_status !== 'unloaded');
+  const notUnloaded = order.order_products.filter(i => i.handling_status !== 'unloaded');
   if (notUnloaded.length > 0) {
     const err = new Error('Cannot complete — not all items have been unloaded.');
     err.code  = 'ITEMS_NOT_UNLOADED';
     err.statusCode = 400;
-    err.notUnloaded = notUnloaded.map(i => ({ id: i.id, status: i.picking_status }));
+    err.notUnloaded = notUnloaded.map(i => ({ id: i.id, status: i.handling_status }));
     throw err;
   }
 

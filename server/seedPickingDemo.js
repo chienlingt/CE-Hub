@@ -135,7 +135,7 @@ async function main() {
       order_id:        order.id,
       product_id:      fridge.id,
       quantity:        1,
-      picking_status:  'pending',
+      handling_status:  'pending',
       assigned_serial: 'FRIDGE-SN-001',   // scanner MUST scan this exact serial
       service_type:    'delivery_only',
     },
@@ -148,7 +148,7 @@ async function main() {
       order_id:        order.id,
       product_id:      sofa.id,
       quantity:        1,
-      picking_status:  'pending',
+      handling_status:  'pending',
       assigned_serial: null,              // no restriction — accept whatever is scanned
       service_type:    'delivery_only',
     },

@@ -14,11 +14,14 @@ import {
   ArrowUpDown,
   CalendarDays,
   Camera, ClipboardList,
+  Check,
+  Pencil,
   RefreshCw,
   Search,
   ShieldAlert,
   Truck,
   User,
+  X,
   XCircle,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -89,7 +92,7 @@ function DateStrip({ selected, onChange }) {
 // ─── Status pill with tooltip ─────────────────────────────────────────────────
 
 function StatusPill({ item }) {
-  const status = item?.picking_status || 'pending';
+  const status = item?.handling_status || 'pending';
   const cfg = {
     pending:  { label: 'Pending',  cls: 'bg-gray-100 text-gray-500',       dot: 'bg-gray-400'    },
     loaded:   { label: 'Loaded',   cls: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
@@ -159,7 +162,7 @@ function ErrorBanner({ fb, onDismiss }) {
 
 async function submitScan({ itemId, stage, employeeId, serialNumber }) {
   const body = { stage, employee_id: employeeId || null, serial_number: serialNumber.trim() };
-  const res  = await fetch(`${API_BASE}/api/order-products/${itemId}/picking-status`, {
+  const res  = await fetch(`${API_BASE}/api/order-products/${itemId}/handling-status`, {
     method:  'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
@@ -222,10 +225,10 @@ function useAllOrderItems(orders) {
         ...prev,
         [orderId]: {
           ...od, items,
-          loaded_count:   items.filter(i => ['loaded','unloaded'].includes(i.picking_status)).length,
-          unloaded_count: items.filter(i => i.picking_status === 'unloaded').length,
-          all_loaded:     items.every(i => ['loaded','unloaded'].includes(i.picking_status)),
-          all_unloaded:   items.every(i => i.picking_status === 'unloaded'),
+          loaded_count:   items.filter(i => ['loaded','unloaded'].includes(i.handling_status)).length,
+          unloaded_count: items.filter(i => i.handling_status === 'unloaded').length,
+          all_loaded:     items.every(i => ['loaded','unloaded'].includes(i.handling_status)),
+          all_unloaded:   items.every(i => i.handling_status === 'unloaded'),
         },
       };
     });
@@ -241,20 +244,52 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   const [busy,       setBusy]       = useState({});
   const [rowCam,     setRowCam]     = useState(null);
   const [cancelling, setCancelling] = useState(null);
+  const [serialDrafts, setSerialDrafts] = useState({});
+  const [savingSerial, setSavingSerial] = useState(null);
+  const [editingSerial, setEditingSerial] = useState(null);
   const [sort,        setSort]        = useState({ field: 'do', dir: 'asc' });
 
-  const apiStage   = tab === 'loading' ? 'loading' : 'unloading';
-  const needStatus = tab === 'loading' ? 'pending' : 'loaded';
+  const apiStage = tab === 'loading' ? 'loading' : 'unloading';
+  const isActionableForTab = row => tab === 'loading'
+    ? row.handling_status === 'pending'
+    : row.handling_status === 'loaded';
 
   // Handle global scan
   useEffect(() => {
     if (!globalScanSerial || !rows.length) return;
     const serial = globalScanSerial.trim();
-    const match = rows.find(r =>
-      tab === 'loading'
-        ? r.picking_status === 'pending' && r.assigned_serial === serial
-        : r.picking_status === 'loaded'  && r.loaded_serial   === serial
-    ) || rows.find(r => r.picking_status === needStatus);
+    const normalizedSerial = serial.toLowerCase();
+    // Prefer an actionable item explicitly assigned to this serial. A pending
+    // row can retain an old completed-serial value after its status is reset;
+    // that row must not report itself as a duplicate.
+    const exactMatch = rows.find(r => {
+      if (!isActionableForTab(r)) return false;
+      const expectedSerial = tab === 'loading' ? r.assigned_serial : r.loaded_serial;
+      return expectedSerial?.trim().toLowerCase() === normalizedSerial;
+    });
+    if (exactMatch) {
+      handleSubmit(exactMatch.id, exactMatch._orderId, serial);
+      return;
+    }
+
+    const duplicate = rows.some(r => {
+      if (isActionableForTab(r)) return false;
+      const completedSerial = tab === 'loading' ? r.loaded_serial : r.unloaded_serial;
+      return completedSerial?.trim().toLowerCase() === normalizedSerial;
+    });
+    if (duplicate) {
+      onGlobalScanError?.({
+        ok: false,
+        code: 'SERIAL_DUPLICATE',
+        msg: `Serial "${serial}" is duplicated.`,
+      });
+      return;
+    }
+    const match = rows.find(r => {
+      if (!isActionableForTab(r)) return false;
+      const expectedSerial = tab === 'loading' ? r.assigned_serial : r.loaded_serial;
+      return !expectedSerial?.trim();
+    });
     if (!match) { onGlobalScanError?.({ ok: false, msg: `Serial "${serial}" not found in list.` }); return; }
     handleSubmit(match.id, match._orderId, serial);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,7 +312,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
   const handleCancelScan = async (item, orderId) => {
     const stageToCancel = { loaded: 'loading', unloaded: 'unloading' };
-    const stage = stageToCancel[item.picking_status];
+    const stage = stageToCancel[item.handling_status];
     if (!stage || !window.confirm(`Cancel ${stage} scan for "${item.products?.product_name || item.odoo_product_name}"?`)) return;
     setCancelling(item.id);
     try {
@@ -290,6 +325,106 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
       onUpdated(orderId, data.orderProduct);
     } catch (err) { alert(err.message); }
     finally { setCancelling(null); }
+  };
+
+  const handleAssignSerial = async (item, orderId) => {
+    const serial = (serialDrafts[item.id] || '').trim();
+    if (!serial) {
+      setRowFb(p => ({ ...p, [item.id]: { ok: false, msg: 'Serial number is required.' } }));
+      return;
+    }
+    setSavingSerial(item.id);
+    setRowFb(p => ({ ...p, [item.id]: null }));
+    try {
+      const res = await fetch(`${API_BASE}/api/order-products/${item.id}/assigned-serial`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employeeId, serial_number: serial }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw data;
+      onUpdated(orderId, data.orderProduct);
+      setSerialDrafts(p => ({ ...p, [item.id]: '' }));
+      setEditingSerial(null);
+    } catch (err) {
+      setRowFb(p => ({
+        ...p,
+        [item.id]: { ok: false, msg: err.error || 'Failed to assign serial number.', code: err.code },
+      }));
+    } finally {
+      setSavingSerial(null);
+    }
+  };
+
+  const beginSerialEdit = row => {
+    setSerialDrafts(p => ({
+      ...p,
+      [row.id]: row.loaded_serial || row.assigned_serial || '',
+    }));
+    setRowFb(p => ({ ...p, [row.id]: null }));
+    setEditingSerial(row.id);
+  };
+
+  const cancelSerialEdit = rowId => {
+    setSerialDrafts(p => ({ ...p, [rowId]: '' }));
+    setRowFb(p => ({ ...p, [rowId]: null }));
+    setEditingSerial(null);
+  };
+
+  const renderAdminSerialControl = (row, mobile = false) => {
+    if (tab !== 'loading' || !isAdmin) return null;
+    const currentSerial = row.loaded_serial || row.assigned_serial || '';
+    if (editingSerial !== row.id) {
+      return (
+        <div className={`${mobile ? 'md:hidden mt-2' : ''} flex items-center gap-1.5`}>
+          {currentSerial
+            ? <span className="font-mono text-xs px-2 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200">{currentSerial}</span>
+            : <span className="text-xs text-gray-300">—</span>}
+          <button
+            type="button"
+            onClick={() => beginSerialEdit(row)}
+            className="p-1 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"
+            title={currentSerial ? 'Edit serial number' : 'Add serial number'}
+            aria-label={currentSerial ? 'Edit serial number' : 'Add serial number'}
+          >
+            <Pencil size={13} />
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className={`${mobile ? 'md:hidden mt-2' : ''} flex items-center gap-1.5`}>
+        <input
+          type="text"
+          value={serialDrafts[row.id] || ''}
+          onChange={e => setSerialDrafts(p => ({ ...p, [row.id]: e.target.value }))}
+          onKeyDown={e => e.key === 'Enter' && handleAssignSerial(row, row._orderId)}
+          placeholder="Enter serial number"
+          className="min-w-0 w-36 px-2 py-1.5 text-xs font-mono border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+          disabled={savingSerial === row.id}
+        />
+        <button
+          type="button"
+          onClick={() => handleAssignSerial(row, row._orderId)}
+          disabled={savingSerial === row.id || !(serialDrafts[row.id] || '').trim()}
+          className="p-1.5 text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-40"
+          title="Save serial number"
+          aria-label="Save serial number"
+        >
+          {savingSerial === row.id ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+        </button>
+        <button
+          type="button"
+          onClick={() => cancelSerialEdit(row.id)}
+          disabled={savingSerial === row.id}
+          className="p-1.5 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40"
+          title="Cancel editing"
+          aria-label="Cancel editing"
+        >
+          <X size={13} />
+        </button>
+      </div>
+    );
   };
 
   // Sorting inside the table
@@ -307,7 +442,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
           : (r.unloaded_serial || r.loaded_serial);
         va = displaySerial(a) || ''; vb = displaySerial(b) || '';
       }
-      else if (sort.field === 'status') { const o = ['pending','loaded','unloaded']; va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status); return sort.dir === 'asc' ? va - vb : vb - va; }
+      else if (sort.field === 'status') { const o = ['pending','loaded','unloaded']; va = o.indexOf(a.handling_status); vb = o.indexOf(b.handling_status); return sort.dir === 'asc' ? va - vb : vb - va; }
       else return 0;
       const c = String(va).localeCompare(String(vb), undefined, { numeric: true });
       return sort.dir === 'asc' ? c : -c;
@@ -318,7 +453,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
   // Shared row renderer used in both flat (loading) and grouped (unloading) modes
   const renderRow = (row, idx) => {
-    const isActionable = row.picking_status === needStatus;
+    const isActionable = isActionableForTab(row);
     const fb  = rowFb[row.id];
     const doRef = row._order?.odoo_order_ref || row._order?.id;
     return (
@@ -334,6 +469,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
             <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">{doRef}</p>
             {/* Serial inline on mobile */}
             {(() => {
+              if (isAdmin && tab === 'loading') return null;
               const s = tab === 'loading'
                 ? (row.loaded_serial   || row.assigned_serial)
                 : (row.unloaded_serial || row.loaded_serial);
@@ -344,6 +480,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                 <span className={`md:hidden inline-block font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 ${cls}`}>{s}</span>
               ) : null;
             })()}
+            {renderAdminSerialControl(row, true)}
           </td>
           {/* DO Number */}
           <td className="px-4 py-3 hidden sm:table-cell">
@@ -365,16 +502,20 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                 tab === 'loading'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-purple-50 text-purple-700 border-purple-200';
-              return serial
-                ? <span className={`font-mono text-xs px-2 py-0.5 rounded border ${color}`}>{serial}</span>
-                : <span className="text-xs text-gray-300">—</span>;
+              if (isAdmin && tab === 'loading') {
+                return renderAdminSerialControl(row);
+              }
+              if (serial) {
+                return <span className={`font-mono text-xs px-2 py-0.5 rounded border ${color}`}>{serial}</span>;
+              }
+              return <span className="text-xs text-gray-300">—</span>;
             })()}
           </td>
           {/* Status */}
           <td className="px-4 py-3">
             <div className="flex items-center gap-1.5">
               <StatusPill item={row} />
-              {isAdmin && row.picking_status !== 'pending' && (
+              {isAdmin && row.handling_status !== 'pending' && (
                 <button
                   onClick={() => handleCancelScan(row, row._orderId)}
                   disabled={cancelling === row.id}
@@ -444,7 +585,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
               });
               let globalIdx = 0;
               return groups.map(({ orderId, order, rows: gRows }) => {
-                const allUnloaded = gRows.every(r => r.picking_status === 'unloaded');
+                const allUnloaded = gRows.every(r => r.handling_status === 'unloaded');
                 const doRef = order?.odoo_order_ref || 'Not Synced';
                 return (
                   <React.Fragment key={orderId}>
@@ -530,7 +671,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
       else if (sort.field === 'name') { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
       else if (sort.field === 'status') {
         const o = ['pending', 'loaded', 'unloaded'];
-        va = o.indexOf(a.picking_status); vb = o.indexOf(b.picking_status);
+        va = o.indexOf(a.handling_status); vb = o.indexOf(b.handling_status);
         return sort.dir === 'asc' ? va - vb : vb - va;
       }
       else return 0;
@@ -606,7 +747,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <StatusPill item={row} />
-                        {isAdmin && row.picking_status !== 'pending' && (
+                        {isAdmin && row.handling_status !== 'pending' && (
                           <button
                             onClick={() => handleResetScan(row)}
                             disabled={resetting === row.id}
@@ -643,12 +784,12 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
   const inputRef = useRef(null);
 
   const apiStage   = stage === 'driver' ? 'loading' : 'unloading';
-  const canStatus  = stage === 'driver' ? 'pending' : 'loaded';
+  const canStatuses = stage === 'driver' ? ['pending'] : ['loaded'];
   const doneStatus = stage === 'driver' ? ['loaded','unloaded'] : ['unloaded'];
   const doneLabel  = stage === 'driver' ? 'Loaded' : 'Unloaded';
 
-  const nextItem  = items.find(i => i.picking_status === canStatus);
-  const allDone   = items.length > 0 && items.every(i => doneStatus.includes(i.picking_status));
+  const nextItem  = items.find(i => canStatuses.includes(i.handling_status));
+  const allDone   = items.length > 0 && items.every(i => doneStatus.includes(i.handling_status));
   const noneReady = !nextItem && !allDone;
 
   const submit = async (value) => {
