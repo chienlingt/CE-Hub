@@ -18,6 +18,7 @@ iisnode/
 
 # Environment files — never commit real credentials
 .env
+.env.example
 .env.local
 .env.development.local
 .env.test.local
