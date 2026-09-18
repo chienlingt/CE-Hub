@@ -55,7 +55,12 @@ function estimateFallbackLeg(a, b) {
 // ── 1. Geocoding (with buildings.latitude/longitude cache) ─────────────────
 
 function getOrderAddress(order) {
-  return order.customers?.address || order.buildings?.building_name || 'UNKNOWN';
+  return [
+    order.remarks_delivery_address || order.delivery_address || order.original_delivery_address || order.customers?.address,
+    order.delivery_city || order.customers?.city,
+    order.delivery_postcode || order.customers?.postcode || order.buildings?.postal_code,
+    order.delivery_state || order.customers?.state,
+  ].filter(Boolean).join(', ') || order.buildings?.building_name || 'UNKNOWN';
 }
 
 async function geocodeAddress(address) {
@@ -129,6 +134,78 @@ async function buildTravelTimeMatrix(coordsList) {
   return res.data.rows.map(row => row.elements.map(el => el.duration?.value ?? null));
 }
 
+/** Road-time and road-distance matrices. Google Distance Matrix accepts at
+ * most 25 origins/destinations per request, so larger capacity-driven runs
+ * are transparently tiled instead of imposing an artificial stop limit. */
+async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
+  const key = apiKey();
+  const size = coordsList.length;
+  const durations = Array.from({ length: size }, () => Array(size).fill(null));
+  const distances = Array.from({ length: size }, () => Array(size).fill(null));
+  if (!key || size === 0) return { durations, distances, usedFallback: true };
+
+  const chunkSize = 25;
+  for (let oi = 0; oi < size; oi += chunkSize) {
+    for (let di = 0; di < size; di += chunkSize) {
+      const origins = coordsList.slice(oi, oi + chunkSize);
+      const destinations = coordsList.slice(di, di + chunkSize);
+      const res = await axios.get(DISTANCE_MATRIX_URL, {
+        params: {
+          origins: origins.map(c => `${c.lat},${c.lon}`).join('|'),
+          destinations: destinations.map(c => `${c.lat},${c.lon}`).join('|'),
+          key,
+          mode: 'driving',
+          departure_time: departureTime,
+          traffic_model: 'best_guess',
+        },
+        timeout: 15000,
+      });
+      if (res.data?.status !== 'OK') throw new Error(`Distance Matrix error: ${res.data?.status}`);
+      res.data.rows.forEach((row, r) => row.elements.forEach((el, c) => {
+        if (el.status !== 'OK') return;
+        durations[oi + r][di + c] = el.duration_in_traffic?.value ?? el.duration?.value ?? null;
+        distances[oi + r][di + c] = el.distance?.value ?? null;
+      }));
+    }
+  }
+  return { durations, distances, usedFallback: false };
+}
+
+async function computeOrderedRoute(originCoords, orderedStops) {
+  const key = apiKey();
+  if (!key || orderedStops.length === 0) return null;
+  // Routes API waypoint limits vary by SKU. Matrix/optimisation still works
+  // for larger capacity-driven runs; omit geometry rather than failing them.
+  if (orderedStops.length > 25) return null;
+
+  const destination = orderedStops[orderedStops.length - 1].coords;
+  const intermediates = orderedStops.slice(0, -1).map(o => ({
+    location: { latLng: { latitude: o.coords.lat, longitude: o.coords.lon } },
+  }));
+  const body = {
+    origin: { location: { latLng: { latitude: originCoords.lat, longitude: originCoords.lon } } },
+    destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lon } } },
+    intermediates,
+    travelMode: 'DRIVE',
+    polylineQuality: 'OVERVIEW',
+  };
+  const res = await axios.post(ROUTES_URL, body, {
+    headers: {
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline',
+      'Content-Type': 'application/json',
+    },
+    timeout: 15000,
+  });
+  const route = res.data?.routes?.[0];
+  if (!route) return null;
+  return {
+    polyline: route.polyline?.encodedPolyline || null,
+    totalDistanceM: route.distanceMeters || 0,
+    totalDurationSec: parseInt(route.duration, 10) || 0,
+  };
+}
+
 async function groupNearbyOrders(ordersWithCoords) {
   if (ordersWithCoords.length <= 1) return [ordersWithCoords];
 
@@ -146,13 +223,34 @@ async function groupNearbyOrders(ordersWithCoords) {
     return durationSeconds / 60;
   };
 
+  const clockMinutes = value => {
+    if (!value || !/^\d{1,2}:\d{2}/.test(value)) return null;
+    const [h, m] = value.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const feasibleTogether = (a, b) => {
+    const aStart = clockMinutes(a.buildings?.access_time_window_start);
+    const aEnd = clockMinutes(a.buildings?.access_time_window_end);
+    const bStart = clockMinutes(b.buildings?.access_time_window_start);
+    const bEnd = clockMinutes(b.buildings?.access_time_window_end);
+    if ([aStart, aEnd, bStart, bEnd].some(v => v == null)) return true;
+    return Math.max(aStart, bStart) <= Math.min(aEnd, bEnd);
+  };
+
+  // Complete-link clustering: every new stop must be road-time-near every
+  // existing stop. This avoids the chain effect of anchor-only clustering
+  // where a cluster can gradually spread far beyond the threshold.
   const clusters = [];
   ordersWithCoords.forEach((order, i) => {
-    const cluster = clusters.find(c => travelMinutes(c.anchorIndex, i) <= NEARBY_TRAVEL_MINUTES);
+    const cluster = clusters.find(c => c.indexes.every(j =>
+      (travelMinutes(j, i) <= NEARBY_TRAVEL_MINUTES || travelMinutes(i, j) <= NEARBY_TRAVEL_MINUTES) &&
+      feasibleTogether(ordersWithCoords[j], order)
+    ));
     if (cluster) {
       cluster.orders.push(order);
+      cluster.indexes.push(i);
     } else {
-      clusters.push({ anchorIndex: i, orders: [order] });
+      clusters.push({ indexes: [i], orders: [order] });
     }
   });
 
@@ -384,4 +482,7 @@ module.exports = {
   resolveOrderCoords,
   getOrderAddress,
   haversineKm,
+  estimateFallbackLeg,
+  buildTravelMetricsMatrix,
+  computeOrderedRoute,
 };

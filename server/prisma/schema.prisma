@@ -326,6 +326,10 @@ model time_slots {
   route_distance_m        Int?
   route_duration_s        Int?
   route_computed_at       DateTime?    @db.Timestamp(6)
+  // Full B.2 plan: ordered stops, per-leg metrics, ETAs, scoring and fallback metadata.
+  route_plan              Json?
+  route_version           Int          @default(0)
+  route_last_reason       String?      @db.VarChar(100)
   orders                  orders[]
   lorry_trip              lorry_trips?
   delivery_team           teams?       @relation("DeliveryTeamSlots", fields: [delivery_team_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_time_slots_delivery_team")
@@ -376,6 +380,8 @@ model scheduler_config {
   id                String    @id @default(dbgenerated("gen_random_uuid()"))
   warehouse_address String?
   warehouse_postal  String?
+  warehouse_latitude  Decimal? @db.Decimal(10, 7)
+  warehouse_longitude Decimal? @db.Decimal(10, 7)
   cron_expression   String?   @default("0 0 * * *")
   enabled           Boolean?  @default(true)
   last_run_at       DateTime? @db.Timestamp(6)

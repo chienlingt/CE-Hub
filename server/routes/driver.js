@@ -14,6 +14,7 @@ const {
 } = require('../services/notificationService');
 const { computeOrderLoadingStats, buildSlotSummaries } = require('../services/orderLoadingStats');
 const { healStrandedOrdersOnDepartedSlots } = require('../services/deliveryLifecycleService');
+const { optimizeScheduledSlot, reorderScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('../services/intelligentRouteOptimizationService');
 const { toAppDateKey } = require('../utils/dateKey');
 
 function isDeliveryTeamType(team) {
@@ -424,16 +425,45 @@ router.get('/route/:timeSlotId', async (req, res) => {
     const orders = await prisma.orders.findMany({
       where: {
         time_slot_id: timeSlotId,
-        order_status: { notIn: ['Cancelled'] },
+        // Route view and manual arrangement operate on remaining stops only.
+        order_status: { notIn: ['Cancelled', 'Delivered', 'Failed'] },
       },
       orderBy: { truck_loading_sequence: 'desc' }, // last-loaded (seq 1) is first delivered
       include: {
         customers: { select: { full_name: true, phone: true } },
-        buildings: { select: { building_name: true, latitude: true, longitude: true } },
+        buildings: { select: {
+          building_name: true, latitude: true, longitude: true,
+          access_time_window_start: true, access_time_window_end: true,
+        } },
+        order_products: { select: {
+          quantity: true, service_type: true,
+          custom_installation_time_min: true, custom_installation_time_max: true,
+          products: { select: {
+            product_name: true,
+            estimated_installation_time_min: true,
+            estimated_installation_time_max: true,
+          } },
+        } },
       },
     });
 
-    const stops = orders.map(order => ({
+    const stops = orders.map(order => {
+      const plannedStop = timeslot.route_plan?.stops?.find(s => s.order_id === order.id) || null;
+      const serviceDurationMin = plannedStop?.eta && plannedStop?.service_end_at
+        ? Math.max(0, Math.round((new Date(plannedStop.service_end_at) - new Date(plannedStop.eta)) / 60000))
+        : null;
+      const workItems = order.order_products.map(item => ({
+        product_name: item.products?.product_name || 'Item',
+        quantity: item.quantity || 1,
+        service_type: item.service_type || 'delivery_only',
+        installation_time_min: item.custom_installation_time_min
+          ?? item.products?.estimated_installation_time_min ?? null,
+        installation_time_max: item.custom_installation_time_max
+          ?? item.products?.estimated_installation_time_max ?? null,
+      }));
+      const hasInstallation = workItems.some(item => item.service_type === 'delivery_installation');
+
+      return {
       order_id:               order.id,
       odoo_order_ref:         order.odoo_order_ref,
       customer_name:          order.customers?.full_name || null,
@@ -445,8 +475,16 @@ router.get('/route/:timeSlotId', async (req, res) => {
       longitude:              order.buildings?.longitude != null ? Number(order.buildings.longitude) : null,
       order_status:           order.order_status,
       truck_loading_sequence: order.truck_loading_sequence,
-      eta:                    order.scheduled_start_date_time,
-    }));
+      eta:                    plannedStop?.eta || order.scheduled_start_date_time,
+      service_end_at:         plannedStop?.service_end_at || order.scheduled_end_date_time,
+      access_window_start:    order.buildings?.access_time_window_start || null,
+      access_window_end:      order.buildings?.access_time_window_end || null,
+      work_type:              hasInstallation ? 'Delivery + installation' : 'Delivery',
+      work_duration_min:      serviceDurationMin,
+      work_items:             workItems,
+      segment:                timeslot.route_plan?.segments?.find(s => s.to_order_id === order.id) || null,
+      };
+    });
 
     res.json({
       time_slot_id:      timeslot.id,
@@ -457,11 +495,114 @@ router.get('/route/:timeSlotId', async (req, res) => {
       route_distance_m:   timeslot.route_distance_m,
       route_duration_s:   timeslot.route_duration_s,
       route_computed_at:  timeslot.route_computed_at,
+      route_version:      timeslot.route_version,
+      route_last_reason:  timeslot.route_last_reason,
+      route_plan:         timeslot.route_plan,
       stops,
     });
   } catch (err) {
     console.error('GET /api/driver/route/:timeSlotId error:', err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/driver/route/:timeSlotId/reoptimize
+// Re-evaluates only the remaining orders. The optimiser preserves the current
+// route unless it saves >=10 minutes/10% or prevents a hard-window violation.
+router.post('/route/:timeSlotId/reoptimize', async (req, res) => {
+  try {
+    const { timeSlotId } = req.params;
+    const { employee_id, latitude, longitude, reason = 'traffic_disruption', force = false } = req.body || {};
+    if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
+
+    const slot = await prisma.time_slots.findUnique({ where: { id: timeSlotId } });
+    if (!slot) return res.status(404).json({ error: 'Time slot not found' });
+    const assignments = await prisma.employee_team_assignments.findMany({
+      where: { employee_id }, include: { team: { select: { id: true, team_type: true } } },
+    });
+    const teamIds = assignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id);
+    const ownOrderCount = await prisma.orders.count({ where: { time_slot_id: timeSlotId, employee_id } });
+    if (!teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
+      return res.status(403).json({ error: 'Not assigned to this time slot' });
+    }
+
+    let originCoords = null;
+    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+      originCoords = { lat: Number(latitude), lon: Number(longitude) };
+    } else {
+      const saved = await prisma.employee_locations.findUnique({ where: { employee_id } });
+      if (saved?.latitude != null && saved?.longitude != null) {
+        originCoords = { lat: Number(saved.latitude), lon: Number(saved.longitude) };
+      }
+    }
+
+    const config = await prisma.scheduler_config.findFirst();
+    const result = await optimizeScheduledSlot(timeSlotId, {
+      warehouseAddress: config?.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
+      warehouseCoords: config?.warehouse_latitude != null && config?.warehouse_longitude != null
+        ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
+        : null,
+      originCoords,
+      departureAt: new Date(),
+      reason,
+      dynamic: !force,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error('POST /api/driver/route/:timeSlotId/reoptimize error:', err);
+    return res.status(500).json({ error: 'Route re-optimisation failed', details: err.message });
+  }
+});
+
+// POST /api/driver/route/:timeSlotId/reorder
+// Persists a driver-selected stop order and recalculates road legs, ETAs and
+// the reverse truck-loading sequence. Every active stop must be supplied once.
+router.post('/route/:timeSlotId/reorder', async (req, res) => {
+  try {
+    const { timeSlotId } = req.params;
+    const { employee_id, ordered_order_ids, latitude, longitude, confirm_access_window_violations = false } = req.body || {};
+    if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
+    if (!Array.isArray(ordered_order_ids)) {
+      return res.status(400).json({ error: 'ordered_order_ids must be an array' });
+    }
+
+    const slot = await prisma.time_slots.findUnique({ where: { id: timeSlotId } });
+    if (!slot) return res.status(404).json({ error: 'Time slot not found' });
+    const assignments = await prisma.employee_team_assignments.findMany({
+      where: { employee_id }, include: { team: { select: { id: true, team_type: true } } },
+    });
+    const teamIds = assignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id);
+    const ownOrderCount = await prisma.orders.count({ where: { time_slot_id: timeSlotId, employee_id } });
+    if (!teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
+      return res.status(403).json({ error: 'Not assigned to this time slot' });
+    }
+
+    let originCoords = null;
+    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+      originCoords = { lat: Number(latitude), lon: Number(longitude) };
+    }
+    const config = await prisma.scheduler_config.findFirst();
+    const result = await reorderScheduledSlot(timeSlotId, ordered_order_ids, {
+      warehouseAddress: config?.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
+      warehouseCoords: config?.warehouse_latitude != null && config?.warehouse_longitude != null
+        ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
+        : null,
+      originCoords,
+      departureAt: slot.departed_at ? new Date() : null,
+      reason: 'driver_manual_reorder',
+      allowAccessWindowViolation: confirm_access_window_violations === true,
+    });
+    if (result.requires_confirmation) {
+      return res.status(409).json({
+        error: 'Manual route violates one or more access windows',
+        ...result,
+      });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error('POST /api/driver/route/:timeSlotId/reorder error:', err);
+    const status = /every active stop exactly once/.test(err.message) ? 400 : 500;
+    return res.status(status).json({ error: 'Manual route reorder failed', details: err.message });
   }
 });
 

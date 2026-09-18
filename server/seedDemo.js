@@ -53,7 +53,7 @@ const DEMO_PASSWORD = 'Demo@1234';
 
 // Pin the current recording dataset to 10 September 2026 in Malaysia.
 // DEMO_DATE may still override this when a different rehearsal date is needed.
-const demoDate = process.env.DEMO_DATE || '2026-09-10';
+const demoDate = (process.env.DEMO_DATE || '2026-09-10').trim();
 if (!/^\d{4}-\d{2}-\d{2}$/.test(demoDate) || !dayjs(demoDate).isValid()) {
   throw new Error(`Invalid DEMO_DATE "${demoDate}"; expected YYYY-MM-DD`);
 }
@@ -240,7 +240,78 @@ async function main() {
       notes: 'Guardhouse requires visitor pass 1 day in advance', latitude: 3.0389, longitude: 101.5309,
     },
   });
-  console.log('[seedDemo] 3 zones, 6 buildings created');
+  // Representative stops from the real 26 Aug 2026 TBM delivery history.
+  // Coordinates are stored with the building so B.2 can still exercise its
+  // road-matrix/Haversine fallback path when the Google server key is absent.
+  const historicalStops = [
+    {
+      ref: 'HIST-DO-1065693', name: 'Lembaga Getah Malaysia', zoneId: zoneKL.id,
+      housingType: 'Commercial', postcode: '50450', city: 'Kuala Lumpur', state: 'Wilayah Persekutuan',
+      address: 'Unit Komunikasi Korporat, Aras 13, Bangunan Getah Asli, 148 Jalan Ampang, 50450 Kuala Lumpur',
+      latitude: 3.1577, longitude: 101.7121, windowStart: '10:00', windowEnd: '12:00',
+      sourceRow: 2704, productKey: 'fridge', quantity: 3, serviceType: 'delivery_only',
+    },
+    {
+      ref: 'HIST-DO-044119', name: 'Sri Impian Condo', zoneId: zoneKL.id,
+      housingType: 'Condominium', postcode: '50470', city: 'Kuala Lumpur', state: 'Wilayah Persekutuan',
+      address: '12-4, Sri Impian Condo, Jalan Ang Seng, Brickfields, 50470 Kuala Lumpur',
+      latitude: 3.1288, longitude: 101.6852, windowStart: '10:00', windowEnd: '13:00',
+      sourceRow: 2714, productKey: 'washer', quantity: 1, serviceType: 'delivery_only',
+    },
+    {
+      ref: 'HIST-DO-044066', name: 'Parkhill Residence', zoneId: zoneKL.id,
+      housingType: 'Condominium', postcode: '57000', city: 'Bukit Jalil', state: 'Wilayah Persekutuan',
+      address: 'C-13-13, Parkhill Residence, No. 11, Lebuhraya Bukit Jalil, 57000 Kuala Lumpur',
+      latitude: 3.0550, longitude: 101.6860, windowStart: '10:00', windowEnd: '14:00',
+      sourceRow: 2716, productKey: 'dining', quantity: 2, serviceType: 'delivery_only',
+    },
+    {
+      ref: 'HIST-DO-044181', name: 'Aliran Damai Apartment', zoneId: zoneKL.id,
+      housingType: 'Apartment', postcode: '56000', city: 'Cheras', state: 'Wilayah Persekutuan',
+      address: 'B-10-05, Aliran Damai Apartment, Jalan Damai Perdana 5/2, 56000 Cheras',
+      latitude: 3.0592, longitude: 101.7440, windowStart: '10:00', windowEnd: '14:00',
+      sourceRow: 2719, productKey: 'sofa', quantity: 1, serviceType: 'delivery_only',
+    },
+    {
+      ref: 'HIST-DO-044393', name: 'Residensi Alira', zoneId: zonePJ.id,
+      housingType: 'Condominium', postcode: '47500', city: 'Subang Jaya', state: 'Selangor',
+      address: 'B-19-1, Residensi Alira, Jalan MP1, Tropicana Metropark, 47500 Subang Jaya',
+      latitude: 3.0769, longitude: 101.5568, windowStart: '11:30', windowEnd: '15:00',
+      sourceRow: 2744, productKey: 'tvConsole', quantity: 1, serviceType: 'delivery_only',
+    },
+    {
+      ref: 'HIST-DO-044117', name: 'Aura Residensi', zoneId: zoneKlang.id,
+      housingType: 'Apartment', postcode: '62250', city: 'Putrajaya', state: 'Putrajaya',
+      address: 'A-3-3, Aura Residensi, Presint 8, 62250 Putrajaya',
+      latitude: 2.9289, longitude: 101.6813, windowStart: '14:30', windowEnd: '17:30',
+      sourceRow: 2771, productKey: 'aircond', quantity: 1, serviceType: 'delivery_installation',
+    },
+    {
+      ref: 'HIST-DO-044233', name: 'Mandarina Court', zoneId: zoneKL.id,
+      housingType: 'Condominium', postcode: '56000', city: 'Cheras', state: 'Wilayah Persekutuan',
+      address: 'A-08-01, Mandarina Court, No. 27, Jalan 10/142, Bukit Mandarina, 56000 Cheras',
+      latitude: 3.0618, longitude: 101.7461, windowStart: '14:30', windowEnd: '18:00',
+      sourceRow: 2775, productKey: 'wardrobe', quantity: 1, serviceType: 'delivery_installation',
+    },
+    {
+      ref: 'HIST-DO-044243', name: 'One Equine', zoneId: zonePJ.id,
+      housingType: 'Condominium', postcode: '43300', city: 'Seri Kembangan', state: 'Selangor',
+      address: 'A-22-19, One Equine, Jalan Equine 10, Taman Equine, 43300 Seri Kembangan',
+      latitude: 3.0015, longitude: 101.6793, windowStart: '16:00', windowEnd: '19:00',
+      sourceRow: 2788, productKey: 'fridge', quantity: 1, serviceType: 'delivery_only',
+    },
+  ];
+  for (const stop of historicalStops) {
+    stop.building = await prisma.buildings.create({ data: {
+      building_name: stop.name, housing_type: stop.housingType, zone_id: stop.zoneId,
+      postal_code: stop.postcode, address: stop.address,
+      loading_bay_available: stop.housingType !== 'Landed', lift_available: stop.housingType !== 'Landed',
+      access_time_window_start: stop.windowStart, access_time_window_end: stop.windowEnd,
+      latitude: stop.latitude, longitude: stop.longitude,
+      notes: `Historical scheduler source: 26 Aug 2026, workbook row ${stop.sourceRow}`,
+    }});
+  }
+  console.log('[seedDemo] 3 zones, 14 buildings created (incl. 8 historical B.2 stops)');
 
   // ── Trucks & truck_zones ────────────────────────────────────────────────
   const truck1 = await prisma.trucks.create({
@@ -325,7 +396,19 @@ async function main() {
     address: buildingCondoLift.address, city: 'Petaling Jaya', postcode: buildingCondoLift.postal_code, state: 'Selangor',
     notifications_enabled: true, created_at: D.today.toDate(),
   }});
-  console.log('[seedDemo] 8 customers created');
+  for (let index = 0; index < historicalStops.length; index += 1) {
+    const stop = historicalStops[index];
+    stop.customer = await prisma.customers.create({ data: {
+      full_name: `${stop.name} Historical Customer`,
+      email: `history.b2.${index + 1}@demo.local`, phone: `019800${String(index + 1).padStart(4, '0')}`,
+      address: stop.address, city: stop.city, postcode: stop.postcode, state: stop.state,
+      preferred_delivery_time_start: stop.windowStart,
+      preferred_delivery_time_end: stop.windowEnd,
+      preferred_delivery_notes: `Imported from 26 Aug 2026 TBM scheduler row ${stop.sourceRow}`,
+      notifications_enabled: false, created_at: D.today.toDate(),
+    }});
+  }
+  console.log('[seedDemo] 16 customers created (incl. 8 historical B.2 customers)');
 
   // ── Products ────────────────────────────────────────────────────────────
   const pSofa = await prisma.products.create({ data: {
@@ -427,7 +510,16 @@ async function main() {
     date: D.future3.format('YYYY-MM-DD'), time_window_start: '15:00', time_window_end: '19:00',
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
-  console.log('[seedDemo] 9 time slots created');
+  // Dedicated route-optimisation rehearsal: the original records were on
+  // 26 Aug 2026, but are shifted to DEMO_DATE so they appear immediately in
+  // Suresh's My Jobs and Route tabs after every seed run.
+  const slotHistoricalB2 = await prisma.time_slots.create({ data: {
+    date: D.today.format('YYYY-MM-DD'), time_window_start: '09:30', time_window_end: '19:00',
+    delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
+    available_flag: false, slot_status: 'scheduled', created_at: D.today.toDate(),
+    route_last_reason: 'awaiting_historical_b2_optimisation',
+  }});
+  console.log('[seedDemo] 10 time slots created (incl. historical B.2 rehearsal slot)');
 
   // ── Lorry trips (only for slots that have actually departed) ───────────
   const tripPastCompleted = await prisma.lorry_trips.create({ data: {
@@ -841,7 +933,53 @@ async function main() {
     odoo_sync_status: 'pending', created_at: atTime(D.today, '10:20'),
   }});
 
-  console.log('[seedDemo] 17 orders created spanning the full lifecycle');
+  // Historical 26 Aug 2026 sample, shifted to DEMO_DATE. These are
+  // deliberately inserted in source-row order rather than geographic order;
+  // B.2 should improve it and then reverse the result for truck loading.
+  const historicalProducts = {
+    sofa: pSofa, fridge: pFridge, dining: pDining, washer: pWasher,
+    tvConsole: pTvConsole, wardrobe: pWardrobe, aircond: pAircond,
+  };
+  const historicalOrders = [];
+  for (let index = 0; index < historicalStops.length; index += 1) {
+    const stop = historicalStops[index];
+    const scheduledStart = atTime(D.today, stop.windowStart);
+    // The building stores the customer's full access window. These order
+    // timestamps represent the expected service duration used by B.2.
+    const serviceMinutes = stop.serviceType === 'delivery_installation' ? 90 : 20;
+    const scheduledEnd = dayjs(scheduledStart).add(serviceMinutes, 'minute').toDate();
+    const order = await prisma.orders.create({ data: {
+      odoo_order_ref: stop.ref, odoo_sales_ref: null,
+      customer_id: stop.customer.id, building_id: stop.building.id, employee_id: driver2.id,
+      time_slot_id: slotHistoricalB2.id, order_status: 'Scheduled', assignment_status: 'approved',
+      preferred_timeslot: scheduledStart,
+      scheduled_start_date_time: scheduledStart, scheduled_end_date_time: scheduledEnd,
+      delivery_address: stop.address, delivery_city: stop.city,
+      delivery_postcode: stop.postcode, delivery_state: stop.state,
+      delivery_notes: `Historical TBM scheduler row ${stop.sourceRow}; original date 2026-08-26`,
+      truck_loading_sequence: index + 1,
+      salesperson_name: 'Historical Scheduler Import', dispatched_by: admin.id,
+      notified_pending: true, notified_scheduled: true,
+      created_at: D.today.subtract(1, 'day').toDate(), updated_at: D.today.toDate(),
+    }});
+    const product = historicalProducts[stop.productKey];
+    await prisma.order_products.create({ data: {
+      order_id: order.id, product_id: product.id, quantity: stop.quantity,
+      service_type: stop.serviceType, item_delivery_status: 'pending', handling_status: 'pending',
+      custom_installation_time_min: stop.serviceType === 'delivery_installation' ? 60 : null,
+      custom_installation_time_max: stop.serviceType === 'delivery_installation' ? 120 : null,
+    }});
+    if (stop.serviceType === 'delivery_installation') {
+      await prisma.installation_schedules.create({ data: {
+        order_id: order.id, installation_team_id: installerTeam.id,
+        estimated_arrival_time: scheduledStart, status: 'Scheduled',
+      }});
+    }
+    historicalOrders.push(order);
+  }
+
+  console.log('[seedDemo] 25 orders created spanning the full lifecycle + historical B.2 route sample');
+  console.log(`[seedDemo]   B.2 sample: ${historicalOrders.length} stops on ${D.today.format('YYYY-MM-DD')} assigned to Suresh / WYY 5678`);
   console.log('[seedDemo]   incl. Scan Station coverage for today: Loading (DEMO-DO-1016), Unloading (DEMO-DO-1004/1005), Audit (all of today\'s orders)');
   console.log('[seedDemo]   DEMO-DO-1016 serial test: DEMO-SERIAL-1016-A + DEMO-SERIAL-1016-B');
 
@@ -877,7 +1015,7 @@ async function main() {
     { setting_key: 'whatsapp_admin_notification_enabled', setting_value: 'true', description: 'Send WhatsApp alerts to admins on delivery failure' },
   ]});
   await prisma.scheduler_config.create({ data: {
-    warehouse_address: 'Lot 5, Jalan Teknologi 3/9, Kota Damansara', warehouse_postal: '47810',
+    warehouse_address: 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor', warehouse_postal: '40000',
     cron_expression: '0 0 * * *', enabled: true, last_run_at: D.today.subtract(1, 'day').toDate(),
   }});
 

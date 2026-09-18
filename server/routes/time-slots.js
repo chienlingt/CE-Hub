@@ -3,6 +3,7 @@ const express = require('express');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
 const { departTimeSlot, endTimeSlotTrip, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
+const { optimizeScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('../services/intelligentRouteOptimizationService');
 const {
   enqueueSlotDepartureSideEffects,
   enqueueSlotEndTripSideEffects,
@@ -328,14 +329,28 @@ router.post('/:id/depart', async (req, res) => {
   const { employee_id, latitude, longitude } = req.body || {};
 
   try {
+    // Refresh traffic immediately before departure. This is best-effort: a
+    // Google outage must never prevent a fully loaded truck from leaving.
+    const lat = latitude  != null ? parseFloat(latitude)  : null;
+    const lng = longitude != null ? parseFloat(longitude) : null;
+    const config = await prisma.scheduler_config.findFirst();
+    await optimizeScheduledSlot(req.params.id, {
+      warehouseAddress: config?.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
+      warehouseCoords: config?.warehouse_latitude != null && config?.warehouse_longitude != null
+        ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
+        : null,
+      originCoords: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lon: lng } : null,
+      departureAt: new Date(),
+      reason: 'departure_traffic_check',
+      dynamic: true,
+    }).catch(err => console.warn('[Depart] Route traffic check skipped:', err.message));
+
     const { timeSlot, ordersUpdated, lorryTrip, activeOrders } = await departTimeSlot(
       req.params.id,
       { employeeId: employee_id }
     );
 
     // Upsert driver location on depart (best-effort)
-    const lat = latitude  != null ? parseFloat(latitude)  : null;
-    const lng = longitude != null ? parseFloat(longitude) : null;
     upsertEmployeeLocation(employee_id, lat, lng).catch(() => {});
 
     // Enqueue Odoo sync for each dispatched order (non-blocking)

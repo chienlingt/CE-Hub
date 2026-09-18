@@ -11,16 +11,40 @@ import { useEffect, useState } from 'react';
 
 let loadPromise = null;
 
+function mapsConstructorsReady() {
+  return typeof window.google?.maps?.Map === 'function' &&
+    typeof window.google?.maps?.LatLngBounds === 'function';
+}
+
+async function ensureGoogleMapsReady() {
+  if (mapsConstructorsReady()) return;
+  if (typeof window.google?.maps?.importLibrary === 'function') {
+    await window.google.maps.importLibrary('maps');
+    await window.google.maps.importLibrary('geometry');
+  }
+  if (!mapsConstructorsReady()) {
+    throw new Error('Google Maps loaded without the required Maps JavaScript API constructors');
+  }
+}
+
 function loadGoogleMapsScript(apiKey) {
-  if (window.google?.maps) return Promise.resolve();
+  if (mapsConstructorsReady()) return Promise.resolve();
   if (loadPromise) return loadPromise;
 
   loadPromise = new Promise((resolve, reject) => {
+    const callbackName = `__ceHubGoogleMapsReady_${Date.now()}`;
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=geometry&loading=async`;
+    const finish = () => ensureGoogleMapsReady().then(resolve).catch(reject);
+    window[callbackName] = () => {
+      delete window[callbackName];
+      finish();
+    };
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&libraries=geometry&loading=async&callback=${callbackName}`;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Failed to load Google Maps script'));
+    script.onerror = () => {
+      delete window[callbackName];
+      reject(new Error('Failed to load Google Maps JavaScript API'));
+    };
     document.head.appendChild(script);
   });
 
@@ -31,7 +55,7 @@ function loadGoogleMapsScript(apiKey) {
  * @returns {{ loaded: boolean, error: string|null }}
  */
 export function useGoogleMapsScript() {
-  const [loaded, setLoaded] = useState(!!window.google?.maps);
+  const [loaded, setLoaded] = useState(mapsConstructorsReady());
   const [error, setError]   = useState(null);
 
   useEffect(() => {

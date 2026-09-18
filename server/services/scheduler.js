@@ -5,6 +5,7 @@ const isSameOrAfter = require('dayjs/plugin/isSameOrAfter');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 const prisma = require('../prismaClient');
 const { planRoutes } = require('./googleRoutingService');
+const { optimizeScheduledSlots } = require('./intelligentRouteOptimizationService');
 const { enqueue } = require('./integrationOutboxService');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
@@ -13,6 +14,7 @@ dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
 
 const TRAFFIC_MULTIPLIER = 1.5;
+const DEFAULT_WAREHOUSE_ADDRESS = 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor';
 
 function scaleTravelMinutes(minutes) {
   if (minutes === null || minutes === undefined) return minutes;
@@ -185,6 +187,16 @@ async function scheduleOrders(options = {}) {
     results.installationSchedulesCreated = schedulingResults.installationSchedulesCreated;
     await reconcileTimeslotAssignments(teams, trucks);
 
+    // B.2 authoritative post-pass: B.1 assignments are now fixed. Optimise
+    // sequence/ETA/loading only within each assigned Team + Truck + Time Slot.
+    await optimizeScheduledSlots({
+      timeSlotIds: [...new Set(results.scheduled.map(o => o.time_slot_id).filter(Boolean))],
+      warehouseAddress: config.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
+      warehouseCoords: config.warehouse_latitude != null && config.warehouse_longitude != null
+        ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
+        : null,
+    });
+
     // Step 9: Update last run timestamp
     console.log('[Scheduler] Step 9: updating last_run_at...');
     await prisma.scheduler_config.update({
@@ -222,8 +234,8 @@ async function loadConfiguration() {
     console.log('No configuration found. Creating default configuration...');
     config = await prisma.scheduler_config.create({
       data: {
-        warehouse_address: 'University of Malaya, Kuala Lumpur',
-        warehouse_postal: '50603',
+        warehouse_address: DEFAULT_WAREHOUSE_ADDRESS,
+        warehouse_postal: '40000',
         cron_expression: '0 0 * * *',
         enabled: true,
         created_at: new Date(),

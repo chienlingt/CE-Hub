@@ -7,6 +7,7 @@
 // enqueues Odoo sync, and auto-closes the slot trip.
 
 const prisma = require('../prismaClient');
+const { optimizeScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('./intelligentRouteOptimizationService');
 const {
   markOrderDelivered,
   isEndTripTerminal,
@@ -274,6 +275,24 @@ async function processDeliveryCompletion(orderId, {
     });
     autoEnded    = result.autoEnded;
     autoDeparted = result.autoDeparted;
+
+    // If stops remain, refresh traffic from the driver's current position.
+    // Threshold logic inside B.2 prevents insignificant sequence churn.
+    if (!autoEnded) {
+      const config = await prisma.scheduler_config.findFirst().catch(() => null);
+      await optimizeScheduledSlot(updatedOrder.time_slot_id, {
+        warehouseAddress: config?.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
+        warehouseCoords: config?.warehouse_latitude != null && config?.warehouse_longitude != null
+          ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
+          : null,
+        originCoords: Number.isFinite(latitude) && Number.isFinite(longitude)
+          ? { lat: latitude, lon: longitude }
+          : null,
+        departureAt: new Date(),
+        reason: 'stop_completed_traffic_check',
+        dynamic: true,
+      }).catch(e => console.warn('[A4] Remaining route traffic check skipped:', e.message));
+    }
   }
 
   // ── Step 8: Customer in-app notification ─────────────────────────────────

@@ -94,7 +94,7 @@ It's safe to re-run any time: it truncates every table (this database holds
 nothing but demo data) and reseeds from a clean slate, with dates computed
 relative to "today" so the demo always looks current.
 
-What you get — 17 orders walking through the entire delivery lifecycle:
+What you get — 25 orders covering the delivery lifecycle and a historical B.2 route rehearsal:
 
 - **Pending / unassigned** — a fresh order awaiting scheduling
 - **Scheduled** (plain, and one requiring installer team + `installation_schedules`)
@@ -119,14 +119,27 @@ the moment you open it (no need to change the date picker off "today"):
 
 | Tab | Order | What you'll see |
 |---|---|---|
-| Loading | DEMO-DO-1016 | 2 items: one requires `DEMO-SERIAL-1016-A`, one has a blank assigned serial |
+| Loading | DEMO-DO-1016 | 2 items with `DEMO-SERIAL-1016-A` and `DEMO-SERIAL-1016-B` |
 | Unloading | DEMO-DO-1004, DEMO-DO-1005 | items loaded, awaiting unload on today's out-for-delivery trip |
 | Audit (admin only) | all of the above + DEMO-DO-1010, DEMO-DO-1017 | full scan trail for today across every status |
 
-Plus 3 roles, 2 outlets, 8 employees (1 deactivated), 3 zones, 6 buildings
-(landed / condo-with-lift / walk-up / commercial / shoplot / gated), 3 trucks,
-3 teams (paired primary/assistant driver + truck), 8 customers, 8 products,
-8 time slots, 3 lorry trips, issue reports, notifications, system settings,
+### Historical B.2 route rehearsal
+
+Eight usable delivery records from the 26 August 2026 TBM scheduler history are
+shifted to `DEMO_DATE`, so they appear immediately after login. They keep their real delivery-area addresses,
+customer access windows, source workbook row numbers, quantities, and a mix of
+delivery-only and installation work. Placeholder calendar rows, transfers,
+cancelled/double bookings, and rows without usable delivery addresses are excluded.
+
+The rehearsal slot is assigned to Suresh (`suresh.driver@demo.tbm.local`) and
+truck `WYY 5678`. Its orders use the `HIST-DO-*` prefix. Run B.2 for that slot
+to test road-time sequencing, ETA calculation, last-stop-first-loaded ordering,
+fallback routing, and preservation of the existing route when a dynamic rerun
+offers no significant improvement.
+
+Plus 3 roles, 2 outlets, 8 employees (1 deactivated), 3 zones, 14 buildings
+(including 8 historical route stops), 3 trucks, 3 teams, 16 customers, 8 products,
+10 time slots, 3 lorry trips, issue reports, notifications, system settings,
 scheduler config, and 2 integration-outbox rows (`sent` and `pending`).
 
 Demo logins (printed again at the end of the seed run), password `Demo@1234` for all:
@@ -135,6 +148,7 @@ Demo logins (printed again at the end of the seed run), password `Demo@1234` for
 |---|---|
 | Admin | `admin@demo.tbm.local` |
 | Driver | `razif.driver@demo.tbm.local` |
+| Driver 2 / B.2 rehearsal | `suresh.driver@demo.tbm.local` |
 | Installer | `kumaran.installer@demo.tbm.local` |
 
 ## 4. Look at it
