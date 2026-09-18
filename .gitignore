@@ -25,7 +25,8 @@ iisnode/
 .env.production.local
 server/.env
 server/.env.demo
-!server/.env.example
+client/.env.example
+server/.env.example
 
 # IIS logs
 *-stderr-*.txt
