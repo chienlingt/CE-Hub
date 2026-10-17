@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Truck, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
-import OrderTaskCard from './OrderTaskCard';
+import DriverRoute from './DriverRoute';
+import DriverDeliveryCard, { sortDeliveryCards } from './DriverDeliveryCard';
 
 /** Slot status → human label + colour classes. */
 const SLOT_STATUS_STYLE = {
@@ -39,11 +40,9 @@ function formatWindow(start, end) {
 export default function SlotOrderGroup({
   slot,
   jobs,
+  allJobs = jobs,
   employeeId,
-  onUpdate,
-  onViewEvidence,
-  onReport,
-  onFail,
+  highlightNext = true,
   onDeparted,
 }) {
   const [expanded, setExpanded]     = useState(true);
@@ -62,7 +61,7 @@ export default function SlotOrderGroup({
   }, []);
 
   const windowLabel = slot ? (formatWindow(slot.time_window_start, slot.time_window_end) || 'Slot') : 'Unassigned';
-  const { label: statusLabel, cls: statusCls } = slotStatusBadge(slot?.slot_status);
+  const { label: statusLabel } = slotStatusBadge(slot?.slot_status);
   const orderCount = jobs.length;
   const canDepart  = Boolean(slot?.ready_to_depart);
 
@@ -107,10 +106,11 @@ export default function SlotOrderGroup({
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div
-        className="flex items-center gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100 cursor-pointer select-none"
+      <button
+        type="button"
+        className="flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left bg-gray-50 border-b border-gray-100 cursor-pointer select-none"
         onClick={() => setExpanded(prev => !prev)}
-        role="button"
+        aria-label={`${windowLabel}, ${orderCount} deliveries, ${statusLabel}`}
         aria-expanded={expanded}
       >
         {/* Time window / label */}
@@ -119,23 +119,16 @@ export default function SlotOrderGroup({
           {windowLabel}
         </span>
 
-        {/* Slot status badge */}
-        {slot && (
-          <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${statusCls}`}>
-            {statusLabel}
-          </span>
-        )}
-
         {/* Order count */}
         <span className="shrink-0 text-xs text-gray-500 font-medium">
-          {orderCount} order{orderCount !== 1 ? 's' : ''}
+          {orderCount} {orderCount === 1 ? 'delivery' : 'deliveries'}
         </span>
 
         {/* Chevron */}
         <span className="shrink-0 text-gray-400">
           {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </span>
-      </div>
+      </button>
 
       {/* ── Leave Warehouse (only when ready_to_depart) ──────────────── */}
       {canDepart && (
@@ -175,19 +168,8 @@ export default function SlotOrderGroup({
 
       {/* ── Order list ──────────────────────────────────────────────────── */}
       {expanded && (
-        <div className="divide-y divide-gray-100">
-          {jobs.map(job => (
-            <div key={job.id} className="p-4">
-              <OrderTaskCard
-                job={job}
-                onUpdate={onUpdate}
-                onViewEvidence={onViewEvidence}
-                onReport={onReport}
-                onFail={onFail}
-              />
-            </div>
-          ))}
-        </div>
+        slot?.id ? <DriverRoute slotId={slot.id} jobs={jobs} allJobs={allJobs} refreshToken={allJobs} onRefresh={onDeparted} highlightNext={highlightNext} />
+          : <div>{sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} />)}</div>
       )}
     </div>
   );

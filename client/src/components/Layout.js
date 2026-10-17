@@ -42,7 +42,7 @@ import InstallationSchedule from './installer/InsSchedule';
 import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
 import DriverDashboard from './driver/DriverDashboard';
-import DriverRoute from './driver/DriverRoute';
+import DriverDeliveryDetail from './driver/DriverDeliveryDetail';
 import CompletedDeliveries from './admin/CompletedDeliveries';
 import DeliveryIssues from './admin/exceptions/DeliveryIssues';
 
@@ -99,8 +99,7 @@ const Layout = () => {
       icon: Truck,
       route: '/driver',
       topNavItems: [
-        { id: 'driver', label: 'My Jobs', path: '', component: DriverDashboard },
-        { id: 'route',  label: 'Route',   path: 'route', component: DriverRoute },
+        { id: 'driver', label: 'Deliveries', path: '', component: DriverDashboard },
       ],
     },
     schedule: {
@@ -441,7 +440,7 @@ const Layout = () => {
       {/* Main Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
-        <div className="bg-white shadow-sm border-b border-gray-200">
+        <div className="shrink-0 bg-white shadow-sm border-b border-gray-200">
           {useBottomNav ? (
             <div className="flex items-center justify-end px-4 py-3 border-b border-gray-100">
               <div className="flex items-center space-x-2">{headerActions}</div>
@@ -500,8 +499,10 @@ const Layout = () => {
         </div>
 
         {/* Content */}
-        <div className={`flex-1 overflow-auto p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
+        <div data-page-scroll className={`min-h-0 flex-1 ${activeSection === 'scanning' ? 'overflow-hidden' : 'overflow-auto'} p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
           <Routes>
+            <Route path="/driver/route" element={<Navigate to="/driver" replace />} />
+            <Route path="/driver/delivery/:orderId" element={<DriverDeliveryDetail />} />
             {/* Standalone route for Report Issue (accessible to all employees) */}
             <Route path="/reports" element={<ReportIssue />} />
 

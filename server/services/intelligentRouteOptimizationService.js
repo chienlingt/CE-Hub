@@ -8,6 +8,7 @@ const {
   estimateFallbackLeg,
   buildTravelMetricsMatrix,
   computeOrderedRoute,
+  predictiveDeparture,
 } = require('./googleRoutingService');
 
 const DEFAULT_WAREHOUSE_ADDRESS = 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor';
@@ -198,9 +199,11 @@ async function optimiseSlot(slot, { warehouseAddress, warehouseCoords, originCoo
   const resolved = [];
   for (const order of orders) resolved.push({ ...order, coords: await resolveOrderCoords(order) });
   const points = [origin, ...resolved.map(o => o.coords)];
+  const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
+  const trafficDepartureAt = departureAt || slotStart;
   let metrics;
   try {
-    metrics = await buildTravelMetricsMatrix(points, Math.floor((departureAt ? new Date(departureAt) : new Date()).getTime() / 1000));
+    metrics = await buildTravelMetricsMatrix(points, trafficDepartureAt);
   } catch (error) {
     metrics = {
       durations: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
@@ -209,11 +212,10 @@ async function optimiseSlot(slot, { warehouseAddress, warehouseCoords, originCoo
     };
   }
   fillFallbackMatrices(points, metrics);
-  const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
   const departureMs = Math.max(departureAt ? new Date(departureAt).getTime() : slotStart, slotStart);
   const best = selectBestSequence(resolved, slot, metrics, departureMs);
   const ordered = best.sequence.map(i => resolved[i]);
-  const geometry = await computeOrderedRoute(origin, ordered).catch(() => null);
+  const geometry = await computeOrderedRoute(origin, ordered, trafficDepartureAt).catch(() => null);
   const oldPlan = slot.route_plan && typeof slot.route_plan === 'object' ? slot.route_plan : null;
   const activeOrderIds = new Set(resolved.map(o => o.id));
   const oldRemainingSeconds = Array.isArray(oldPlan?.segments)
@@ -242,6 +244,10 @@ async function optimiseSlot(slot, { warehouseAddress, warehouseCoords, originCoo
     reason,
     generated_at: new Date().toISOString(),
     used_fallback: metrics.usedFallback,
+    traffic_model: metrics.usedFallback ? null : (geometry?.trafficModel || 'BEST_GUESS'),
+    traffic_departure_at: metrics.usedFallback ? null : new Date(predictiveDeparture(trafficDepartureAt)).toISOString(),
+    static_travel_time_s: geometry?.staticDurationSec || null,
+    predicted_traffic_delay_s: geometry?.trafficDelaySec || 0,
     origin: { address: warehouseAddress || DEFAULT_WAREHOUSE_ADDRESS, latitude: origin.lat, longitude: origin.lon },
     total_distance_m: geometry?.totalDistanceM || best.distanceMeters,
     total_travel_time_s: geometry?.totalDurationSec || best.travelSeconds,
@@ -311,12 +317,11 @@ async function reorderScheduledSlot(timeSlotId, orderedOrderIds, {
   const resolved = [];
   for (const order of orders) resolved.push({ ...order, coords: await resolveOrderCoords(order) });
   const points = [origin, ...resolved.map(order => order.coords)];
+  const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
+  const trafficDepartureAt = departureAt || slotStart;
   let metrics;
   try {
-    metrics = await buildTravelMetricsMatrix(
-      points,
-      Math.floor((departureAt ? new Date(departureAt) : new Date()).getTime() / 1000)
-    );
+    metrics = await buildTravelMetricsMatrix(points, trafficDepartureAt);
   } catch (error) {
     metrics = {
       durations: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
@@ -328,7 +333,6 @@ async function reorderScheduledSlot(timeSlotId, orderedOrderIds, {
 
   const indexById = new Map(resolved.map((order, index) => [order.id, index]));
   const sequence = requested.map(id => indexById.get(id));
-  const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
   const departureMs = Math.max(departureAt ? new Date(departureAt).getTime() : slotStart, slotStart);
   const evaluated = evaluateSequence(sequence, resolved, slot, metrics, departureMs);
   const violations = evaluated.stops
@@ -342,12 +346,16 @@ async function reorderScheduledSlot(timeSlotId, orderedOrderIds, {
     return { applied: false, requires_confirmation: true, violations };
   }
   const ordered = sequence.map(index => resolved[index]);
-  const geometry = await computeOrderedRoute(origin, ordered).catch(() => null);
+  const geometry = await computeOrderedRoute(origin, ordered, trafficDepartureAt).catch(() => null);
   const plan = {
     algorithm: 'manual-road-time-sequence',
     reason,
     generated_at: new Date().toISOString(),
     used_fallback: metrics.usedFallback,
+    traffic_model: metrics.usedFallback ? null : (geometry?.trafficModel || 'BEST_GUESS'),
+    traffic_departure_at: metrics.usedFallback ? null : new Date(predictiveDeparture(trafficDepartureAt)).toISOString(),
+    static_travel_time_s: geometry?.staticDurationSec || null,
+    predicted_traffic_delay_s: geometry?.trafficDelaySec || 0,
     origin: { address: warehouseAddress, latitude: origin.lat, longitude: origin.lon },
     total_distance_m: geometry?.totalDistanceM || evaluated.distanceMeters,
     total_travel_time_s: geometry?.totalDurationSec || evaluated.travelSeconds,

@@ -172,6 +172,11 @@ export function applyDriverFilters(jobs, { date, tab = 'all', window = 'all', se
  * @param {Array} jobs      - enriched job objects (must have time_slot_id)
  * @param {Array} slots     - slot summary objects from useDriverJobs (for the selected date)
  */
+export function nextDeliverySlotId(groups) {
+  return groups.find(group => group.slot?.id && group.jobs.some(job =>
+    !['Delivered', 'Installing', 'Failed', 'Cancelled'].includes(job.status)))?.slot?.id;
+}
+
 export function groupJobsBySlot(jobs, slots) {
   const slotMap = new Map((slots || []).map(s => [s.id, s]));
 

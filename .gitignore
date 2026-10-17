@@ -43,3 +43,7 @@ CLAUDE.md
 server/uploads/
 docs/
 graphify-out
+
+# Local tests and Salesforce metadata cache
+/server/tests/
+/.sf/orgs/00DgL00000CtCzPUAV/metadata-catalog/

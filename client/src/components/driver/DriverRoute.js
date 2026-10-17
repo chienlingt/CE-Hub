@@ -12,6 +12,7 @@ import { useDriverJobs } from '../../hooks/useDriverJobs';
 import { useGoogleMapsScript } from '../../hooks/useGoogleMapsScript';
 import { todayLocalDateKey } from '../../utils/dateKey';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import DriverDeliveryCard, { sortDeliveryCards } from './DriverDeliveryCard';
 
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
@@ -60,30 +61,34 @@ function openGoogleMapsNavigation(stop) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-export default function DriverRoute() {
+export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refreshToken, onRefresh, highlightNext = true }) {
   const { currentUser } = useAuth();
   const employeeId = currentUser?.employeeId || '';
   const today = todayLocalDateKey();
 
-  const { slots, loading: slotsLoading } = useDriverJobs(employeeId);
+  const { slots, loading: slotsLoading } = useDriverJobs(slotId ? null : employeeId);
   const { loaded: mapsLoaded, error: mapsError } = useGoogleMapsScript();
 
   const todaysSlots = useMemo(() => slots.filter(s => s.date === today), [slots, today]);
 
-  const [selectedSlotId, setSelectedSlotId] = useState(null);
+  const [chosenSlotId, setSelectedSlotId] = useState(null);
+  const selectedSlotId = slotId || chosenSlotId;
   const [route, setRoute]     = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(slotId));
   const [error, setError]     = useState(null);
   const [routeRefreshKey, setRouteRefreshKey] = useState(0);
-  const [rerouting, setRerouting] = useState(false);
   const [rerouteMessage, setRerouteMessage] = useState(null);
   const [arranging, setArranging] = useState(false);
   const [draftStops, setDraftStops] = useState([]);
   const [draggedStopId, setDraggedStopId] = useState(null);
+  const [dropTargetId, setDropTargetId] = useState(null);
+  const touchDrag = useRef(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [resettingRoute, setResettingRoute] = useState(false);
   const [showFallbackNotice, setShowFallbackNotice] = useState(true);
   const [showHttpsNotice, setShowHttpsNotice] = useState(true);
+  const [showMap, setShowMap] = useState(!slotId);
+  const stopCache = useRef(new Map());
 
   const mapDivRef = useRef(null);
 
@@ -112,43 +117,17 @@ export default function DriverRoute() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then(data => { if (!cancelled) setRoute(data); })
+      .then(data => {
+        if (!cancelled) {
+          data.stops.forEach(stop => stopCache.current.set(stop.order_id, stop));
+          setRoute(data);
+        }
+      })
       .catch(err => { if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [selectedSlotId, employeeId, routeRefreshKey]);
-
-  async function handleReoptimise() {
-    if (!selectedSlotId || rerouting) return;
-    setRerouting(true);
-    setRerouteMessage(null);
-    let location = {};
-    if (navigator.geolocation) {
-      location = await new Promise(resolve => navigator.geolocation.getCurrentPosition(
-        pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-        () => resolve({}),
-        { timeout: 8000, maximumAge: 30000 }
-      ));
-    }
-    try {
-      const res = await fetch(apiUrl(`driver/route/${selectedSlotId}/reoptimize`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-        body: JSON.stringify({ employee_id: employeeId, ...location, reason: 'driver_traffic_check' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setRerouteMessage(data.applied
-        ? `Route updated${data.saved_seconds > 0 ? ` — saves ${Math.round(data.saved_seconds / 60)} min` : ''}.`
-        : 'Existing route kept — improvement was insignificant.');
-      setRouteRefreshKey(k => k + 1);
-    } catch (err) {
-      setRerouteMessage(`Re-routing unavailable: ${err.message}`);
-    } finally {
-      setRerouting(false);
-    }
-  }
+  }, [selectedSlotId, employeeId, routeRefreshKey, refreshToken]);
 
   async function resetOptimalRoute() {
     if (!selectedSlotId || resettingRoute) return;
@@ -168,6 +147,7 @@ export default function DriverRoute() {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setRerouteMessage('System-recommended optimal route restored.');
       setRouteRefreshKey(key => key + 1);
+      onRefresh?.();
     } catch (err) {
       setRerouteMessage(`Could not reset route: ${err.message}`);
     } finally {
@@ -176,7 +156,7 @@ export default function DriverRoute() {
   }
 
   function moveStop(fromIndex, toIndex) {
-    if (toIndex < 0 || toIndex >= draftStops.length || fromIndex === toIndex) return;
+    if (savingOrder || fromIndex < 0 || fromIndex >= draftStops.length || toIndex < 0 || toIndex >= draftStops.length || fromIndex === toIndex) return;
     setDraftStops(current => {
       const next = [...current];
       const [moved] = next.splice(fromIndex, 1);
@@ -185,12 +165,51 @@ export default function DriverRoute() {
     });
   }
 
-  function handleDrop(targetId) {
-    if (!draggedStopId || draggedStopId === targetId) return;
-    const fromIndex = draftStops.findIndex(stop => stop.order_id === draggedStopId);
+  function clearDrag() {
+    touchDrag.current = null;
+    setDraggedStopId(null);
+    setDropTargetId(null);
+  }
+
+  function handleDrop(targetId, sourceId = draggedStopId) {
+    if (savingOrder || !sourceId || sourceId === targetId) { clearDrag(); return; }
+    const fromIndex = draftStops.findIndex(stop => stop.order_id === sourceId);
     const toIndex = draftStops.findIndex(stop => stop.order_id === targetId);
     moveStop(fromIndex, toIndex);
-    setDraggedStopId(null);
+    clearDrag();
+  }
+
+  function startTouchDrag(event, orderId) {
+    if (event.pointerType === 'mouse' || !arranging || savingOrder) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    touchDrag.current = { sourceId: orderId, targetId: orderId, pointerId: event.pointerId };
+    setDraggedStopId(orderId);
+  }
+
+  function moveTouchDrag(event) {
+    const drag = touchDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-stop-id]');
+    const targetId = target?.getAttribute('data-stop-id');
+    // Reject cards from another time slot; manual routes cannot cross slots.
+    const valid = targetId && draftStops.some(stop => stop.order_id === targetId);
+    drag.targetId = valid ? targetId : null;
+    setDropTargetId(drag.targetId);
+    let scrollBox = event.currentTarget.parentElement;
+    while (scrollBox && !(scrollBox.scrollHeight > scrollBox.clientHeight && /auto|scroll/.test(window.getComputedStyle(scrollBox).overflowY))) scrollBox = scrollBox.parentElement;
+    const bounds = scrollBox?.getBoundingClientRect() || { top: 0, bottom: window.innerHeight };
+    const amount = event.clientY < bounds.top + 64 ? -20 : event.clientY > bounds.bottom - 64 ? 20 : 0;
+    if (amount) (scrollBox || window).scrollBy(0, amount);
+  }
+
+  function endTouchDrag(event) {
+    const drag = touchDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.targetId) handleDrop(drag.targetId, drag.sourceId);
+    else clearDrag();
   }
 
   async function saveManualOrder() {
@@ -238,6 +257,7 @@ export default function DriverRoute() {
       setArranging(false);
       setRerouteMessage('Manual route saved. ETAs, road legs and loading sequence were recalculated.');
       setRouteRefreshKey(key => key + 1);
+      onRefresh?.();
     } catch (err) {
       setRerouteMessage(`Could not save route: ${err.message}`);
     } finally {
@@ -247,7 +267,7 @@ export default function DriverRoute() {
 
   // Render the map once both Google Maps and route data are ready
   useEffect(() => {
-    if (!mapsLoaded || !route || !mapDivRef.current ||
+    if (!showMap || !mapsLoaded || !route || !mapDivRef.current ||
         typeof window.google?.maps?.Map !== 'function' ||
         typeof window.google?.maps?.LatLngBounds !== 'function') return;
 
@@ -327,22 +347,22 @@ export default function DriverRoute() {
       if (watchId != null) navigator.geolocation.clearWatch(watchId);
       if (driverMarker) driverMarker.setMap(null);
     };
-  }, [mapsLoaded, route]);
+  }, [mapsLoaded, route, showMap, loading]);
 
   if (!employeeId) {
     return <div className="p-6 text-center text-gray-400">No employee profile linked to this account.</div>;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-6">
-      <div className="px-4 pt-4 pb-2">
+    <div className={slotId ? '' : 'min-h-screen bg-gray-50 pb-6'}>
+      {!slotId && <div className="px-4 pt-4 pb-2">
         <h1 className="text-lg font-bold text-gray-800 flex items-center gap-2">
           <Navigation className="w-5 h-5 text-blue-500" /> Route
         </h1>
         <p className="text-xs text-gray-500 mt-0.5">Today&apos;s delivery sequence and map.</p>
-      </div>
+      </div>}
 
-      {todaysSlots.length > 1 && (
+      {!slotId && todaysSlots.length > 1 && (
         <div className="px-4 flex gap-2 overflow-x-auto pb-2">
           {todaysSlots.map(slot => (
             <button
@@ -360,13 +380,13 @@ export default function DriverRoute() {
         </div>
       )}
 
-      {(slotsLoading || loading) && (
+      {((!slotId && slotsLoading) || (loading && !route)) && (
         <div className="flex justify-center py-12">
           <RefreshCw className="w-6 h-6 text-blue-400 animate-spin" />
         </div>
       )}
 
-      {!slotsLoading && todaysSlots.length === 0 && (
+      {!slotId && !slotsLoading && todaysSlots.length === 0 && (
         <div className="flex flex-col items-center py-16 text-gray-400 px-6 text-center">
           <Package className="w-10 h-10 mb-3" />
           <p className="font-medium">No route scheduled for today</p>
@@ -380,15 +400,15 @@ export default function DriverRoute() {
         </div>
       )}
 
-      {route && !loading && (
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 pb-6">
-          <section className="mb-3 rounded-xl border border-gray-200 bg-white px-3 py-3 sm:px-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center divide-x divide-gray-200 text-sm">
-                <div className="pr-3">
+      {route && (
+        <div className={slotId ? '' : 'max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 pb-6'}>
+          <section className={slotId ? 'border-b border-gray-100 px-3 py-2' : 'mb-3 rounded-xl border border-gray-200 bg-white px-3 py-3 sm:px-4'}>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+              {slotId ? <p className="text-sm tabular-nums text-gray-600">Total <span className="font-semibold text-gray-800">{fmtDuration(route.route_duration_s) || '—'} drive</span> · {fmtDistance(route.route_distance_m) || '—'}</p> : <div className="flex items-center divide-x divide-gray-200 text-sm">
+                {!slotId && <div className="pr-3">
                   <p className="text-[10px] uppercase tracking-wide text-gray-400">Stops</p>
                   <p className="font-semibold text-gray-800">{route.stops.length}</p>
-                </div>
+                </div>}
                 <div className="px-3">
                   <p className="text-[10px] uppercase tracking-wide text-gray-400">Distance</p>
                   <p className="font-semibold text-gray-800">{fmtDistance(route.route_distance_m) || '—'}</p>
@@ -397,8 +417,8 @@ export default function DriverRoute() {
                   <p className="text-[10px] uppercase tracking-wide text-gray-400">Drive time</p>
                   <p className="font-semibold text-gray-800">{fmtDuration(route.route_duration_s) || '—'}</p>
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
+              </div>}
+              <div className="flex flex-wrap gap-1.5" aria-busy={loading}>
                 {arranging ? (
                   <>
                     <button
@@ -421,28 +441,22 @@ export default function DriverRoute() {
                   <>
                     <button
                       onClick={() => { setDraftStops(route.stops); setArranging(true); }}
+                      disabled={loading || resettingRoute}
                       className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50"
                     >
                       <GripVertical className="h-3.5 w-3.5" /> Arrange
                     </button>
                     <button
                       onClick={resetOptimalRoute}
-                      disabled={resettingRoute}
+                      disabled={resettingRoute || loading}
                       className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${resettingRoute ? 'animate-spin' : ''}`} />
-                      {resettingRoute ? 'Resetting' : 'Reset optimal'}
-                    </button>
-                    <button
-                      onClick={handleReoptimise}
-                      disabled={rerouting}
-                      className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${rerouting ? 'animate-spin' : ''}`} />
-                      {rerouting ? 'Checking traffic' : 'Check traffic'}
+                      {resettingRoute ? 'Setting…' : 'Optimal'}
                     </button>
                   </>
                 )}
+                {slotId && <button type="button" onClick={() => setShowMap(value => !value)} aria-expanded={showMap} className="min-h-10 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700">{showMap ? 'Hide map' : 'Map'}</button>}
               </div>
             </div>
             {rerouteMessage && (
@@ -464,7 +478,7 @@ export default function DriverRoute() {
           </section>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-12 md:items-start">
-            <section className="md:col-span-5 lg:col-span-6 md:sticky md:top-3">
+            {showMap && <section className={slotId ? 'px-3 pb-3 md:col-span-12' : 'md:col-span-5 lg:col-span-6 md:sticky md:top-3'}>
               {mapsError ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
                   Map unavailable: {mapsError}
@@ -472,7 +486,7 @@ export default function DriverRoute() {
               ) : (
                 <div ref={mapDivRef} className="h-56 w-full rounded-xl border border-gray-200 bg-gray-100 sm:h-72 md:h-[420px] lg:h-[520px]" />
               )}
-              {route.stops[0] && (
+              {!slotId && route.stops[0] && (
                 <button
                   onClick={() => openGoogleMapsNavigation(route.stops[0])}
                   className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700"
@@ -488,9 +502,9 @@ export default function DriverRoute() {
                   </button>
                 </div>
               )}
-            </section>
+            </section>}
 
-            <section className="md:col-span-7 lg:col-span-6" aria-label="Delivery stops">
+            {!slotId && <section className="md:col-span-7 lg:col-span-6" aria-label="Delivery stops">
               <div className="space-y-0">
                 {(arranging ? draftStops : route.stops).map((stop, i) => (
                   <article
@@ -594,10 +608,34 @@ export default function DriverRoute() {
                   </article>
                 ))}
               </div>
-            </section>
+            </section>}
           </div>
+          {slotId && (() => {
+            // Filters affect display only. Arrangement always includes every active
+            // stop expected by the existing reorder endpoint.
+            const displayed = arranging
+              ? draftStops.map(stop => allJobs.find(job => job.id === stop.order_id) || {
+                  id: stop.order_id, status: stop.order_status, customer_name: stop.customer_name,
+                  address: stop.address, odoo_order_ref: stop.odoo_order_ref, assigned_date: route.date,
+                })
+              : sortDeliveryCards(jobs, route.stops);
+            const nextOrderId = route.stops.find(stop => !['Delivered', 'Installing', 'Failed', 'Cancelled'].includes(allJobs.find(job => job.id === stop.order_id)?.status))?.order_id;
+            return displayed.map((job, index) => <DriverDeliveryCard
+              key={job.id} job={job} nextStop={highlightNext && job.id === nextOrderId}
+              stop={(arranging ? draftStops : route.stops).find(stop => stop.order_id === job.id) || stopCache.current.get(job.id)}
+              arranging={arranging} position={index} first={index === 0} last={index === displayed.length - 1} onMove={moveStop}
+              locked={savingOrder} dragging={draggedStopId === job.id} dropTarget={dropTargetId === job.id}
+              onTouchDragStart={event => startTouchDrag(event, job.id)} onTouchDragMove={moveTouchDrag} onTouchDragEnd={endTouchDrag} onTouchDragCancel={clearDrag}
+              draggable={arranging && !savingOrder}
+              onDragStart={event => { if (!arranging || savingOrder) { event.preventDefault(); return; } setDraggedStopId(job.id); event.dataTransfer.setData('text/plain', job.id); event.dataTransfer.effectAllowed = 'move'; }}
+              onDragOver={event => { if (arranging && draggedStopId && draftStops.some(stop => stop.order_id === draggedStopId)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetId(job.id); } }}
+              onDrop={event => { event.preventDefault(); event.stopPropagation(); handleDrop(job.id, event.dataTransfer.getData('text/plain') || draggedStopId); }}
+              onDragEnd={clearDrag}
+            />);
+          })()}
         </div>
       )}
+      {slotId && !route && !loading && sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} />)}
     </div>
   );
 }

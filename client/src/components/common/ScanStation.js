@@ -29,6 +29,26 @@ import { useAuth } from '../../contexts/AuthContext';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import ScannerModal from './ScannerModal';
 
+export function compareLoadingOrders(a, b) {
+  const timeA = a?.time_slots?.time_window_start || '';
+  const timeB = b?.time_slots?.time_window_start || '';
+  if (timeA !== timeB) return timeB.localeCompare(timeA);
+  const slot = String(a?.time_slot_id || '').localeCompare(String(b?.time_slot_id || ''));
+  if (slot) return slot;
+  return (Number(a?.truck_loading_sequence) || Number.MAX_SAFE_INTEGER)
+    - (Number(b?.truck_loading_sequence) || Number.MAX_SAFE_INTEGER);
+}
+
+export function compareUnloadingOrders(a, b) {
+  const timeA = a?.time_slots?.time_window_start || '99:99';
+  const timeB = b?.time_slots?.time_window_start || '99:99';
+  if (timeA !== timeB) return timeA.localeCompare(timeB);
+  const slot = String(a?.time_slot_id || '').localeCompare(String(b?.time_slot_id || ''));
+  if (slot) return slot;
+  // Saved loading numbers run in reverse delivery order. Missing ranks go last.
+  return (Number(b?.truck_loading_sequence) || 0) - (Number(a?.truck_loading_sequence) || 0);
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(str) {
@@ -40,9 +60,14 @@ function fmt(str) {
   return d.toLocaleString('en-MY', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-function orderDate(order) {
+export function orderDate(order) {
+  // Route ETAs may cross midnight. Keep the order on its assigned run's date.
+  const slotDate = order.time_slots?.date;
+  if (slotDate) return String(slotDate).slice(0, 10);
   const dt = order.scheduled_start_date_time || order.actual_start_date_time;
-  return dt ? new Date(dt).toLocaleDateString('en-CA') : '';
+  if (!dt) return '';
+  const date = new Date(dt);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
 }
 
 function useRole(employeeData) {
@@ -69,17 +94,17 @@ function DateStrip({ selected, onChange }) {
   const strip   = useMemo(() => buildStrip(selected), [selected]);
   const dateRef = useRef(null);
   return (
-    <div className="bg-white border-b border-gray-200 px-2 py-2 flex gap-1 overflow-x-auto scrollbar-hide">
+    <div className="bg-white border-b border-gray-200 px-2 py-1 grid grid-cols-8 gap-0.5 max-w-lg">
       {strip.map(({ key, day, date }) => (
         <button key={key} onClick={() => onChange(key)}
-          className={`flex flex-col items-center min-w-[44px] py-1.5 rounded-xl transition-colors flex-shrink-0
+          className={`flex flex-col items-center min-w-0 min-h-11 py-1 rounded-xl transition-colors
             ${key === selected ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
           <span className="text-xs">{day}</span>
           <span className={`text-base font-semibold ${key === today && key !== selected ? 'text-blue-600' : ''}`}>{date}</span>
         </button>
       ))}
       <button onClick={() => dateRef.current?.showPicker?.()}
-        className="flex flex-col items-center min-w-[44px] py-1.5 text-gray-400 hover:text-gray-600 flex-shrink-0">
+        className="flex flex-col items-center min-w-0 min-h-11 py-1 text-gray-400 hover:text-gray-600">
         <CalendarDays className="w-5 h-5 mx-auto" />
         <span className="text-xs mt-0.5">More</span>
       </button>
@@ -239,7 +264,7 @@ function useAllOrderItems(orders) {
 
 // ─── Item Table ───────────────────────────────────────────────────────────────
 
-function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial, onGlobalScanError }) {
+export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial, onGlobalScanError, isFiltered = false }) {
   const [rowFb,      setRowFb]      = useState({});
   const [busy,       setBusy]       = useState({});
   const [rowCam,     setRowCam]     = useState(null);
@@ -250,9 +275,9 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
   const [sort,        setSort]        = useState({ field: 'do', dir: 'asc' });
 
   const apiStage = tab === 'loading' ? 'loading' : 'unloading';
-  const isActionableForTab = row => tab === 'loading'
+  const isActionableForTab = row => !['Failed', 'Delivered', 'Cancelled'].includes(row._order?.order_status) && (tab === 'loading'
     ? row.handling_status === 'pending'
-    : row.handling_status === 'loaded';
+    : row.handling_status === 'loaded');
 
   // Handle global scan
   useEffect(() => {
@@ -378,7 +403,7 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
       return (
         <div className={`${mobile ? 'md:hidden mt-2' : ''} flex items-center gap-1.5`}>
           {currentSerial
-            ? <span className="font-mono text-xs px-2 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200">{currentSerial}</span>
+            ? <span className="font-mono text-xs break-all px-2 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200">{currentSerial}</span>
             : <span className="text-xs text-gray-300">—</span>}
           <button
             type="button"
@@ -433,6 +458,14 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
+      if (tab === 'loading') {
+        const loadingOrder = compareLoadingOrders(a._order, b._order);
+        if (loadingOrder) return loadingOrder;
+      }
+      if (tab === 'unloading') {
+        const deliveryOrder = compareUnloadingOrders(a._order, b._order);
+        if (deliveryOrder) return deliveryOrder;
+      }
       let va, vb;
       if (sort.field === 'do')     { va = a._order?.odoo_order_ref || a._order?.id || ''; vb = b._order?.odoo_order_ref || b._order?.id || ''; }
       else if (sort.field === 'name')   { va = a.products?.product_name || a.odoo_product_name || ''; vb = b.products?.product_name || b.odoo_product_name || ''; }
@@ -447,26 +480,22 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
       const c = String(va).localeCompare(String(vb), undefined, { numeric: true });
       return sort.dir === 'asc' ? c : -c;
     });
-  }, [rows, sort]);
+  }, [rows, sort, tab]);
 
   if (!sorted.length) return null;
 
   // Shared row renderer used in both flat (loading) and grouped (unloading) modes
-  const renderRow = (row, idx) => {
+  const renderRow = (row) => {
     const isActionable = isActionableForTab(row);
     const fb  = rowFb[row.id];
-    const doRef = row._order?.odoo_order_ref || row._order?.id;
     return (
       <React.Fragment key={row.id}>
         <tr className={`transition-colors ${isActionable ? 'bg-blue-50/40' : 'hover:bg-gray-50'}`}>
-          {/* # */}
-          <td className="px-4 py-3 text-gray-400 text-xs font-medium">{idx + 1}</td>
           {/* Item Name */}
           <td className="px-4 py-3">
             <p className="font-semibold text-gray-900">{row.products?.product_name || row.odoo_product_name || `Item #${row.id}`}</p>
             <p className="text-xs text-gray-400">×{row.quantity || 1}</p>
             {/* DO inline on mobile */}
-            <p className="text-xs font-mono text-gray-500 sm:hidden mt-0.5">{doRef}</p>
             {/* Serial inline on mobile */}
             {(() => {
               if (isAdmin && tab === 'loading') return null;
@@ -477,19 +506,10 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 : 'bg-purple-50 text-purple-700 border-purple-200';
               return s ? (
-                <span className={`md:hidden inline-block font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 ${cls}`}>{s}</span>
+                <span className={`md:hidden inline-block break-all font-mono text-xs px-1.5 py-0.5 rounded border mt-0.5 ${cls}`}>{s}</span>
               ) : null;
             })()}
             {renderAdminSerialControl(row, true)}
-          </td>
-          {/* DO Number */}
-          <td className="px-4 py-3 hidden sm:table-cell">
-            <span className="font-mono text-xs font-bold text-gray-700">{doRef}</span>
-            {row._order?.customers?.full_name && (
-              <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
-                <User size={9} />{row._order.customers.full_name}
-              </p>
-            )}
           </td>
           {/* Serial No. */}
           <td className="px-4 py-3 hidden md:table-cell">
@@ -513,26 +533,29 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
           </td>
           {/* Status */}
           <td className="px-4 py-3">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center justify-end gap-1.5">
               <StatusPill item={row} />
               {isAdmin && row.handling_status !== 'pending' && (
+                <details className="relative">
+                <summary aria-label="Item actions" className="cursor-pointer list-none rounded-lg px-2 py-1 text-gray-500 hover:bg-gray-100">⋯</summary>
                 <button
                   onClick={() => handleCancelScan(row, row._orderId)}
                   disabled={cancelling === row.id}
-                  className="text-red-400 hover:text-red-600 transition-colors disabled:opacity-40"
+                  className="flex min-h-10 items-center gap-2 rounded-lg bg-red-50 px-2 text-xs text-red-600 disabled:opacity-40"
                   title="Cancel scan"
                 >
                   {cancelling === row.id
                     ? <RefreshCw size={11} className="animate-spin" />
-                    : <XCircle size={11} />}
+                    : <XCircle size={14} />} Cancel scan
                 </button>
+                </details>
               )}
             </div>
           </td>
         </tr>
         {fb && !fb.ok && (
           <tr className="border-0">
-            <td colSpan={5} className="px-4 pb-2 pt-0">
+            <td colSpan={3} className="px-4 pb-2 pt-0">
               <ErrorBanner fb={fb} onDismiss={() => setRowFb(p => ({ ...p, [row.id]: null }))} />
             </td>
           </tr>
@@ -541,10 +564,89 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
     );
   };
 
+  if (tab === 'loading' || tab === 'unloading') {
+    const unloading = tab === 'unloading';
+    const completedStatus = item => unloading ? item.handling_status === 'unloaded' : ['loaded', 'unloaded'].includes(item.handling_status);
+    const groups = new Map();
+    sorted.forEach(row => {
+      if (!groups.has(row._orderId)) groups.set(row._orderId, { order: row._order, items: [] });
+      groups.get(row._orderId).items.push(row);
+    });
+    const nextRow = [...allRows].sort((a, b) => (unloading ? compareUnloadingOrders : compareLoadingOrders)(a._order, b._order)).find(isActionableForTab);
+    const plates = [...new Set(allRows.map(row => row._order?.time_slots?.truck?.plate_no).filter(Boolean))];
+    const slots = new Map();
+    groups.forEach((group, id) => {
+      const key = group.order?.time_slot_id || 'unassigned';
+      if (!slots.has(key)) slots.set(key, { slot: group.order?.time_slots, cards: [] });
+      slots.get(key).cards.push([id, group]);
+    });
+    const isLoaded = id => {
+      const items = allRows.filter(row => row._orderId === id);
+      return items.length > 0 && items.every(completedStatus);
+    };
+    const renderCard = ([id, { order, items }]) => {
+      const muted = isLoaded(id);
+      const next = nextRow?._orderId === id;
+      const fullItems = allRows.filter(r => r._orderId === id);
+      const loaded = fullItems.filter(completedStatus).length;
+      const deliveryPosition = [...new Map([...allRows].sort((a, b) => compareUnloadingOrders(a._order, b._order)).filter(r => r._order?.time_slot_id === order?.time_slot_id).map(r => [r._orderId, r._order])).keys()].indexOf(id) + 1;
+      const products = new Map();
+      items.forEach(item => {
+        const name = item.products?.product_name || item.odoo_product_name || `Item ${item.id}`;
+        const key = item.product_id || name;
+        if (!products.has(key)) products.set(key, { name, units: [] });
+        products.get(key).units.push(item);
+      });
+      return <article key={id} aria-label={order?.odoo_order_ref || id} className={`overflow-hidden rounded-xl border ${next ? 'border-blue-400 ring-1 ring-blue-100 bg-white' : muted ? 'border-gray-200 bg-gray-50 text-gray-500' : 'border-gray-200 bg-white'}`}>
+        <header className={`px-4 py-3 ${next ? 'bg-blue-50' : 'bg-gray-100/70'}`}>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className={`mt-1 break-all text-sm font-semibold ${next ? 'text-blue-800' : muted ? 'text-gray-500' : 'text-gray-800'}`}>
+                {(unloading || order?.truck_loading_sequence) && <span className="mr-2 font-mono text-gray-400">#{unloading ? deliveryPosition : order.truck_loading_sequence}</span>}{order?.odoo_order_ref || id}
+              </p>
+              <p className="mt-0.5 text-xs text-gray-500">{order?.customers?.full_name}</p>
+            </div>
+            <div className="shrink-0 text-right text-xs">
+              {next && <p className="mb-1 font-semibold text-blue-700">{unloading ? 'Next unload' : 'Next load'}</p>}
+              <span className="text-gray-500">{loaded}/{fullItems.length} {unloading ? 'unloaded' : 'loaded'}</span>
+            </div>
+          </div>
+        </header>
+        <div className="divide-y divide-gray-100">{[...products.entries()].map(([key, { name, units }]) => <div key={key} className="px-4 py-3">
+          <p className={`text-sm font-medium ${muted ? 'text-gray-500' : 'text-gray-800'}`}>{name} <span className="font-normal text-gray-400">×{units.reduce((sum, unit) => sum + Number(unit.quantity || 1), 0)}</span></p>
+          <div className="mt-1 divide-y divide-gray-100">{units.map(item => <div key={item.id} className="py-2">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">{isAdmin && !unloading ? renderAdminSerialControl(item) : <p className="break-all font-mono text-xs text-gray-500">{(unloading && item.unloaded_serial) || item.loaded_serial || item.assigned_serial || 'No serial assigned'}</p>}</div>
+              <StatusPill item={item} />
+              {isAdmin && item.handling_status === (unloading ? 'unloaded' : 'loaded') && <details className="shrink-0"><summary aria-label="Item actions" className="cursor-pointer list-none p-2 text-gray-500">⋯</summary><button type="button" onClick={() => handleCancelScan(item, id)} disabled={cancelling === item.id} className="min-h-10 text-xs text-red-600">Cancel scan</button></details>}
+            </div>
+            {rowFb[item.id] && <ErrorBanner fb={rowFb[item.id]} onDismiss={() => setRowFb(p => ({ ...p, [item.id]: null }))} />}
+          </div>)}</div>
+        </div>)}</div>
+      </article>;
+    };
+    const unloadedCards = unloading ? [...groups.entries()].filter(([id]) => isLoaded(id)) : [];
+    return <div className="space-y-4">
+      <p className="flex items-center gap-2 px-1 text-sm font-semibold text-gray-700"><Truck size={16} />{plates.join(' · ') || 'Truck unassigned'}</p>
+      {[...slots.entries()].map(([slotId, { slot, cards }]) => {
+        const visibleCards = unloading ? cards.filter(([id]) => !isLoaded(id)) : [...cards].sort(([a], [b]) => Number(isLoaded(a)) - Number(isLoaded(b)));
+        if (!visibleCards.length) return null;
+        return <section key={slotId} aria-label={`${unloading ? 'Unloading' : 'Loading'} slot ${slot?.time_window_start || 'Unscheduled'}`} className="space-y-2">
+          <h2 className="px-1 text-xs font-semibold text-gray-500">{slot?.time_window_start || 'Unscheduled'}{slot?.time_window_end ? ` – ${slot.time_window_end}` : ''}</h2>
+          {visibleCards.map(renderCard)}
+        </section>;
+      })}
+      {unloadedCards.length > 0 && <section aria-label="Unloaded deliveries" className="space-y-2">
+        <h2 className="px-1 text-xs font-semibold text-gray-400">Unloaded</h2>
+        {unloadedCards.map(renderCard)}
+      </section>}
+    </div>;
+  }
+
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       {/* Mobile sort strip — column headers are hidden on small screens */}
-      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 md:hidden flex-wrap">
+      <div className={`${tab === 'loading' ? 'hidden' : 'flex'} items-center gap-1.5 px-4 py-2 border-b border-gray-100 bg-gray-50 flex-wrap`}>
         <span className="text-xs text-gray-400 font-medium">Sort:</span>
         {[{ id: 'do', label: 'DO' }, { id: 'serial', label: 'Serial' }, { id: 'name', label: 'Name' }, { id: 'status', label: 'Status' }].map(f => {
           const active = sort.field === f.id;
@@ -561,17 +663,15 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10">
+          <thead className="sticky top-0 z-10 hidden md:table-header-group">
             <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-10">#</th>
               <SortTh field="name"   sort={sort} onSort={handleSort}>Item Name</SortTh>
-              <SortTh field="do"     sort={sort} onSort={handleSort} className="hidden sm:table-cell">DO Number</SortTh>
               <SortTh field="serial" sort={sort} onSort={handleSort} className="hidden md:table-cell">Serial No.</SortTh>
               <SortTh field="status" sort={sort} onSort={handleSort}>Status</SortTh>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {tab === 'unloading' ? (() => {
+            {(() => {
               // Group by order to show per-order Completed / Incompleted badge
               const groups = [];
               const gmap   = {};
@@ -583,38 +683,44 @@ function ItemTable({ rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial
                 }
                 gmap[row._orderId].rows.push(row);
               });
-              let globalIdx = 0;
               return groups.map(({ orderId, order, rows: gRows }) => {
-                const allUnloaded = gRows.every(r => r.handling_status === 'unloaded');
-                const doRef = order?.odoo_order_ref || 'Not Synced';
+                const slot = order?.time_slots;
+                const tripKey = order?.time_slot_id || 'unassigned';
+                const firstInTrip = groups.find(g => (g.order?.time_slot_id || 'unassigned') === tripKey)?.orderId === orderId;
+                const completed = gRows.filter(r => tab === 'loading'
+                  ? ['loaded', 'unloaded'].includes(r.handling_status)
+                  : r.handling_status === 'unloaded').length;
+                const allDone = completed === gRows.length;
+                const doRef = order?.odoo_order_ref || orderId;
                 return (
                   <React.Fragment key={orderId}>
+                    {tab === 'loading' && firstInTrip && <tr className="bg-blue-50"><td colSpan={3} className="px-4 py-3 text-sm font-semibold text-blue-800">
+                      {slot?.truck?.plate_no || 'Truck unassigned'} · {slot?.time_window_start || 'Unscheduled'}{slot?.time_window_end ? ` – ${slot.time_window_end}` : ''}
+                    </td></tr>}
                     {/* Per-order header with completion badge */}
                     <tr className="bg-gray-50 border-t-2 border-gray-200">
-                      <td colSpan={5} className="px-4 py-2">
+                      <td colSpan={3} className="px-4 py-3">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-mono text-xs font-bold text-gray-700 truncate">{doRef}</span>
+                          <div className="min-w-0">
+                            <p className="font-mono text-xs font-bold text-gray-700 break-all">{tab === 'loading' && <span className="mr-2 text-blue-600">{order?.truck_loading_sequence ? `Load ${order.truck_loading_sequence}` : 'Sequence unavailable'}</span>}{doRef}</p>
                             {order?.customers?.full_name && (
-                              <span className="text-xs text-gray-400 flex items-center gap-1 flex-shrink-0">
+                              <span className="text-xs text-gray-500 flex items-center gap-1 mt-1">
                                 <User size={9} />{order.customers.full_name}
                               </span>
                             )}
                           </div>
                           <span className={`flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-                            ${allUnloaded ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                            {allUnloaded ? 'Completed' : 'Incompleted'}
+                            ${allDone ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                            {completed}/{gRows.length} {tab === 'loading' ? 'loaded' : 'unloaded'}{isFiltered ? ' matched' : ''}
                           </span>
                         </div>
                       </td>
                     </tr>
-                    {gRows.map(row => renderRow(row, globalIdx++))}
+                    {gRows.map(row => renderRow(row))}
                   </React.Fragment>
                 );
               });
-            })() : (
-              sorted.map((row, idx) => renderRow(row, idx))
-            )}
+            })()}
           </tbody>
         </table>
       </div>
@@ -861,7 +967,7 @@ export default function ScanStation({ forcedStage }) {
   const { employeeData, loadingPermissions } = useAuth();
   const { isAdmin, isDriver } = useRole(employeeData);
 
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
 
   // ─ role beats forcedStage for non-admin users ──────────────────
   const tabOptions = useMemo(() => {
@@ -899,7 +1005,7 @@ export default function ScanStation({ forcedStage }) {
 
   const orderStatus = tab === 'unloading' ? 'Delivering,Delivered'
     : tab === 'audit'   ? 'all'
-    : 'Scheduled';
+    : 'Scheduled,Loaded,Delivering,In Progress,Failed,Delivered';
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -907,19 +1013,40 @@ export default function ScanStation({ forcedStage }) {
   const [search,   setSearch]   = useState('');
   const [orders,   setOrders]   = useState([]);
   const [fetching, setFetching] = useState(false);
+  const orderSnapshot = useRef([]);
+  const [changedRoute, setChangedRoute] = useState(null);
 
 
-  const fetchOrders = useCallback(async () => {
-    setFetching(true);
+  const fetchOrders = useCallback(async (quiet = false) => {
+    if (loadingPermissions || (!isAdmin && !employeeData?.id)) return;
+    if (!quiet) setFetching(true);
     try {
-      const res  = await fetch(`${API_BASE}/api/orders?status=${orderStatus}&sort=scheduled_asc&include_products=true`);
+      const scope = !isAdmin ? `&driver_id=${encodeURIComponent(employeeData.id)}` : '';
+      const res  = await fetch(`${API_BASE}/api/orders?status=${orderStatus}&sort=scheduled_asc&include_products=true${scope}`);
       const data = await res.json();
-      setOrders(Array.isArray(data) ? data : []);
-    } catch { setOrders([]); }
-    finally { setFetching(false); }
-  }, [orderStatus]);
+      if (!res.ok || !Array.isArray(data)) throw new Error('Unable to refresh orders');
+      const previous = orderSnapshot.current;
+      const loadingSlots = new Set(data.filter(o => o.order_products?.some(i => ['loaded', 'unloaded'].includes(i.handling_status))).map(o => o.time_slot_id));
+      const changed = tab === 'loading' && previous.some(old => {
+        const fresh = data.find(o => o.id === old.id);
+        return fresh && loadingSlots.has(old.time_slot_id) && (fresh.truck_loading_sequence !== old.truck_loading_sequence || fresh.time_slot_id !== old.time_slot_id);
+      });
+      setChangedRoute(changed ? data : null);
+      const next = changed ? data.map(o => {
+        const old = previous.find(p => p.id === o.id);
+        return old ? { ...o, truck_loading_sequence: old.truck_loading_sequence, time_slot_id: old.time_slot_id, time_slots: old.time_slots } : o;
+      }) : data;
+      orderSnapshot.current = next;
+      setOrders(next);
+    } catch { /* Keep the current checklist if a refresh fails. */ }
+    finally { if (!quiet) setFetching(false); }
+  }, [orderStatus, tab, isAdmin, employeeData?.id, loadingPermissions]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
+  useEffect(() => {
+    const timer = setInterval(() => fetchOrders(true), 30000);
+    return () => clearInterval(timer);
+  }, [fetchOrders]);
 
   // Date filter only — search is applied at row level so only matching items show
   const filteredOrders = useMemo(() => {
@@ -928,11 +1055,11 @@ export default function ScanStation({ forcedStage }) {
 
   const { itemMap, loadingItems, refetchItems, updateItem } = useAllOrderItems(filteredOrders);
 
-  const rows = useMemo(() => {
-    const allRows = filteredOrders.flatMap(order => {
+  const allRows = useMemo(() => filteredOrders.flatMap(order => {
       const items = itemMap[order.id]?.items || order.order_products || [];
       return items.map(item => ({ ...item, _orderId: order.id, _order: order }));
-    });
+    }), [filteredOrders, itemMap]);
+  const rows = useMemo(() => {
     if (!search) return allRows;
     const s = search.toLowerCase();
     return allRows.filter(row => {
@@ -943,7 +1070,7 @@ export default function ScanStation({ forcedStage }) {
                        .filter(Boolean).join(' ').toLowerCase();
       return name.includes(s) || so.includes(s) || cust.includes(s) || serial.includes(s);
     });
-  }, [filteredOrders, itemMap, search]);
+  }, [allRows, search]);
 
   const tabLabel = tab === 'loading' ? 'Loading' : tab === 'unloading' ? 'Unloading' : 'Audit';
 
@@ -972,13 +1099,12 @@ export default function ScanStation({ forcedStage }) {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="flex h-full min-h-0 flex-col bg-gray-50">
 
       {/* ── Header — sticky within the content scroll area ── */}
-      <div className="sticky top-0 z-20 bg-gradient-to-r from-blue-800 to-blue-700 shadow-md">
+      <div className="z-20 shrink-0 bg-gradient-to-r from-blue-800 to-blue-700 shadow-md">
         <div className="flex items-center gap-3 px-4 py-3">
           <div className="flex-shrink-0">
-            <p className="text-xs text-blue-200 font-medium">Scan Station</p>
             <p className="text-base font-bold text-white">{tabLabel}</p>
           </div>
 
@@ -1000,6 +1126,7 @@ export default function ScanStation({ forcedStage }) {
         </div>
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto">
       {/* Global scanner modal (loading/unloading) */}
       {showGlobalCam && (
         <ScannerModal
@@ -1011,9 +1138,13 @@ export default function ScanStation({ forcedStage }) {
 
       {/* ── Date strip ─────────────────────────────────────────────── */}
       <DateStrip selected={date} onChange={d => setDate(d)} />
+      {changedRoute && <div role="alert" className="mx-4 my-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+        Route changed after loading started. The previous loading order is still shown.
+        <button type="button" className="mt-2 block min-h-10 rounded-lg bg-amber-100 px-3 font-semibold" onClick={() => { orderSnapshot.current = changedRoute; setOrders(changedRoute); setChangedRoute(null); }}>Use updated loading order</button>
+      </div>}
 
       {/* ── Filter bar ─────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3 max-w-5xl mx-auto">
+      <div className="bg-white border-b border-gray-200 px-4 py-2 max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Search */}
           <div className="relative flex-1 min-w-[180px]">
@@ -1056,6 +1187,8 @@ export default function ScanStation({ forcedStage }) {
             ) : (
               <ItemTable
                 rows={rows}
+                allRows={allRows}
+                isFiltered={Boolean(search)}
                 tab={tab}
                 employeeId={employeeData?.id || null}
                 isAdmin={isAdmin}
@@ -1066,6 +1199,7 @@ export default function ScanStation({ forcedStage }) {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

@@ -29,6 +29,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env.demo') });
 const bcrypt = require('bcryptjs');
 const dayjs = require('dayjs');
 const { PrismaClient } = require('@prisma/client');
+const loadingScenarios = require('./demoLoadingScenarios');
 
 // ── Guard rail: refuse to run against anything that isn't the demo container ──
 function assertDemoDatabase() {
@@ -51,9 +52,8 @@ const prisma = new PrismaClient({ datasources: { db: { url: process.env.DATABASE
 
 const DEMO_PASSWORD = 'Demo@1234';
 
-// Pin the current recording dataset to 10 September 2026 in Malaysia.
-// DEMO_DATE may still override this when a different rehearsal date is needed.
-const demoDate = (process.env.DEMO_DATE || '2026-09-10').trim();
+// Default to today's Malaysia date; DEMO_DATE can pin a rehearsal date.
+const demoDate = (process.env.DEMO_DATE || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' })).trim();
 if (!/^\d{4}-\d{2}-\d{2}$/.test(demoDate) || !dayjs(demoDate).isValid()) {
   throw new Error(`Invalid DEMO_DATE "${demoDate}"; expected YYYY-MM-DD`);
 }
@@ -906,6 +906,55 @@ async function main() {
   }
   console.log('[seedDemo]   DEMO-DO-1016 assigned to Razif (razif.driver@demo.tbm.local)');
 
+  // Fresh end-to-end rehearsal. Do not pre-load or pre-complete these items.
+  const flowSlots = { afternoon: slotTodayDemoLoading };
+  for (const [name, start, end] of [['morning', '09:00', '13:00'], ['night', '18:00', '21:00']]) {
+    flowSlots[name] = await prisma.time_slots.create({ data: {
+      date: D.today.format('YYYY-MM-DD'), time_window_start: start, time_window_end: end,
+      delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
+      slot_status: 'scheduled', available_flag: false, created_at: D.today.toDate(),
+    }});
+  }
+  const flowCustomers = { lee: custLee, tan: custTan, wong: custWong, siti: custSiti, muthu: custMuthu };
+  const flowBuildings = { landed: buildingLanded, condo: buildingCondoLift, gated: buildingGated, shoplot: buildingShoplot };
+  const flowProducts = { fridge: pFridge, washer: pWasher, mattress: pMattress, tvConsole: pTvConsole };
+  const flowOrders = [order16];
+  for (const scenario of loadingScenarios) {
+    const slot = flowSlots[scenario.slot];
+    const customer = flowCustomers[scenario.customer];
+    const building = flowBuildings[scenario.building];
+    const order = await prisma.orders.create({ data: {
+      odoo_order_ref: scenario.ref, customer_id: customer.id, building_id: building.id,
+      employee_id: driver1.id, time_slot_id: slot.id,
+      order_status: 'Scheduled', assignment_status: 'approved',
+      truck_loading_sequence: scenario.sequence,
+      scheduled_start_date_time: atTime(D.today, slot.time_window_start),
+      scheduled_end_date_time: atTime(D.today, slot.time_window_end),
+      delivery_address: building.address, delivery_city: customer.city,
+      delivery_postcode: building.postal_code, delivery_state: customer.state,
+      delivery_notes: `DEMO TEST: ${scenario.test}`,
+      dispatched_by: admin.id, notified_pending: true, notified_scheduled: true,
+      created_at: D.today.subtract(1, 'day').toDate(), updated_at: D.today.toDate(),
+    }});
+    for (let index = 0; index < scenario.products.length; index += 1) {
+      const serial = `DEMO-SERIAL-${scenario.ref.replace('DEMO-DO-', '')}-${String.fromCharCode(65 + index)}`;
+      await prisma.order_products.create({ data: {
+        order_id: order.id, product_id: flowProducts[scenario.products[index]].id,
+        quantity: 1, delivered_quantity: 0, service_type: 'delivery_only',
+        handling_status: 'pending', item_delivery_status: 'pending', assigned_serial: serial,
+      }});
+    }
+    flowOrders.push(order);
+    console.log(`[seedDemo]   ${scenario.ref}: ${scenario.slot}, load #${scenario.sequence}, ${scenario.products.length} pending serialised items — ${scenario.test}`);
+  }
+  const verifiedFlow = await prisma.orders.findMany({ where: { id: { in: flowOrders.map(o => o.id) } }, include: { order_products: true, time_slots: true } });
+  if (verifiedFlow.length !== 6 || verifiedFlow.some(o => o.employee_id !== driver1.id
+    || o.order_status !== 'Scheduled' || o.time_slots?.slot_status !== 'scheduled'
+    || !o.order_products.length || o.order_products.some(i => !i.assigned_serial || i.handling_status !== 'pending' || i.item_delivery_status !== 'pending'))) {
+    throw new Error('[seedDemo] Razif loading scenarios must be assigned, serialised, pending and not departed');
+  }
+  console.log('[seedDemo] Razif loading order: 1023 → 1024 → 1016 → 1022 → 1020 → 1021');
+
   // 17. Delivery failed TODAY, mid-trip — Cases → Delivery Issues: item marked
   //     'failed' (order_status 'Failed', dated today).
   const order17 = await prisma.orders.create({ data: {
@@ -978,7 +1027,7 @@ async function main() {
     historicalOrders.push(order);
   }
 
-  console.log('[seedDemo] 25 orders created spanning the full lifecycle + historical B.2 route sample');
+  console.log('[seedDemo] 30 orders created spanning the full lifecycle, historical B.2 sample and Razif loading scenarios');
   console.log(`[seedDemo]   B.2 sample: ${historicalOrders.length} stops on ${D.today.format('YYYY-MM-DD')} assigned to Suresh / WYY 5678`);
   console.log('[seedDemo]   incl. Scan Station coverage for today: Loading (DEMO-DO-1016), Unloading (DEMO-DO-1004/1005), Audit (all of today\'s orders)');
   console.log('[seedDemo]   DEMO-DO-1016 serial test: DEMO-SERIAL-1016-A + DEMO-SERIAL-1016-B');

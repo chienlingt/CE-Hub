@@ -27,6 +27,18 @@ const DISTANCE_MATRIX_URL = 'https://maps.googleapis.com/maps/api/distancematrix
 const ROUTES_URL        = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
 const NEARBY_TRAVEL_MINUTES = 20;
+const GOOGLE_TRAFFIC_MODEL = 'BEST_GUESS';
+
+// Google only accepts driving departure times that are now or in the future.
+// A small buffer prevents a timestamp becoming "past" while the request is in flight.
+function predictiveDeparture(departureTime) {
+  const requested = departureTime === 'now'
+    ? Date.now()
+    : new Date(typeof departureTime === 'number' && departureTime < 1e12
+      ? departureTime * 1000
+      : departureTime).getTime();
+  return Math.max(Number.isFinite(requested) ? requested : Date.now(), Date.now() + 60_000);
+}
 
 function apiKey() {
   return process.env.GOOGLE_MAPS_SERVER_KEY || null;
@@ -134,9 +146,9 @@ async function buildTravelTimeMatrix(coordsList) {
   return res.data.rows.map(row => row.elements.map(el => el.duration?.value ?? null));
 }
 
-/** Road-time and road-distance matrices. Google Distance Matrix accepts at
- * most 25 origins/destinations per request, so larger capacity-driven runs
- * are transparently tiled instead of imposing an artificial stop limit. */
+/** Road-time and road-distance matrices. Traffic-aware Distance Matrix calls
+ * allow at most 100 elements per request, so larger capacity-driven runs are
+ * transparently tiled instead of imposing an artificial stop limit. */
 async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
   const key = apiKey();
   const size = coordsList.length;
@@ -144,7 +156,10 @@ async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
   const distances = Array.from({ length: size }, () => Array(size).fill(null));
   if (!key || size === 0) return { durations, distances, usedFallback: true };
 
-  const chunkSize = 25;
+  // Traffic-aware legacy Distance Matrix requests are limited to 100
+  // elements (origins x destinations), so use 10 x 10 tiles.
+  const chunkSize = 10;
+  const departureEpoch = Math.floor(predictiveDeparture(departureTime) / 1000);
   for (let oi = 0; oi < size; oi += chunkSize) {
     for (let di = 0; di < size; di += chunkSize) {
       const origins = coordsList.slice(oi, oi + chunkSize);
@@ -155,8 +170,8 @@ async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
           destinations: destinations.map(c => `${c.lat},${c.lon}`).join('|'),
           key,
           mode: 'driving',
-          departure_time: departureTime,
-          traffic_model: 'best_guess',
+          departure_time: departureEpoch,
+          traffic_model: GOOGLE_TRAFFIC_MODEL.toLowerCase(),
         },
         timeout: 15000,
       });
@@ -171,7 +186,7 @@ async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
   return { durations, distances, usedFallback: false };
 }
 
-async function computeOrderedRoute(originCoords, orderedStops) {
+async function computeOrderedRoute(originCoords, orderedStops, departureTime = 'now') {
   const key = apiKey();
   if (!key || orderedStops.length === 0) return null;
   // Routes API waypoint limits vary by SKU. Matrix/optimisation still works
@@ -187,12 +202,15 @@ async function computeOrderedRoute(originCoords, orderedStops) {
     destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lon } } },
     intermediates,
     travelMode: 'DRIVE',
+    routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+    trafficModel: GOOGLE_TRAFFIC_MODEL,
+    departureTime: new Date(predictiveDeparture(departureTime)).toISOString(),
     polylineQuality: 'OVERVIEW',
   };
   const res = await axios.post(ROUTES_URL, body, {
     headers: {
       'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline',
+      'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline',
       'Content-Type': 'application/json',
     },
     timeout: 15000,
@@ -203,6 +221,9 @@ async function computeOrderedRoute(originCoords, orderedStops) {
     polyline: route.polyline?.encodedPolyline || null,
     totalDistanceM: route.distanceMeters || 0,
     totalDurationSec: parseInt(route.duration, 10) || 0,
+    staticDurationSec: parseInt(route.staticDuration, 10) || 0,
+    trafficDelaySec: Math.max(0, (parseInt(route.duration, 10) || 0) - (parseInt(route.staticDuration, 10) || 0)),
+    trafficModel: GOOGLE_TRAFFIC_MODEL,
   };
 }
 
@@ -485,4 +506,5 @@ module.exports = {
   estimateFallbackLeg,
   buildTravelMetricsMatrix,
   computeOrderedRoute,
+  predictiveDeparture,
 };

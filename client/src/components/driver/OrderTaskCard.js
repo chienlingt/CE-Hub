@@ -1,8 +1,9 @@
 // client/src/components/driver/OrderTaskCard.js
-import { Phone, MessageCircle, RefreshCw, Flag, MapPin, User, Clock, Image, Package, XCircle } from 'lucide-react';
+import { Phone, MessageCircle, Flag, MapPin, User, Clock, Package, Navigation } from 'lucide-react';
 import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus, DELIVERING_STATUSES } from '../../utils/driverStatusMap';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
 import { onTheWayTemplate } from '../../utils/templateMessages';
+import IconActionButton from './IconActionButton';
 
 /**
  * @param {{
@@ -13,13 +14,12 @@ import { onTheWayTemplate } from '../../utils/templateMessages';
  *   onFail: (job: object) => void,
  * }}
  */
-export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence, onFail }) {
+export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence, onFail, summary = false, onNavigate, children }) {
   const badge        = statusBadge(job.status);
   const terminal     = isTerminal(job.status);
   const showEvidence = isCompletedEvidenceMode(job.status);
   const isScheduled  = isScheduledStatus(job.status);
   // Report button is always enabled — first report or follow-up via ContactReportModal
-  const reportDisabled = false;
   // Show "Mark as Failed" only when the driver is actively delivering this order
   const canFail = DELIVERING_STATUSES.includes(job.status);
   // Hide Update button on Scheduled/Loaded; Update only useful while Delivering/In Progress
@@ -59,24 +59,23 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-xs text-gray-400 font-mono truncate">Order ID: #{shortId}</p>
-          {/* TODO: Add a link to the Odoo order */}
-          <p className="text-xs text-gray-400 font-mono truncate">Odoo Order ref: {job.odoo_order_ref}</p>
+          {summary && <p className="mb-1 text-base font-semibold text-gray-900">{job.customer_name || 'Customer'}</p>}
+          <p className="text-xs text-gray-400 font-mono truncate">{shortId}</p>
           {job.appointment_window && (
             <p className="text-xs text-indigo-600 font-medium flex items-center gap-1 mt-0.5 truncate">
               <Clock className="w-3 h-3 shrink-0" />
               {job.appointment_window}
             </p>
           )}
-          <ul className="mt-0.5 space-y-0.5 text-sm font-semibold text-gray-900 list-disc list-inside">
+          {!summary && <ul className="mt-0.5 space-y-0.5 text-sm font-semibold text-gray-900 list-disc list-inside">
             {productItems.map((name, index) => (
               <li key={index} className="leading-snug">{name}</li>
             ))}
-          </ul>
+          </ul>}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${badge.color}`}>
-            {badge.label}
+            {job.status === 'Failed' ? 'Failed' : badge.label}
           </span>
           {showLoadingBadge && (
             loadingReady ? (
@@ -95,7 +94,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
       </div>
 
       {/* Customer */}
-      <div className="flex items-center gap-2 text-sm text-gray-600">
+      {!summary && <div className="flex items-center gap-2 text-sm text-gray-600">
         <User className="w-4 h-4 text-gray-400 shrink-0" />
         <span className="truncate">{job.customer_name || '—'}</span>
         {timeLabel && (
@@ -103,79 +102,39 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
             <Clock className="w-3 h-3" /> {timeLabel}
           </span>
         )}
-      </div>
+      </div>}
 
       {/* Address */}
-      {job.address && (
+      {(job.address || onNavigate) && (
         <div className="flex items-start gap-2 text-sm text-gray-500">
           <MapPin className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
-          <span className="leading-tight line-clamp-2">{job.address}</span>
+          <span className={`min-w-0 flex-1 leading-5 ${summary ? '' : 'line-clamp-2'}`}>{job.address || 'Address unavailable'}</span>
         </div>
       )}
 
-      {/* Action row */}
-      <div className="flex gap-2 pt-1">
-        {/* Communication */}
-        <button
-          onClick={handleCall}
-          disabled={!job.customer_phone}
-          title="Call customer"
-          className="flex items-center justify-center w-9 h-9 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-30"
-        >
-          <Phone className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleChat}
-          disabled={!job.customer_phone}
-          title="WhatsApp customer"
-          className="flex items-center justify-center w-9 h-9 rounded-full border border-gray-200 text-green-600 hover:bg-green-50 disabled:opacity-30"
-        >
-          <MessageCircle className="w-4 h-4" />
-        </button>
+      {children}
 
-        <div className="flex-1" />
-
-        {/* Report — contact/escalation menu */}
-        <button
-          onClick={() => onReport(job)}
-          title={job.is_complaint_submitted ? 'Contact or add follow-up' : 'Contact or report'}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg text-red-600 hover:bg-red-50"
-        >
-          <Flag className="w-3.5 h-3.5" />
-          {job.is_complaint_submitted ? 'Follow-up' : 'Report'}
-        </button>
-
-        {/* Mark as Failed — only visible during active delivery */}
-        {canFail && (
-          <button
-            onClick={() => onFail(job)}
-            title="Mark as failed delivery"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-red-300 bg-red-50 rounded-lg text-red-700 hover:bg-red-100 transition-colors"
-          >
-            <XCircle className="w-3.5 h-3.5" />
-            Failed
-          </button>
-        )}
-
-        {showEvidence ? (
-          <button
-            onClick={() => onViewEvidence(job)}
-            title="View or edit proof of delivery"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700"
-          >
-            <Image className="w-3.5 h-3.5" />
-            POD
-          </button>
-        ) : showUpdate ? (
-          <button
-            onClick={() => onUpdate(job)}
-            title="Update status"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Update
-          </button>
-        ) : null}
+      <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
+        <div className="grid grid-flow-col auto-cols-fr gap-2 [&>span]:min-w-0 [&>span>button]:w-full">
+          <IconActionButton label="Call customer" onClick={handleCall} disabled={!job.customer_phone} color="bg-sky-50 text-sky-700 hover:bg-sky-100">
+            <Phone className="h-4 w-4" />
+          </IconActionButton>
+          <IconActionButton label="WhatsApp customer" onClick={handleChat} disabled={!job.customer_phone} color="bg-green-50 text-green-700 hover:bg-green-100">
+            <MessageCircle className="h-4 w-4" />
+          </IconActionButton>
+          <IconActionButton label={job.is_complaint_submitted ? 'Follow-up' : 'Report'} onClick={() => onReport(job)} color="bg-amber-50 text-amber-700 hover:bg-amber-100">
+            <Flag className="h-4 w-4" />
+          </IconActionButton>
+          {onNavigate && <IconActionButton label="Navigate" onClick={onNavigate} color="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+            <Navigation className="h-4 w-4" />
+          </IconActionButton>}
+        </div>
+        <div className="grid grid-flow-col auto-cols-fr gap-2 empty:hidden">
+          {canFail && <button type="button" onClick={() => onFail(job)} title="Mark as failed delivery" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 hover:bg-red-100">Failed</button>}
+          {showEvidence
+            ? <button type="button" onClick={() => onViewEvidence(job)} title="View or edit proof of delivery" className="min-h-9 rounded-lg bg-green-600 px-2 text-[11px] font-semibold text-white hover:bg-green-700 sm:px-3 sm:text-xs">POD</button>
+            : showUpdate ? <button type="button" onClick={() => onUpdate(job)} title="Update status" className="inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700">Update</button> : null}
+        </div>
       </div>
     </div>
   );

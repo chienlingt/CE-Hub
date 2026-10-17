@@ -459,6 +459,17 @@ router.get('/', async (req, res) => {
 
     // Build where clause
     const where = {};
+    // Driver loading lists use the same direct/team assignment scope as Driver Jobs.
+    if (req.query.driver_id) {
+      const assignments = await prisma.employee_team_assignments.findMany({
+        where: { employee_id: req.query.driver_id }, include: { team: true },
+      });
+      const deliveryTeamIds = assignments.filter(a => (a.team?.team_type || '').toLowerCase().includes('delivery')).map(a => a.team.id);
+      where.AND = [{ OR: [
+        { employee_id: req.query.driver_id },
+        ...(deliveryTeamIds.length ? [{ time_slots: { delivery_team_id: { in: deliveryTeamIds } } }] : []),
+      ] }];
+    }
 
     // Status filter — supports comma-separated values (e.g. "Delivering,Delivered")
     if (status && status !== 'all') {
@@ -493,6 +504,7 @@ router.get('/', async (req, res) => {
     // Issues filter — operational failures only; exclude driver order reports
     if (req.query.issues_only === 'true') {
         where.AND = [
+            ...(where.AND || []),
             { issue_reason: { not: null } },
             { issue_reason: { not: '' } },
             {
@@ -539,6 +551,7 @@ router.get('/', async (req, res) => {
       customers: true,
       employees: true,
       buildings: true,
+      time_slots: { include: { truck: { select: { plate_no: true } } } },
       // Replacement order(s) created via the Reschedule flow, if any
       rescheduled_to: { select: { id: true, odoo_order_ref: true, order_status: true, created_at: true } },
     };
