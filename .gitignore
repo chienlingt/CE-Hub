@@ -47,3 +47,11 @@ graphify-out
 # Local tests and Salesforce metadata cache
 /server/tests/
 /.sf/orgs/00DgL00000CtCzPUAV/metadata-catalog/
+
+# Local client regression tests
+/client/src/components/common/ScanStation.test.js
+/client/src/components/driver/DriverDeliveryCard.test.js
+/client/src/components/driver/DriverDeliveryDetail.test.js
+/client/src/components/driver/DriverRoute.test.js
+/client/src/components/driver/IconActionButton.test.js
+/client/src/utils/driverOrderFilters.test.js
