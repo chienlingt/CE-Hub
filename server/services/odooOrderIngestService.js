@@ -56,7 +56,8 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
   for (const ex of existing) {
     if (!ex.odoo_line_id || incomingIds.has(ex.odoo_line_id)) continue;
 
-    const hasProgress = ex.item_delivery_status === 'delivered' || ex.handling_status !== 'pending';
+    const hasProgress = ex.item_delivery_status === 'delivered' || ex.handling_status !== 'pending'
+      || ex.unit_scans?.some(unit => unit.handling_status !== 'pending');
     if (hasProgress) {
       protectedCount++;
       const ref = odooOrderRef || orderId;
@@ -97,13 +98,13 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
       continue;
     }
 
-    if (match.handling_status === 'pending') {
+    if (match.handling_status === 'pending' && !match.unit_scans?.some(unit => unit.handling_status !== 'pending')) {
       await prisma.order_products.update({
         where: { id: match.id },
         data:  {
           odoo_product_name: inc.odoo_product_name,
           quantity:          inc.quantity,
-          assigned_serial:   inc.assigned_serial,
+          assigned_serial:   match.unit_scans ? match.assigned_serial : inc.assigned_serial,
         },
       });
       updated++;

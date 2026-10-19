@@ -189,6 +189,8 @@ model order_products {
   handling_status              String?   @default("pending") @db.VarChar(20)
   loaded_serial                String?
   assigned_serial              String?
+  // Per-unit scan records; legacy scalar fields remain the line-level summary.
+  unit_scans                   Json?
   unloaded_at                  DateTime?
   unloaded_by                  String?   @db.Uuid
   unloaded_serial              String?

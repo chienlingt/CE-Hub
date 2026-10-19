@@ -389,7 +389,7 @@ const Layout = () => {
   );
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-gray-50">
+    <div className="flex h-screen h-[100dvh] w-screen overflow-hidden bg-gray-50">
       {/* Desktop sidebar */}
       <div className={`hidden sm:flex ${isSidebarOpen ? 'w-64' : 'w-16'} bg-white shadow-lg transition-all duration-300 ease-in-out border-r border-gray-200 flex-col`}>
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
@@ -499,10 +499,11 @@ const Layout = () => {
         </div>
 
         {/* Content */}
-        <div data-page-scroll className={`min-h-0 flex-1 ${activeSection === 'scanning' ? 'overflow-hidden' : 'overflow-auto'} p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
+        <div data-page-scroll className={`min-h-0 flex-1 ${activeSection === 'scanning' && !location.pathname.startsWith('/scanning/delivery/') ? 'flex flex-col overflow-hidden' : 'overflow-auto'} p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
           <Routes>
             <Route path="/driver/route" element={<Navigate to="/driver" replace />} />
             <Route path="/driver/delivery/:orderId" element={<DriverDeliveryDetail />} />
+            <Route path="/scanning/delivery/:orderId" element={<DriverDeliveryDetail scanStation />} />
             {/* Standalone route for Report Issue (accessible to all employees) */}
             <Route path="/reports" element={<ReportIssue />} />
 

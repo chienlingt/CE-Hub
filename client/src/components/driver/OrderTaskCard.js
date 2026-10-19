@@ -14,7 +14,7 @@ import IconActionButton from './IconActionButton';
  *   onFail: (job: object) => void,
  * }}
  */
-export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence, onFail, summary = false, onNavigate, children }) {
+export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence, onFail, summary = false, onNavigate, children, hideActions = false }) {
   const badge        = statusBadge(job.status);
   const terminal     = isTerminal(job.status);
   const showEvidence = isCompletedEvidenceMode(job.status);
@@ -114,7 +114,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
 
       {children}
 
-      <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
+      {!hideActions && <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
         <div className="grid grid-flow-col auto-cols-fr gap-2 [&>span]:min-w-0 [&>span>button]:w-full">
           <IconActionButton label="Call customer" onClick={handleCall} disabled={!job.customer_phone} color="bg-sky-50 text-sky-700 hover:bg-sky-100">
             <Phone className="h-4 w-4" />
@@ -135,7 +135,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
             ? <button type="button" onClick={() => onViewEvidence(job)} title="View or edit proof of delivery" className="min-h-9 rounded-lg bg-green-600 px-2 text-[11px] font-semibold text-white hover:bg-green-700 sm:px-3 sm:text-xs">POD</button>
             : showUpdate ? <button type="button" onClick={() => onUpdate(job)} title="Update status" className="inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700">Update</button> : null}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

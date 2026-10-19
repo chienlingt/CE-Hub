@@ -11,6 +11,7 @@ export function useAuth() {
 
 // Helper to normalize strings
 const normalize = (s) => (s || '').toString().toLowerCase().trim();
+const roleValue = role => (role && typeof role === 'object' ? role.name || role.id : role) || '';
 
 const REACT_APP_API_BASE_URL = getApiBaseUrl();
 
@@ -82,7 +83,7 @@ export function AuthProvider({ children }) {
       employeeData?.role ||
       sessionStorage.getItem('employeeRole') ||
       '';
-    return normalize(role);
+    return normalize(roleValue(role));
   };
 
   const hasRole = (role) => getEmployeeRole() === normalize(role);
@@ -216,10 +217,12 @@ export function AuthProvider({ children }) {
           if (!mounted) return;
 
           setEmployeeData(parsed);
+          const restoredRole = roleValue(parsed.role || parsed.roleId);
+          sessionStorage.setItem('employeeRole', restoredRole);
           setCurrentUser({
             email: parsed.email,
             name: parsed.name || '',
-            role: parsed.role || '',
+            role: restoredRole,
             employeeId: parsed.EmployeeID || parsed.id || '',
           });
 

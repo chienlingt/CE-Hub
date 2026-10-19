@@ -5,7 +5,7 @@
 // everything here was already computed once by the scheduler and is just
 // being displayed (see server/services/googleRoutingService.js).
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useImperativeHandle } from 'react';
 import { MapPin, Navigation, RefreshCw, AlertTriangle, Package, Clock, Wrench, GripVertical, ArrowUp, ArrowDown, Check, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
@@ -13,6 +13,7 @@ import { useGoogleMapsScript } from '../../hooks/useGoogleMapsScript';
 import { todayLocalDateKey } from '../../utils/dateKey';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import DriverDeliveryCard, { sortDeliveryCards } from './DriverDeliveryCard';
+import ScanDeliveryDialog from '../common/ScanDeliveryDialog';
 
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
@@ -61,7 +62,13 @@ function openGoogleMapsNavigation(stop) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refreshToken, onRefresh, highlightNext = true }) {
+export function mergeFilteredStops(fullStops, visibleStops) {
+  const ids = new Set(visibleStops.map(stop => stop.order_id));
+  let index = 0;
+  return fullStops.map(stop => ids.has(stop.order_id) ? visibleStops[index++] : stop);
+}
+
+export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refreshToken, onRefresh, highlightNext = true, sharedControls, controlsRef, adminView = false }) {
   const { currentUser } = useAuth();
   const employeeId = currentUser?.employeeId || '';
   const today = todayLocalDateKey();
@@ -74,11 +81,14 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   const [chosenSlotId, setSelectedSlotId] = useState(null);
   const selectedSlotId = slotId || chosenSlotId;
   const [route, setRoute]     = useState(null);
+  const [detail, setDetail] = useState(null);
+  const openDetails = (order, stop) => setDetail({ order, stop });
   const [loading, setLoading] = useState(Boolean(slotId));
   const [error, setError]     = useState(null);
   const [routeRefreshKey, setRouteRefreshKey] = useState(0);
   const [rerouteMessage, setRerouteMessage] = useState(null);
-  const [arranging, setArranging] = useState(false);
+  const [localArranging, setArranging] = useState(false);
+  const arranging = sharedControls ? sharedControls.arranging : localArranging;
   const [draftStops, setDraftStops] = useState([]);
   const [draggedStopId, setDraggedStopId] = useState(null);
   const [dropTargetId, setDropTargetId] = useState(null);
@@ -87,14 +97,42 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   const [resettingRoute, setResettingRoute] = useState(false);
   const [showFallbackNotice, setShowFallbackNotice] = useState(true);
   const [showHttpsNotice, setShowHttpsNotice] = useState(true);
-  const [showMap, setShowMap] = useState(!slotId);
+  const [localShowMap, setShowMap] = useState(!slotId);
+  const showMap = sharedControls ? sharedControls.showMap : localShowMap;
+  const filteredOnly = Boolean(sharedControls);
+  const [mapExtras, setMapExtras] = useState([]);
+  const visibleKey = jobs.map(job => job.id).join(',');
+  const visibleIds = useMemo(() => new Set(visibleKey.split(',')), [visibleKey]);
   const stopCache = useRef(new Map());
 
   const mapDivRef = useRef(null);
 
   useEffect(() => {
-    if (!arranging) setDraftStops(route?.stops || []);
-  }, [route, arranging]);
+    if (!arranging) setDraftStops((route?.stops || []).filter(stop => !filteredOnly || visibleIds.has(stop.order_id)));
+  }, [route, arranging, visibleIds, filteredOnly]);
+
+  useEffect(() => {
+    if (!showMap || !filteredOnly || !route) return;
+    const missing = jobs.filter(job => !route.stops.some(stop => stop.order_id === job.id));
+    if (!missing.length) { setMapExtras([]); return; }
+    let cancelled = false;
+    const read = async path => {
+      const response = await fetch(apiUrl(path), { headers: { 'ngrok-skip-browser-warning': '1' } });
+      if (!response.ok) throw new Error('Map details unavailable');
+      return response.json();
+    };
+    Promise.all([read('buildings'), Promise.all(missing.map(job => read(`orders/${job.id}`)))])
+      .then(([buildings, orders]) => {
+        if (cancelled) return;
+        setMapExtras(orders.map(order => {
+          const building = buildings.find(item => item.id === order.building_id);
+          return { order_id: order.id, customer_name: order.customers?.full_name, address: order.delivery_address,
+            latitude: building?.latitude != null ? Number(building.latitude) : null,
+            longitude: building?.longitude != null ? Number(building.longitude) : null };
+        }));
+      }).catch(() => { if (!cancelled) setMapExtras([]); });
+    return () => { cancelled = true; };
+  }, [route, showMap, filteredOnly, jobs]);
 
   // Default to the currently-departed slot if there is one, else the first.
   useEffect(() => {
@@ -147,16 +185,18 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setRerouteMessage('System-recommended optimal route restored.');
       setRouteRefreshKey(key => key + 1);
-      onRefresh?.();
+      if (!sharedControls) onRefresh?.();
+      return true;
     } catch (err) {
       setRerouteMessage(`Could not reset route: ${err.message}`);
+      return false;
     } finally {
       setResettingRoute(false);
     }
   }
 
   function moveStop(fromIndex, toIndex) {
-    if (savingOrder || fromIndex < 0 || fromIndex >= draftStops.length || toIndex < 0 || toIndex >= draftStops.length || fromIndex === toIndex) return;
+    if (savingOrder || sharedControls?.busy || fromIndex < 0 || fromIndex >= draftStops.length || toIndex < 0 || toIndex >= draftStops.length || fromIndex === toIndex) return;
     setDraftStops(current => {
       const next = [...current];
       const [moved] = next.splice(fromIndex, 1);
@@ -180,7 +220,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   }
 
   function startTouchDrag(event, orderId) {
-    if (event.pointerType === 'mouse' || !arranging || savingOrder) return;
+    if (event.pointerType === 'mouse' || !arranging || savingOrder || sharedControls?.busy) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     touchDrag.current = { sourceId: orderId, targetId: orderId, pointerId: event.pointerId };
@@ -213,11 +253,11 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   }
 
   async function saveManualOrder() {
-    if (!selectedSlotId || savingOrder) return;
+    if (!selectedSlotId || !route || savingOrder) return false;
     setSavingOrder(true);
     setRerouteMessage(null);
     let location = {};
-    if (navigator.geolocation && window.isSecureContext) {
+    if (!adminView && navigator.geolocation && window.isSecureContext) {
       location = await new Promise(resolve => navigator.geolocation.getCurrentPosition(
         pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
         () => resolve({}),
@@ -233,7 +273,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
           headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify({
             employee_id: employeeId,
-            ordered_order_ids: draftStops.map(stop => stop.order_id),
+            ordered_order_ids: (sharedControls ? mergeFilteredStops(route.stops, draftStops) : draftStops).map(stop => stop.order_id),
             confirm_access_window_violations: confirmedViolations,
             ...location,
           }),
@@ -251,19 +291,27 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
         const proceed = window.confirm(
           `This manual order violates access windows:\n\n${warningLines.join('\n')}\n\nSave this route anyway?`
         );
-        if (!proceed) return;
+        if (!proceed) return false;
         confirmedViolations = true;
       }
       setArranging(false);
       setRerouteMessage('Manual route saved. ETAs, road legs and loading sequence were recalculated.');
       setRouteRefreshKey(key => key + 1);
-      onRefresh?.();
+      if (!sharedControls) onRefresh?.();
+      return true;
     } catch (err) {
       setRerouteMessage(`Could not save route: ${err.message}`);
+      return false;
     } finally {
       setSavingOrder(false);
     }
   }
+
+  useImperativeHandle(controlsRef, () => ({
+    ready: Boolean(route) && !loading,
+    save: saveManualOrder,
+    optimal: resetOptimalRoute,
+  }));
 
   // Render the map once both Google Maps and route data are ready
   useEffect(() => {
@@ -271,10 +319,12 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
         typeof window.google?.maps?.Map !== 'function' ||
         typeof window.google?.maps?.LatLngBounds !== 'function') return;
 
-    const stopsWithCoords = route.stops.filter(s => s.latitude != null && s.longitude != null);
+    const stopsWithCoords = [...new Map([...mapExtras, ...route.stops].map(stop => [stop.order_id, stop])).values()]
+      .filter(s => (!filteredOnly || visibleIds.has(s.order_id)) && s.latitude != null && s.longitude != null);
     if (stopsWithCoords.length === 0) return;
 
-    const map = new window.google.maps.Map(mapDivRef.current, {
+    const mapElement = mapDivRef.current;
+    const map = new window.google.maps.Map(mapElement, {
       zoom: 12,
       center: { lat: stopsWithCoords[0].latitude, lng: stopsWithCoords[0].longitude },
       disableDefaultUI: true,
@@ -295,7 +345,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
       bounds.extend(position);
     });
 
-    if (route.route_polyline && window.google.maps.geometry) {
+    if (route.route_polyline && window.google.maps.geometry && (!filteredOnly || (!mapExtras.length && route.stops.every(stop => visibleIds.has(stop.order_id))))) {
       const path = window.google.maps.geometry.encoding.decodePath(route.route_polyline);
       new window.google.maps.Polyline({
         path,
@@ -346,8 +396,10 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
     return () => {
       if (watchId != null) navigator.geolocation.clearWatch(watchId);
       if (driverMarker) driverMarker.setMap(null);
+      window.google.maps.event?.clearInstanceListeners?.(map);
+      mapElement.replaceChildren();
     };
-  }, [mapsLoaded, route, showMap, loading]);
+  }, [mapsLoaded, route, showMap, loading, visibleIds, filteredOnly, mapExtras]);
 
   if (!employeeId) {
     return <div className="p-6 text-center text-gray-400">No employee profile linked to this account.</div>;
@@ -403,7 +455,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
       {route && (
         <div className={slotId ? '' : 'max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 pb-6'}>
           <section className={slotId ? 'border-b border-gray-100 px-3 py-2' : 'mb-3 rounded-xl border border-gray-200 bg-white px-3 py-3 sm:px-4'}>
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <div className={`${adminView ? 'hidden' : 'flex'} flex-wrap items-center justify-between gap-x-3 gap-y-1.5`}>
               {slotId ? <p className="text-sm tabular-nums text-gray-600">Total <span className="font-semibold text-gray-800">{fmtDuration(route.route_duration_s) || '—'} drive</span> · {fmtDistance(route.route_distance_m) || '—'}</p> : <div className="flex items-center divide-x divide-gray-200 text-sm">
                 {!slotId && <div className="pr-3">
                   <p className="text-[10px] uppercase tracking-wide text-gray-400">Stops</p>
@@ -418,7 +470,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
                   <p className="font-semibold text-gray-800">{fmtDuration(route.route_duration_s) || '—'}</p>
                 </div>
               </div>}
-              <div className="flex flex-wrap gap-1.5" aria-busy={loading}>
+              {!sharedControls && <div className="flex flex-wrap gap-1.5" aria-busy={loading}>
                 {arranging ? (
                   <>
                     <button
@@ -457,7 +509,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
                   </>
                 )}
                 {slotId && <button type="button" onClick={() => setShowMap(value => !value)} aria-expanded={showMap} className="min-h-10 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700">{showMap ? 'Hide map' : 'Map'}</button>}
-              </div>
+              </div>}
             </div>
             {rerouteMessage && (
               <div className="mt-2 flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs text-gray-600">
@@ -622,12 +674,15 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
             const nextOrderId = route.stops.find(stop => !['Delivered', 'Installing', 'Failed', 'Cancelled'].includes(allJobs.find(job => job.id === stop.order_id)?.status))?.order_id;
             return displayed.map((job, index) => <DriverDeliveryCard
               key={job.id} job={job} nextStop={highlightNext && job.id === nextOrderId}
+              detailBasePath="/driver/delivery"
+              compactDesktop={adminView}
+              onOpenDetails={openDetails}
               stop={(arranging ? draftStops : route.stops).find(stop => stop.order_id === job.id) || stopCache.current.get(job.id)}
               arranging={arranging} position={index} first={index === 0} last={index === displayed.length - 1} onMove={moveStop}
-              locked={savingOrder} dragging={draggedStopId === job.id} dropTarget={dropTargetId === job.id}
+              locked={savingOrder || sharedControls?.busy} dragging={draggedStopId === job.id} dropTarget={dropTargetId === job.id}
               onTouchDragStart={event => startTouchDrag(event, job.id)} onTouchDragMove={moveTouchDrag} onTouchDragEnd={endTouchDrag} onTouchDragCancel={clearDrag}
-              draggable={arranging && !savingOrder}
-              onDragStart={event => { if (!arranging || savingOrder) { event.preventDefault(); return; } setDraggedStopId(job.id); event.dataTransfer.setData('text/plain', job.id); event.dataTransfer.effectAllowed = 'move'; }}
+              draggable={arranging && !savingOrder && !sharedControls?.busy}
+              onDragStart={event => { if (!arranging || savingOrder || sharedControls?.busy) { event.preventDefault(); return; } setDraggedStopId(job.id); event.dataTransfer.setData('text/plain', job.id); event.dataTransfer.effectAllowed = 'move'; }}
               onDragOver={event => { if (arranging && draggedStopId && draftStops.some(stop => stop.order_id === draggedStopId)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetId(job.id); } }}
               onDrop={event => { event.preventDefault(); event.stopPropagation(); handleDrop(job.id, event.dataTransfer.getData('text/plain') || draggedStopId); }}
               onDragEnd={clearDrag}
@@ -635,7 +690,8 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
           })()}
         </div>
       )}
-      {slotId && !route && !loading && sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} />)}
+      {slotId && !route && !loading && sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} onOpenDetails={openDetails} compactDesktop={adminView} detailBasePath="/driver/delivery" />)}
+      {detail && <ScanDeliveryDialog key={detail.order.id} order={detail.order} stop={detail.stop} scanStation={false} onClose={() => { setDetail(null); setRouteRefreshKey(value => value + 1); onRefresh?.(); }} />}
     </div>
   );
 }

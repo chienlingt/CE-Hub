@@ -15,6 +15,7 @@ import {
   CalendarDays,
   Camera, ClipboardList,
   Check,
+  ChevronDown,
   Pencil,
   RefreshCw,
   Search,
@@ -28,6 +29,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useAuth } from '../../contexts/AuthContext';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import ScannerModal from './ScannerModal';
+import ScanDeliveryDialog from './ScanDeliveryDialog';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 export function compareLoadingOrders(a, b) {
   const timeA = a?.time_slots?.time_window_start || '';
@@ -94,7 +97,7 @@ function DateStrip({ selected, onChange }) {
   const strip   = useMemo(() => buildStrip(selected), [selected]);
   const dateRef = useRef(null);
   return (
-    <div className="bg-white border-b border-gray-200 px-2 py-1 grid grid-cols-8 gap-0.5 max-w-lg">
+    <div className="bg-white border-b border-gray-200 px-2 py-1 grid w-full grid-cols-8 gap-0.5 max-w-lg lg:border-b-0">
       {strip.map(({ key, day, date }) => (
         <button key={key} onClick={() => onChange(key)}
           className={`flex flex-col items-center min-w-0 min-h-11 py-1 rounded-xl transition-colors
@@ -264,7 +267,8 @@ function useAllOrderItems(orders) {
 
 // ─── Item Table ───────────────────────────────────────────────────────────────
 
-export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial, onGlobalScanError, isFiltered = false }) {
+export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUpdated, globalScanSerial, onGlobalScanError, isFiltered = false, onOpenOrder, groupByTruck = false }) {
+  const [collapsedTrucks, setCollapsedTrucks] = useState({});
   const [rowFb,      setRowFb]      = useState({});
   const [busy,       setBusy]       = useState({});
   const [rowCam,     setRowCam]     = useState(null);
@@ -343,7 +347,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
     try {
       const res  = await fetch(`${API_BASE}/api/order-products/${item.id}/cancel-scan`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body:   JSON.stringify({ stage }),
+        body:   JSON.stringify({ stage, employee_id: employeeId }),
       });
       const data = await res.json();
       if (!res.ok) { alert(data.error || 'Failed'); return; }
@@ -572,7 +576,13 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
       if (!groups.has(row._orderId)) groups.set(row._orderId, { order: row._order, items: [] });
       groups.get(row._orderId).items.push(row);
     });
-    const nextRow = [...allRows].sort((a, b) => (unloading ? compareUnloadingOrders : compareLoadingOrders)(a._order, b._order)).find(isActionableForTab);
+    const nextRows = [...allRows].sort((a, b) => (unloading ? compareUnloadingOrders : compareLoadingOrders)(a._order, b._order));
+    const truckKey = order => order?.time_slots?.truck_id || order?.time_slots?.truck?.plate_no || 'unassigned';
+    const nextByTruck = new Map();
+    nextRows.filter(isActionableForTab).forEach(row => {
+      const key = groupByTruck ? truckKey(row._order) : 'all';
+      if (!nextByTruck.has(key)) nextByTruck.set(key, row._orderId);
+    });
     const plates = [...new Set(allRows.map(row => row._order?.time_slots?.truck?.plate_no).filter(Boolean))];
     const slots = new Map();
     groups.forEach((group, id) => {
@@ -586,7 +596,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
     };
     const renderCard = ([id, { order, items }]) => {
       const muted = isLoaded(id);
-      const next = nextRow?._orderId === id;
+      const next = nextByTruck.get(groupByTruck ? truckKey(order) : 'all') === id;
       const fullItems = allRows.filter(r => r._orderId === id);
       const loaded = fullItems.filter(completedStatus).length;
       const deliveryPosition = [...new Map([...allRows].sort((a, b) => compareUnloadingOrders(a._order, b._order)).filter(r => r._order?.time_slot_id === order?.time_slot_id).map(r => [r._orderId, r._order])).keys()].indexOf(id) + 1;
@@ -597,27 +607,30 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
         if (!products.has(key)) products.set(key, { name, units: [] });
         products.get(key).units.push(item);
       });
-      return <article key={id} aria-label={order?.odoo_order_ref || id} className={`overflow-hidden rounded-xl border ${next ? 'border-blue-400 ring-1 ring-blue-100 bg-white' : muted ? 'border-gray-200 bg-gray-50 text-gray-500' : 'border-gray-200 bg-white'}`}>
-        <header className={`px-4 py-3 ${next ? 'bg-blue-50' : 'bg-gray-100/70'}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className={`mt-1 break-all text-sm font-semibold ${next ? 'text-blue-800' : muted ? 'text-gray-500' : 'text-gray-800'}`}>
+      return <article key={id} aria-label={order?.odoo_order_ref || id} tabIndex={onOpenOrder ? 0 : undefined}
+        onClick={event => { if (!event.target.closest('button, input, select, textarea, summary, details, a')) onOpenOrder?.(order); }}
+        onKeyDown={event => { if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) { event.preventDefault(); onOpenOrder?.(order); } }}
+        className={`overflow-hidden rounded-xl border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${onOpenOrder ? 'cursor-pointer' : ''} ${next ? 'border-blue-400 ring-1 ring-blue-100 bg-white' : muted ? 'border-gray-200 bg-gray-50 text-gray-500' : 'border-gray-200 bg-white'}`}>
+        <header className={`px-4 py-3 lg:border-b lg:border-gray-100 lg:py-2 ${next ? 'bg-blue-50' : 'bg-gray-100/70'}`}>
+          <div className="flex items-start justify-between gap-2 lg:items-center">
+            <div className="min-w-0 lg:flex lg:items-center lg:gap-4">
+              <p className={`mt-1 break-all text-sm font-semibold lg:mt-0 ${next ? 'text-blue-800' : muted ? 'text-gray-500' : 'text-gray-800'}`}>
                 {(unloading || order?.truck_loading_sequence) && <span className="mr-2 font-mono text-gray-400">#{unloading ? deliveryPosition : order.truck_loading_sequence}</span>}{order?.odoo_order_ref || id}
               </p>
-              <p className="mt-0.5 text-xs text-gray-500">{order?.customers?.full_name}</p>
+              <p className="mt-0.5 text-xs text-gray-500 lg:mt-0 lg:border-l lg:border-gray-200 lg:pl-4">{order?.customers?.full_name}</p>
             </div>
-            <div className="shrink-0 text-right text-xs">
-              {next && <p className="mb-1 font-semibold text-blue-700">{unloading ? 'Next unload' : 'Next load'}</p>}
+            <div className="shrink-0 text-right text-xs lg:flex lg:items-center lg:gap-3">
+              {next && <p className="mb-1 font-semibold text-blue-700 lg:mb-0">{unloading ? 'Next unload' : 'Next load'}</p>}
               <span className="text-gray-500">{loaded}/{fullItems.length} {unloading ? 'unloaded' : 'loaded'}</span>
             </div>
           </div>
         </header>
-        <div className="divide-y divide-gray-100">{[...products.entries()].map(([key, { name, units }]) => <div key={key} className="px-4 py-3">
-          <p className={`text-sm font-medium ${muted ? 'text-gray-500' : 'text-gray-800'}`}>{name} <span className="font-normal text-gray-400">×{units.reduce((sum, unit) => sum + Number(unit.quantity || 1), 0)}</span></p>
-          <div className="mt-1 divide-y divide-gray-100">{units.map(item => <div key={item.id} className="py-2">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <div className="min-w-0 flex-1">{isAdmin && !unloading ? renderAdminSerialControl(item) : <p className="break-all font-mono text-xs text-gray-500">{(unloading && item.unloaded_serial) || item.loaded_serial || item.assigned_serial || 'No serial assigned'}</p>}</div>
-              <StatusPill item={item} />
+        <div className="divide-y divide-gray-100">{[...products.entries()].map(([key, { name, units }]) => <div key={key} className="px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] lg:items-start lg:gap-x-5 lg:py-1.5">
+          <p className={`text-sm font-medium lg:py-2 ${muted ? 'text-gray-500' : 'text-gray-800'}`}>{name} <span className="font-normal text-gray-400">×{units.reduce((sum, unit) => sum + Number(unit.quantity || 1), 0)}</span></p>
+          <div className="mt-1 min-w-0 divide-y divide-gray-100 lg:mt-0 lg:border-l lg:border-gray-100 lg:pl-5">{units.map(item => <div key={item.id} className="py-2">
+            <div className={`flex min-w-0 items-center justify-between gap-2 lg:grid ${isAdmin ? 'lg:grid-cols-[minmax(0,1fr)_6rem_2rem]' : 'lg:grid-cols-[minmax(0,1fr)_6rem]'}`}>
+              <div className="min-w-0 flex-1 lg:text-right lg:[&>div]:justify-end">{isAdmin && !unloading ? renderAdminSerialControl(item) : <p className="break-all font-mono text-xs text-gray-500">{(unloading && item.unloaded_serial) || item.loaded_serial || item.assigned_serial || 'No serial assigned'}</p>}</div>
+              <div className="shrink-0 lg:justify-self-end"><StatusPill item={item} /></div>
               {isAdmin && item.handling_status === (unloading ? 'unloaded' : 'loaded') && <details className="shrink-0"><summary aria-label="Item actions" className="cursor-pointer list-none p-2 text-gray-500">⋯</summary><button type="button" onClick={() => handleCancelScan(item, id)} disabled={cancelling === item.id} className="min-h-10 text-xs text-red-600">Cancel scan</button></details>}
             </div>
             {rowFb[item.id] && <ErrorBanner fb={rowFb[item.id]} onDismiss={() => setRowFb(p => ({ ...p, [item.id]: null }))} />}
@@ -625,21 +638,45 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
         </div>)}</div>
       </article>;
     };
-    const unloadedCards = unloading ? [...groups.entries()].filter(([id]) => isLoaded(id)) : [];
-    return <div className="space-y-4">
-      <p className="flex items-center gap-2 px-1 text-sm font-semibold text-gray-700"><Truck size={16} />{plates.join(' · ') || 'Truck unassigned'}</p>
-      {[...slots.entries()].map(([slotId, { slot, cards }]) => {
+    const renderTruckItems = truckGroups => <div className="space-y-4">
+      {[...slots.entries()].map(([slotId, { slot, cards: slotCards }]) => {
+        const cards = slotCards.filter(([id]) => truckGroups.has(id));
         const visibleCards = unloading ? cards.filter(([id]) => !isLoaded(id)) : [...cards].sort(([a], [b]) => Number(isLoaded(a)) - Number(isLoaded(b)));
         if (!visibleCards.length) return null;
         return <section key={slotId} aria-label={`${unloading ? 'Unloading' : 'Loading'} slot ${slot?.time_window_start || 'Unscheduled'}`} className="space-y-2">
-          <h2 className="px-1 text-xs font-semibold text-gray-500">{slot?.time_window_start || 'Unscheduled'}{slot?.time_window_end ? ` – ${slot.time_window_end}` : ''}</h2>
+          <h2 className="border-l-2 border-gray-300 px-2 text-xs font-semibold text-gray-500">{slot?.time_window_start || 'Unscheduled'}{slot?.time_window_end ? ` – ${slot.time_window_end}` : ''}</h2>
           {visibleCards.map(renderCard)}
         </section>;
       })}
-      {unloadedCards.length > 0 && <section aria-label="Unloaded deliveries" className="space-y-2">
+      {unloading && [...truckGroups.entries()].some(([id]) => isLoaded(id)) && <section aria-label="Unloaded deliveries" className="space-y-2">
         <h2 className="px-1 text-xs font-semibold text-gray-400">Unloaded</h2>
-        {unloadedCards.map(renderCard)}
+        {[...truckGroups.entries()].filter(([id]) => isLoaded(id)).map(renderCard)}
       </section>}
+    </div>;
+    if (groupByTruck) {
+      const trucks = new Map();
+      groups.forEach((group, id) => {
+        const key = truckKey(group.order);
+        if (!trucks.has(key)) trucks.set(key, { plate: group.order?.time_slots?.truck?.plate_no || 'Truck unassigned', groups: new Map() });
+        trucks.get(key).groups.set(id, group);
+      });
+      return <div className="space-y-4">{[...trucks.entries()].map(([key, truck]) => {
+        const collapsed = Boolean(collapsedTrucks[key]);
+        const truckItems = allRows.filter(row => truckKey(row._order) === key);
+        return <section key={key} aria-label={`Truck ${truck.plate}`} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsedTrucks(previous => ({ ...previous, [key]: !previous[key] }))}
+            className="flex min-h-12 w-full items-center gap-2 bg-blue-50 px-4 py-3 text-left text-sm font-semibold text-blue-900 hover:bg-blue-100">
+            <Truck size={17} /><span>{truck.plate}</span>
+            <span className="ml-auto text-xs font-normal text-gray-500">{truck.groups.size} DO · {truckItems.length} items</span>
+            <ChevronDown size={18} className={`shrink-0 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+          </button>
+          <div hidden={collapsed} className="p-3 sm:p-4">{renderTruckItems(truck.groups)}</div>
+        </section>;
+      })}</div>;
+    }
+    return <div className="space-y-4">
+      <p className="flex items-center gap-2 px-1 text-sm font-semibold text-gray-700"><Truck size={16} />{plates.join(' · ') || 'Truck unassigned'}</p>
+      {renderTruckItems(groups)}
     </div>;
   }
 
@@ -746,7 +783,7 @@ function AuditCell({ name, at, serial, color }) {
   );
 }
 
-function AuditTable({ rows, isAdmin, onUpdated }) {
+function AuditTable({ rows, isAdmin, employeeId, onUpdated }) {
   const [sort,      setSort]      = useState({ field: 'do', dir: 'asc' });
   const [resetting, setResetting] = useState(null);
 
@@ -755,7 +792,7 @@ function AuditTable({ rows, isAdmin, onUpdated }) {
     if (!window.confirm(`Reset all scan progress for "${name}"? This cannot be undone.`)) return;
     setResetting(row.id);
     try {
-      const res  = await fetch(`${API_BASE}/api/order-products/${row.id}/scan`, { method: 'DELETE' });
+      const res  = await fetch(`${API_BASE}/api/order-products/${row.id}/scan`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ employee_id: employeeId }) });
       const data = await res.json();
       if (!res.ok) { alert(data.error || 'Failed to reset item'); return; }
       onUpdated(row._orderId, {
@@ -964,6 +1001,8 @@ export function ScannerSection({ order, stage, employeeId, items, onItemUpdated 
 // ─── Main ScanStation ─────────────────────────────────────────────────────────
 
 export default function ScanStation({ forcedStage }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { employeeData, loadingPermissions } = useAuth();
   const { isAdmin, isDriver } = useRole(employeeData);
 
@@ -1009,12 +1048,36 @@ export default function ScanStation({ forcedStage }) {
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
-  const [date,     setDate]     = useState(today);
+  const [date,     setDate]     = useState(() => {
+    const selected = new URLSearchParams(location.search).get('date');
+    return /^\d{4}-\d{2}-\d{2}$/.test(selected || '') ? selected : today;
+  });
   const [search,   setSearch]   = useState('');
+  const [selectedTeam, setSelectedTeam] = useState(() => new URLSearchParams(location.search).get('team') || 'all');
+  const [teams, setTeams] = useState([]);
+  const [teamError, setTeamError] = useState('');
+  const [detailOrder, setDetailOrder] = useState(null);
   const [orders,   setOrders]   = useState([]);
   const [fetching, setFetching] = useState(false);
   const orderSnapshot = useRef([]);
   const [changedRoute, setChangedRoute] = useState(null);
+
+  const fetchTeams = useCallback(async signal => {
+    if (!isAdmin || !employeeData?.id) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/driver/admin/overview?employee_id=${encodeURIComponent(employeeData.id)}&date=${date}`, { signal });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to load delivery teams.');
+      if (!signal?.aborted) { setTeams(data.teams || []); setTeamError(''); }
+    } catch (error) { if (!signal?.aborted) setTeamError(error.message); }
+  }, [isAdmin, employeeData?.id, date]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setTeams([]);
+    fetchTeams(controller.signal);
+    const timer = setInterval(() => fetchTeams(controller.signal), 30000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [fetchTeams]);
 
 
   const fetchOrders = useCallback(async (quiet = false) => {
@@ -1050,8 +1113,11 @@ export default function ScanStation({ forcedStage }) {
 
   // Date filter only — search is applied at row level so only matching items show
   const filteredOrders = useMemo(() => {
-    return orders.filter(o => !date || orderDate(o) === date);
-  }, [orders, date]);
+    const team = teams.find(item => item.id === selectedTeam);
+    const teamOrderIds = new Set(team?.runs?.flatMap(run => run.orders.map(order => order.id)) || []);
+    return orders.filter(o => (!date || orderDate(o) === date) && (!isAdmin || selectedTeam === 'all'
+      || o.time_slots?.delivery_team_id === selectedTeam || teamOrderIds.has(o.id)));
+  }, [orders, date, isAdmin, selectedTeam, teams]);
 
   const { itemMap, loadingItems, refetchItems, updateItem } = useAllOrderItems(filteredOrders);
 
@@ -1099,17 +1165,17 @@ export default function ScanStation({ forcedStage }) {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-gray-50">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-gray-50">
 
       {/* ── Header — sticky within the content scroll area ── */}
-      <div className="z-20 shrink-0 bg-gradient-to-r from-blue-800 to-blue-700 shadow-md">
-        <div className="flex items-center gap-3 px-4 py-3">
+      <div className="z-20 shrink-0 bg-blue-700 shadow-sm">
+        <div className="mx-auto flex w-full max-w-7xl items-center gap-3 px-4 py-3 lg:px-6">
           <div className="flex-shrink-0">
             <p className="text-base font-bold text-white">{tabLabel}</p>
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
-            <button onClick={() => { fetchOrders(); refetchItems(); }}
+            <button onClick={() => { fetchOrders(); refetchItems(); fetchTeams(); }}
               className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 transition-colors" title="Refresh">
               <RefreshCw className="w-4 h-4 text-white" />
             </button>
@@ -1126,7 +1192,7 @@ export default function ScanStation({ forcedStage }) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div role="region" aria-label={`${tabLabel} checklist`} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-4 [touch-action:pan-y] [-webkit-overflow-scrolling:touch]">
       {/* Global scanner modal (loading/unloading) */}
       {showGlobalCam && (
         <ScannerModal
@@ -1137,15 +1203,22 @@ export default function ScanStation({ forcedStage }) {
       )}
 
       {/* ── Date strip ─────────────────────────────────────────────── */}
-      <DateStrip selected={date} onChange={d => setDate(d)} />
-      {changedRoute && <div role="alert" className="mx-4 my-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
-        Route changed after loading started. The previous loading order is still shown.
-        <button type="button" className="mt-2 block min-h-10 rounded-lg bg-amber-100 px-3 font-semibold" onClick={() => { orderSnapshot.current = changedRoute; setOrders(changedRoute); setChangedRoute(null); }}>Use updated loading order</button>
-      </div>}
+      <div className="border-b border-gray-200 bg-white">
+      <div className="mx-auto max-w-7xl lg:flex lg:items-center lg:gap-6 lg:px-6">
+      <div className="lg:w-[28rem] lg:shrink-0"><DateStrip selected={date} onChange={d => setDate(d)} /></div>
 
       {/* ── Filter bar ─────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2 max-w-5xl mx-auto">
+      <div className="mx-auto bg-white px-4 py-2 lg:min-w-0 lg:flex-1 lg:px-0">
         <div className="flex flex-wrap items-center gap-2.5">
+          {isAdmin && <select aria-label="Delivery team" value={selectedTeam} onChange={event => {
+            const team = event.target.value;
+            setSelectedTeam(team); setGlobalError(null); setGlobalScanSerial(null);
+            navigate(`${location.pathname}?date=${date}&team=${encodeURIComponent(team)}`, { replace: true });
+          }} className="min-h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-700 sm:w-52">
+            <option value="all">All delivery teams</option>
+            {teams.map(team => <option key={team.id} value={team.id}>{team.name}{team.truck_plates?.length ? ` · ${team.truck_plates.join(', ')}` : ''}</option>)}
+            {selectedTeam !== 'all' && !teams.some(team => team.id === selectedTeam) && <option value={selectedTeam}>Selected delivery team</option>}
+          </select>}
           {/* Search */}
           <div className="relative flex-1 min-w-[180px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1156,9 +1229,16 @@ export default function ScanStation({ forcedStage }) {
 
         </div>
       </div>
+      </div>
+      {isAdmin && teamError && <p role="alert" className="mx-auto max-w-7xl px-4 py-2 text-sm text-red-600">{teamError}</p>}
+      </div>
+      {changedRoute && <div role="alert" className="mx-auto my-2 max-w-7xl rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+        Route changed after loading started. The previous loading order is still shown.
+        <button type="button" className="mt-2 block min-h-10 rounded-lg bg-amber-100 px-3 font-semibold" onClick={() => { orderSnapshot.current = changedRoute; setOrders(changedRoute); setChangedRoute(null); }}>Use updated loading order</button>
+      </div>}
 
       {/* ── Table ──────────────────────────────────────────────────── */}
-      <div className="max-w-5xl mx-auto px-4 py-4 sm:px-6 sm:py-5">
+      <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 sm:py-5">
         {fetching || loadingItems ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
             <RefreshCw size={32} className="animate-spin" />
@@ -1183,15 +1263,20 @@ export default function ScanStation({ forcedStage }) {
               <ErrorBanner fb={globalError} onDismiss={() => setGlobalError(null)} />
             )}
             {tab === 'audit' ? (
-              <AuditTable rows={rows} isAdmin={isAdmin} onUpdated={updateItem} />
+              <AuditTable rows={rows} isAdmin={isAdmin} employeeId={employeeData?.id} onUpdated={updateItem} />
             ) : (
               <ItemTable
                 rows={rows}
                 allRows={allRows}
+                onOpenOrder={order => {
+                  if (window.matchMedia('(min-width: 1024px)').matches) setDetailOrder(order);
+                  else navigate(`/scanning/delivery/${order.id}`, { state: { scanOrder: order, returnTo: `${location.pathname}?date=${date}&team=${encodeURIComponent(selectedTeam)}` } });
+                }}
                 isFiltered={Boolean(search)}
                 tab={tab}
                 employeeId={employeeData?.id || null}
                 isAdmin={isAdmin}
+                groupByTruck={isAdmin && selectedTeam === 'all'}
                 onUpdated={updateItem}
                 globalScanSerial={globalScanSerial}
                 onGlobalScanError={setGlobalError}
@@ -1201,6 +1286,7 @@ export default function ScanStation({ forcedStage }) {
         )}
       </div>
       </div>
+      {detailOrder && <ScanDeliveryDialog key={detailOrder.id} order={detailOrder} onClose={() => { setDetailOrder(null); refetchItems(); fetchOrders(true); }} />}
     </div>
   );
 }

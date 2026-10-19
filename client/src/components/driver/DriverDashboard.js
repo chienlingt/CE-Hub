@@ -1,8 +1,8 @@
 // client/src/components/driver/DriverDashboard.js
 // A.4.1 / FR-04-001: Mobile-first driver task dashboard.
 // Mirrors TBMDelivery stafflanding.tsx layout and UX.
-import { useState, useMemo, useEffect } from 'react';
-import { Search, RefreshCw, CalendarDays, LayoutList } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { Search, RefreshCw, CalendarDays, LayoutList, GripVertical, Map as MapIcon, Check, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
@@ -21,6 +21,7 @@ import { toLocalDateKey, todayLocalDateKey } from '../../utils/dateKey';
 import { DRIVER_TABS } from '../../utils/driverStatusMap';
 import DateCalendarModal from './DateCalendarModal';
 import SlotOrderGroup from './SlotOrderGroup';
+import AdminDeliveryOverview from './AdminDeliveryOverview';
 
 /** Build a 7-day strip centred around today (or selectedDate if given). */
 function buildDateStrip(selectedDate) {
@@ -47,6 +48,13 @@ const TAB_LABELS = {
 };
 
 export default function DriverDashboard() {
+  const { currentUser, employeeData } = useAuth();
+  const role = (typeof employeeData?.role === 'object' ? employeeData.role?.name : employeeData?.role)
+    || (typeof currentUser?.role === 'object' ? currentUser.role?.name : currentUser?.role) || '';
+  return String(role).toLowerCase().includes('admin') ? <AdminDeliveryOverview /> : <DriverDeliveries />;
+}
+
+function DriverDeliveries() {
   const { currentUser } = useAuth();
   const employeeId = currentUser?.employeeId || '';
 
@@ -58,6 +66,11 @@ export default function DriverDashboard() {
   const [windowFilter, setWindowFilter] = useState('all');
   const [search, setSearch]     = useState('');
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [arranging, setArranging] = useState(false);
+  const [showMap, setShowMap] = useState(false);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeMessage, setRouteMessage] = useState('');
+  const routeControls = useRef(new Map());
 
   const { jobs, slots, loading, error, refresh } = useDriverJobs(employeeId);
 
@@ -104,6 +117,33 @@ export default function DriverDashboard() {
 
   const stats = useMemo(() => computeStats(dateJobs), [dateJobs]);
   const strip = useMemo(() => buildDateStrip(date), [date]);
+  const canArrangeGroup = group => group.slot?.id && group.jobs.some(job => !['Delivered', 'Installing', 'Failed', 'Cancelled'].includes(job.status));
+  const hasArrangableJobs = filteredGroups.some(canArrangeGroup);
+
+  useEffect(() => { setArranging(false); setRouteMessage(''); }, [date, tab, windowFilter, search]);
+
+  async function runRouteAction(action) {
+    const controls = filteredGroups.filter(g => action === 'save' ? canArrangeGroup(g) : g.slot?.id).map(g => routeControls.current.get(g.slot.id)?.current);
+    if (!controls.length || controls.some(control => !control?.ready)) {
+      setRouteMessage('Routes are still loading. Please try again.'); return;
+    }
+    setRouteBusy(true); setRouteMessage('');
+    try {
+      let success = true;
+      for (const control of controls) if (!await control[action]()) { success = false; break; }
+      if (success) { setArranging(false); setRouteMessage(action === 'optimal' ? 'Optimal routes restored.' : 'Arrangement saved.'); }
+      else setRouteMessage('Not all routes were saved. Review the message below the affected slot.');
+      await refresh();
+    } finally { setRouteBusy(false); }
+  }
+
+  function beginArrange() {
+    const controls = filteredGroups.filter(canArrangeGroup).map(g => routeControls.current.get(g.slot.id)?.current);
+    if (!controls.length || controls.some(control => !control?.ready)) {
+      setRouteMessage('Routes are still loading. Please try again.'); return;
+    }
+    setRouteMessage(''); setArranging(true);
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 pb-safe">
@@ -116,6 +156,7 @@ export default function DriverDashboard() {
           </div>
           <button
             onClick={refresh}
+            disabled={routeBusy}
             className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
             title="Refresh"
           >
@@ -132,6 +173,7 @@ export default function DriverDashboard() {
           <button
             key={key}
             type="button"
+            disabled={routeBusy}
             onClick={() => setDate(key)}
             aria-label={`${day}, ${key}`}
             aria-pressed={key === date}
@@ -147,6 +189,7 @@ export default function DriverDashboard() {
         <button
           type="button"
           onClick={() => setCalendarOpen(true)}
+          disabled={routeBusy}
           className="flex min-h-11 min-w-0 flex-col items-center justify-center rounded-lg py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
           title="Pick date"
           aria-label="Choose another delivery date"
@@ -164,6 +207,7 @@ export default function DriverDashboard() {
           <input
             type="text"
             value={search}
+            disabled={routeBusy}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search deliveries"
             aria-label="Search order, product, customer or address"
@@ -172,7 +216,7 @@ export default function DriverDashboard() {
         </div>
       </div>
 
-      <div className="mb-2 grid grid-cols-2 gap-2 px-3">
+      <fieldset disabled={routeBusy} className="mb-2 grid grid-cols-2 gap-2 px-3">
         <label className="min-w-0 text-xs text-gray-500">
           <span className="sr-only">Time slot</span>
           <select value={windowFilter} onChange={event => setWindowFilter(event.target.value)} className="min-h-10 w-full rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-800">
@@ -185,7 +229,19 @@ export default function DriverDashboard() {
             {DRIVER_TABS.map(value => <option key={value} value={value}>{value === 'all' ? 'All statuses' : TAB_LABELS[value]}</option>)}
           </select>
         </label>
+      </fieldset>
+
+      <div className="mb-3 flex gap-2 px-3" aria-busy={routeBusy}>
+        {arranging ? <>
+          <button type="button" disabled={routeBusy} onClick={() => setArranging(false)} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-xs font-semibold"><X size={14} />Cancel</button>
+          <button type="button" disabled={routeBusy} onClick={() => runRouteAction('save')} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white disabled:opacity-40"><Check size={14} />{routeBusy ? 'Saving…' : 'Save'}</button>
+        </> : <>
+          <button type="button" disabled={routeBusy || !hasArrangableJobs} onClick={beginArrange} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 text-xs font-semibold disabled:opacity-40"><GripVertical size={14} />Arrange</button>
+          <button type="button" disabled={routeBusy || !filteredGroups.length} onClick={() => runRouteAction('optimal')} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 text-xs font-semibold disabled:opacity-40"><RefreshCw size={14} className={routeBusy ? 'animate-spin' : ''} />Optimal</button>
+        </>}
+        <button type="button" disabled={routeBusy} aria-pressed={showMap} onClick={() => setShowMap(value => !value)} className={`inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 text-xs font-semibold ${showMap ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white'}`}><MapIcon size={14} />{showMap ? 'Hide map' : 'Map'}</button>
       </div>
+      {routeMessage && <p role="status" className="mb-2 px-3 text-xs text-gray-500">{routeMessage}</p>}
 
       {/* ── Slot Groups ────────────────────────────────────────────── */}
       <div className="px-3 space-y-3">
@@ -229,6 +285,11 @@ export default function DriverDashboard() {
             allJobs={slotGroups.find(full => full.slot?.id === group.slot?.id)?.jobs || group.jobs}
             employeeId={employeeId}
             highlightNext={group.slot?.id === nextSlotId}
+            sharedControls={{ arranging, showMap, busy: routeBusy }}
+            controlsRef={(() => {
+              if (!routeControls.current.has(group.slot?.id)) routeControls.current.set(group.slot?.id, { current: null });
+              return routeControls.current.get(group.slot?.id);
+            })()}
             onDeparted={refresh}
           />
         ))}

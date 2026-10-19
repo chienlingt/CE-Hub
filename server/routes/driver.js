@@ -16,9 +16,53 @@ const { computeOrderLoadingStats, buildSlotSummaries } = require('../services/or
 const { healStrandedOrdersOnDepartedSlots } = require('../services/deliveryLifecycleService');
 const { optimizeScheduledSlot, reorderScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('../services/intelligentRouteOptimizationService');
 const { toAppDateKey } = require('../utils/dateKey');
+const { buildAdminDeliveryOverview } = require('../services/adminDeliveryOverview');
+
+router.get('/admin/overview', async (req, res) => {
+  try {
+    const { employee_id, date } = req.query;
+    if (!/^[0-9a-f-]{36}$/i.test(employee_id || '') || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) {
+      return res.status(400).json({ error: 'Valid employee_id and YYYY-MM-DD date are required' });
+    }
+    // Resolve the caller's role in the database, never trust a client-sent role.
+    const employee = await prisma.employees.findUnique({ where: { id: employee_id }, include: { role: true } });
+    if (!employee?.active_flag || !(employee.role?.name || '').toLowerCase().includes('admin')) return res.status(403).json({ error: 'Admin access required' });
+    const names = { select: { name: true, display_name: true } };
+    const teamInclude = { primary_driver: names, assistant_driver: names, truck: { select: { plate_no: true } } };
+    const [teams, slots] = await Promise.all([
+      prisma.teams.findMany({ where: { OR: [{ team_type: { contains: 'delivery', mode: 'insensitive' } }, { delivery_timeslots: { some: { date } } }] }, include: teamInclude }),
+      prisma.time_slots.findMany({ where: { date }, include: {
+        delivery_team: { include: teamInclude },
+        truck: { include: { employees_trucks_driver_idToemployees: names, employees_trucks_assistant_idToemployees: names } },
+        lorry_trip: { include: { employees_lorry_trips_driver_idToemployees: names, employees_lorry_trips_assistant_idToemployees: names } },
+        orders: { include: { customers: { select: { full_name: true } }, buildings: { include: { zone: { select: { zone_name: true } } } }, order_products: { select: { quantity: true } } } },
+      } }),
+    ]);
+    res.json(buildAdminDeliveryOverview(teams, slots, date));
+  } catch (err) {
+    console.error('GET /api/driver/admin/overview error:', err);
+    res.status(500).json({ error: 'Unable to load delivery team overview' });
+  }
+});
 
 function isDeliveryTeamType(team) {
   return (team?.team_type || '').toLowerCase().includes('delivery');
+}
+
+async function isAdminEmployee(employeeId) {
+  const employee = await prisma.employees.findUnique({ where: { id: employeeId }, include: { role: true } });
+  return Boolean(employee?.active_flag && (employee.role?.name || '').toLowerCase().includes('admin'));
+}
+
+async function adminRouteOrigin(slot) {
+  if (!slot.departed_at) return null;
+  const trip = await prisma.lorry_trips.findUnique({ where: { time_slot_id: slot.id } });
+  const team = !trip && slot.delivery_team_id ? await prisma.teams.findUnique({ where: { id: slot.delivery_team_id } }) : null;
+  const truck = !trip && !team?.primary_driver_id && slot.truck_id ? await prisma.trucks.findUnique({ where: { id: slot.truck_id } }) : null;
+  const driverId = trip ? trip.driver_id : team?.primary_driver_id || truck?.driver_id;
+  if (!driverId) return null;
+  const position = await prisma.employee_locations.findUnique({ where: { employee_id: driverId } });
+  return position?.latitude != null && position?.longitude != null ? { lat: Number(position.latitude), lon: Number(position.longitude) } : null;
 }
 
 // ─── GET /api/driver/jobs ────────────────────────────────────────────────────
@@ -413,7 +457,7 @@ router.get('/route/:timeSlotId', async (req, res) => {
     )];
 
     const isOnDeliveryTeam = timeslot.delivery_team_id && deliveryTeamIds.includes(timeslot.delivery_team_id);
-    if (!isOnDeliveryTeam) {
+    if (!isOnDeliveryTeam && !await isAdminEmployee(employee_id)) {
       const ownOrderOnSlot = await prisma.orders.count({
         where: { time_slot_id: timeSlotId, employee_id },
       });
@@ -522,12 +566,15 @@ router.post('/route/:timeSlotId/reoptimize', async (req, res) => {
     });
     const teamIds = assignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id);
     const ownOrderCount = await prisma.orders.count({ where: { time_slot_id: timeSlotId, employee_id } });
-    if (!teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
+    const admin = await isAdminEmployee(employee_id);
+    if (!admin && !teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
       return res.status(403).json({ error: 'Not assigned to this time slot' });
     }
 
     let originCoords = null;
-    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+    if (admin) {
+      originCoords = await adminRouteOrigin(slot);
+    } else if (latitude != null && longitude != null && Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
       originCoords = { lat: Number(latitude), lon: Number(longitude) };
     } else {
       const saved = await prisma.employee_locations.findUnique({ where: { employee_id } });
@@ -543,7 +590,7 @@ router.post('/route/:timeSlotId/reoptimize', async (req, res) => {
         ? { lat: Number(config.warehouse_latitude), lon: Number(config.warehouse_longitude) }
         : null,
       originCoords,
-      departureAt: new Date(),
+      departureAt: admin && !slot.departed_at ? null : new Date(),
       reason,
       dynamic: !force,
     });
@@ -573,12 +620,15 @@ router.post('/route/:timeSlotId/reorder', async (req, res) => {
     });
     const teamIds = assignments.filter(a => isDeliveryTeamType(a.team)).map(a => a.team.id);
     const ownOrderCount = await prisma.orders.count({ where: { time_slot_id: timeSlotId, employee_id } });
-    if (!teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
+    const admin = await isAdminEmployee(employee_id);
+    if (!admin && !teamIds.includes(slot.delivery_team_id) && ownOrderCount === 0) {
       return res.status(403).json({ error: 'Not assigned to this time slot' });
     }
 
     let originCoords = null;
-    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+    if (admin) {
+      originCoords = await adminRouteOrigin(slot);
+    } else if (latitude != null && longitude != null && Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
       originCoords = { lat: Number(latitude), lon: Number(longitude) };
     }
     const config = await prisma.scheduler_config.findFirst();

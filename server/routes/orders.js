@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
+const { expandUnits } = require('../services/orderProductUnits');
 const { extractBuildingName, normalizeBuildingName } = require('../utils/addressParser');
 const { scheduleOrders, updateTimeslotResources } = require('../services/scheduler');
 const dayjs = require('dayjs');
@@ -1317,7 +1318,7 @@ router.get('/:id/loading-status', async (req, res) => {
       emps.forEach(e => { empMap[e.id] = e.name || e.display_name || 'Unknown'; });
     }
 
-    const enriched = items.map(item => ({
+    const enriched = items.flatMap(expandUnits).map(item => ({
       ...item,
       loaded_by_name:   item.loaded_by   ? (empMap[item.loaded_by]   || 'Unknown') : null,
       unloaded_by_name: item.unloaded_by ? (empMap[item.unloaded_by] || 'Unknown') : null,
@@ -1866,13 +1867,17 @@ router.delete('/:id/scan-session', async (req, res) => {
       });
     }
 
-    const result = await prisma.order_products.updateMany({
-      where: { order_id: req.params.id },
-      data: {
-        handling_status:  'pending',
-        loaded_serial:   null, loaded_by:   null, loaded_at:   null,
-        unloaded_serial: null, unloaded_by: null, unloaded_at: null,
-      },
+    const { unitsFor, summarizeUnits } = require('../services/orderProductUnits');
+    const result = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+      const lines = await tx.order_products.findMany({ where: { order_id: req.params.id } });
+      for (const line of lines) {
+        const units = unitsFor(line).map(unit => ({ ...unit, handling_status: 'pending',
+          loaded_serial: null, loaded_by: null, loaded_at: null,
+          unloaded_serial: null, unloaded_by: null, unloaded_at: null }));
+        await tx.order_products.update({ where: { id: line.id }, data: summarizeUnits(units) });
+      }
+      return { count: lines.length };
     });
 
     console.log(`[A2] Scan session reset for order ${req.params.id} — ${result.count} item(s) cleared`);

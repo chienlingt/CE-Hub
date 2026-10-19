@@ -7,6 +7,7 @@ import { ChevronDown, ChevronUp, Truck, AlertTriangle, RefreshCw, Clock } from '
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import DriverRoute from './DriverRoute';
 import DriverDeliveryCard, { sortDeliveryCards } from './DriverDeliveryCard';
+import ScanDeliveryDialog from '../common/ScanDeliveryDialog';
 
 /** Slot status → human label + colour classes. */
 const SLOT_STATUS_STYLE = {
@@ -43,9 +44,13 @@ export default function SlotOrderGroup({
   allJobs = jobs,
   employeeId,
   highlightNext = true,
+  sharedControls,
+  controlsRef,
   onDeparted,
 }) {
   const [expanded, setExpanded]     = useState(true);
+  const [detail, setDetail] = useState(null);
+  useEffect(() => { if (sharedControls?.arranging || sharedControls?.showMap) setExpanded(true); }, [sharedControls?.arranging, sharedControls?.showMap]);
   const [departing, setDeparting]   = useState(false);
   const [departError, setDepartError] = useState(null);
 
@@ -167,10 +172,12 @@ export default function SlotOrderGroup({
       )}
 
       {/* ── Order list ──────────────────────────────────────────────────── */}
-      {expanded && (
-        slot?.id ? <DriverRoute slotId={slot.id} jobs={jobs} allJobs={allJobs} refreshToken={allJobs} onRefresh={onDeparted} highlightNext={highlightNext} />
-          : <div>{sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} />)}</div>
-      )}
+      <div className={expanded || sharedControls?.showMap || sharedControls?.arranging ? '' : 'hidden'}>
+        {slot?.id ? <DriverRoute slotId={slot.id} jobs={jobs} allJobs={allJobs} refreshToken={allJobs} onRefresh={onDeparted} highlightNext={highlightNext} sharedControls={sharedControls} controlsRef={controlsRef} />
+          : <div>{sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} onOpenDetails={(order, stop) => setDetail({ order, stop })} />)}</div>
+        }
+      </div>
+      {detail && <ScanDeliveryDialog order={detail.order} stop={detail.stop} scanStation={false} onClose={() => { setDetail(null); onDeparted?.(); }} />}
     </div>
   );
 }

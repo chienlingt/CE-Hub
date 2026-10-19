@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Camera, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Camera, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
@@ -18,8 +18,9 @@ import { enrichJobsWithAppointmentWindow } from '../../utils/driverOrderFilters'
 const api = path => `${API_BASE_URL.replace(/\/$/, '')}/api/${path}`;
 const itemColors = { pending: 'bg-gray-100 text-gray-600', loaded: 'bg-green-100 text-green-700', unloaded: 'bg-purple-100 text-purple-700' };
 
-export default function DriverDeliveryDetail() {
-  const { orderId } = useParams();
+export default function DriverDeliveryDetail({ detailOrderId, initialOrder, initialStop, onClose }) {
+  const { orderId: routeOrderId } = useParams();
+  const orderId = detailOrderId || routeOrderId;
   const pageRef = useRef(null);
   useLayoutEffect(() => {
     const scroller = pageRef.current?.closest('[data-page-scroll]') || document.scrollingElement;
@@ -27,17 +28,47 @@ export default function DriverDeliveryDetail() {
   }, [orderId]);
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser, employeeData } = useAuth();
+  const role = employeeData?.role?.name || currentUser?.role?.name || currentUser?.role || '';
+  const admin = String(role).toLowerCase().includes('admin');
   const employeeId = currentUser?.employeeId || '';
-  const { jobs, loading, error, refresh } = useDriverJobs(employeeId);
-  const job = useMemo(() => enrichJobsWithAppointmentWindow(jobs).find(item => item.id === orderId), [jobs, orderId]);
+  const { jobs, loading, error, refresh } = useDriverJobs(admin ? null : employeeId);
+  const [scanOrder, setScanOrder] = useState(initialOrder || location.state?.scanOrder || null);
+  const [readLoading, setReadLoading] = useState(admin);
+  const [readError, setReadError] = useState('');
+  const fetchAdminOrder = useCallback(async signal => {
+    if (!admin) return;
+    setReadLoading(true); setReadError('');
+    try {
+      const response = await fetch(api(`orders/${orderId}`), { signal });
+      if (!response.ok) throw new Error('Unable to load delivery details.');
+      const order = await response.json();
+      if (!signal?.aborted) setScanOrder(previous => ({ ...previous, ...order }));
+    } catch (err) { if (!signal?.aborted) setReadError(err.message); }
+    finally { if (!signal?.aborted) setReadLoading(false); }
+  }, [admin, orderId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchAdminOrder(controller.signal);
+    return () => controller.abort();
+  }, [fetchAdminOrder]);
+  const job = useMemo(() => {
+    if (!admin) return enrichJobsWithAppointmentWindow(jobs).find(item => item.id === orderId);
+    if (scanOrder?.id !== orderId) return null;
+    return {
+      ...scanOrder, status: scanOrder.order_status || scanOrder.status, customer_name: scanOrder.customers?.full_name || scanOrder.customer_name,
+      customer_phone: scanOrder.customers?.phone || scanOrder.customer_phone, time: scanOrder.scheduled_start_date_time || scanOrder.time,
+      assigned_date: scanOrder.time_slots?.date || new Date(scanOrder.scheduled_start_date_time).toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }),
+      address: [scanOrder.delivery_address, scanOrder.delivery_city, scanOrder.delivery_postcode].filter(Boolean).join(', ') || scanOrder.address,
+    };
+  }, [jobs, orderId, admin, scanOrder]);
   const [action, setAction] = useState(null);
   const [data, setData] = useState(null);
   const [itemError, setItemError] = useState(null);
   const [scanItem, setScanItem] = useState(null);
   const [scanning, setScanning] = useState(false);
   const scanningRef = useRef(false);
-  const [routeStop, setStop] = useState(location.state?.stop || null);
+  const [routeStop, setStop] = useState(initialStop || location.state?.stop || null);
   const stop = useDeliveryStop(job, routeStop);
   const refreshItems = useCallback(async () => {
     try {
@@ -85,6 +116,7 @@ export default function DriverDeliveryDetail() {
       setScanItem(null);
       await refreshItems();
       await refresh();
+      await fetchAdminOrder();
     } catch (err) {
       setScanItem(null);
       setItemError(err.message);
@@ -98,14 +130,15 @@ export default function DriverDeliveryDetail() {
     setAction(null);
     refresh();
     refreshItems();
+    fetchAdminOrder();
   }
 
-  return <div ref={pageRef} className="mx-auto min-h-screen max-w-3xl bg-gray-50 pb-6">
+  return <div ref={pageRef} className={`mx-auto ${onClose ? 'min-h-0' : 'min-h-screen'} max-w-3xl bg-gray-50 pb-6`}>
     <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 shadow-sm">
-      <button type="button" onClick={() => navigate(location.state?.returnTo || `/driver${job?.assigned_date ? `?date=${job.assigned_date}` : ''}`)} className="flex min-h-11 items-center gap-2 text-sm font-semibold text-gray-700"><ArrowLeft className="h-4 w-4" /> Back</button>
+      {onClose ? <><p className="text-sm font-semibold text-gray-800">Delivery details</p><button type="button" autoFocus onClick={onClose} aria-label="Close delivery details" className="ml-auto flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-200"><X className="h-5 w-5" /></button></> : <button type="button" onClick={() => navigate(location.state?.returnTo || `/driver${job?.assigned_date ? `?date=${job.assigned_date}` : ''}`)} className="flex min-h-11 items-center gap-2 text-sm font-semibold text-gray-700"><ArrowLeft className="h-4 w-4" /> Back</button>}
       <h1 className="sr-only">Delivery details</h1>
     </div>
-    {loading ? <p className="p-6 text-sm text-gray-500">Loading delivery…</p> : error ? <p role="alert" className="p-4 text-red-600">{error}</p> : !job ? <p className="p-6 text-gray-500">Delivery not available for this driver.</p> : <div className="space-y-4 px-4">
+    {loading || (readLoading && !job) ? <p className="p-6 text-sm text-gray-500">Loading delivery…</p> : error || readError ? <p role="alert" className="p-4 text-red-600">{error || readError}</p> : !job ? <p className="p-6 text-gray-500">Delivery not available for this driver.</p> : <div className="space-y-4 px-4">
       <OrderTaskCard summary job={job} onNavigate={() => navigateToDelivery(job, stop)} onUpdate={() => setAction('update')} onViewEvidence={() => setAction('evidence')} onReport={() => setAction('report')} onFail={() => setAction('fail')}>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-4">
           <div><dt className="text-gray-400">ETA</dt><dd className="mt-1 font-medium text-blue-700">{deliveryTime(stop?.eta || job.time)}</dd></div>
