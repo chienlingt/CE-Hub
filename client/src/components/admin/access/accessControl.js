@@ -143,7 +143,7 @@ export default function RoleAccessControl() {
       setOriginalAccessControl(JSON.parse(JSON.stringify(accessControl)));
       setHasChanges(false);
 
-      alert('Access control settings saved successfully! Users will need to log out and log back in for changes to take effect.');
+      alert('Access control settings saved successfully! Users can refresh the page or log in again to load the updated permissions.');
     } catch (err) {
       console.error('Failed to save access control:', err);
       setError('Failed to save changes. See console for details.');

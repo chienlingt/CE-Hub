@@ -226,26 +226,16 @@ export function AuthProvider({ children }) {
             employeeId: parsed.EmployeeID || parsed.id || '',
           });
 
-          const storedPerms = sessionStorage.getItem('employeePermissions');
-          if (storedPerms) {
-            const parsedPerms = JSON.parse(storedPerms);
-            setPermissions(parsedPerms.map(normalize));
-            setLoadingPermissions(false);
-          } else {
-            setLoadingPermissions(true);
-            // Extract role - could be an object with id/name, or just a string/ID
-            let roleToFetch = parsed.role;
-            if (typeof parsed.role === 'object' && parsed.role !== null) {
-              roleToFetch = parsed.role.name || parsed.role.id || parsed.roleId;
-            } else {
-              roleToFetch = parsed.role || parsed.roleId;
-            }
-            const perms = await fetchPermissionsForRole(roleToFetch);
-            if (!mounted) return;
-            setPermissions(perms);
-            sessionStorage.setItem('employeePermissions', JSON.stringify(perms));
-            setLoadingPermissions(false);
-          }
+          // Never restore access from sessionStorage: an admin may have revoked it.
+          // verify-session includes the current database role and permissions.
+          setLoadingPermissions(true);
+          const perms = Array.isArray(verified.employee?.role?.permissions)
+            ? verified.employee.role.permissions.map(normalize)
+            : await fetchPermissionsForRole(restoredRole);
+          if (!mounted) return;
+          setPermissions(perms);
+          sessionStorage.setItem('employeePermissions', JSON.stringify(perms));
+          setLoadingPermissions(false);
 
           console.log('✅ Session restored for', parsed.email);
         } else {
