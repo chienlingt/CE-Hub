@@ -3,6 +3,17 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 router.use(require('./order-product-scans'));
+// Odoo preparation can only be changed through the authenticated integration.
+router.use(async (req, res, next) => {
+  if (!['PUT', 'POST', 'DELETE'].includes(req.method)) return next();
+  if (req.method === 'DELETE' && !/^\/\d+\/?$/.test(req.path)) return next();
+  try {
+    const item = req.method !== 'POST' && await prisma.order_products.findUnique({ where: { id: Number(req.path.split('/')[1]) }, include: { orders: true } });
+    const order = item?.orders || (req.body?.order_id && await prisma.orders.findUnique({ where: { id: req.body.order_id } }));
+    if (item?.odoo_line_id != null || order?.odoo_picking_id != null || req.body?.odoo_line_id != null) return res.status(409).json({ error: 'Odoo-managed lines must be corrected in Odoo and synchronized.', code: 'ODOO_PREPARATION_READ_ONLY' });
+    next();
+  } catch (error) { res.status(500).json({ error: 'Unable to verify order-line ownership.' }); }
+});
 
 router.get('/', async (req, res) => {
   try {

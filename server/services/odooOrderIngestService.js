@@ -6,17 +6,18 @@
 
 const prisma = require('../prismaClient');
 const { extractBuildingName } = require('../utils/addressParser');
-const { createInAppNotification, getAdminEmployees } = require('./notificationService');
+const { normalizePreparation, mergePreparationUnits, preparationError } = require('./odooPreparation');
+const { unitsFor, summarizeUnits } = require('./orderProductUnits');
 
 const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Cancelled'];
 
-async function resolveBuilding(address, zip, fallbackName = '') {
+async function resolveBuilding(address, zip, fallbackName = '', db = prisma) {
   const buildingName = extractBuildingName(address || fallbackName || '') || 'Unknown';
-  let building = await prisma.buildings.findFirst({
+  let building = await db.buildings.findFirst({
     where: { building_name: { equals: buildingName, mode: 'insensitive' } },
   });
   if (!building) {
-    building = await prisma.buildings.create({
+    building = await db.buildings.create({
       data: {
         building_name:            buildingName,
         housing_type:             'Residential',
@@ -36,82 +37,25 @@ async function resolveBuilding(address, zip, fallbackName = '') {
  * Lines removed from Odoo are deleted UNLESS the item already has progress
  * (loaded/unloaded) — those are kept and logged, never silently destroyed.
  */
-async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
-  const existing = await prisma.order_products.findMany({ where: { order_id: orderId } });
-
-  const incoming = newLines
-    .filter(l => l.product_name && l.order_line_id)
-    .map(l => ({
-      odoo_line_id:     l.order_line_id,
-      odoo_product_name: l.product_name,
-      quantity:         Number(l.product_uom_qty) || 1,
-      assigned_serial:  l.serial_number || null,
-    }));
-
-  const incomingIds = new Set(incoming.map(l => l.odoo_line_id));
-
-  let created = 0, updated = 0, deleted = 0, protectedCount = 0;
-
-  // Lines that disappeared from the Odoo payload
-  for (const ex of existing) {
-    if (!ex.odoo_line_id || incomingIds.has(ex.odoo_line_id)) continue;
-
-    const hasProgress = ex.item_delivery_status === 'delivered' || ex.handling_status !== 'pending'
-      || ex.unit_scans?.some(unit => unit.handling_status !== 'pending');
-    if (hasProgress) {
-      protectedCount++;
-      const ref = odooOrderRef || orderId;
-      console.warn(`[Odoo push] Line ${ex.odoo_line_id} removed in Odoo but already in progress/delivered (order ${orderId}) — kept.`);
-
-      // Surface to admins — this is a data-integrity conflict, not just a log line.
-      try {
-        const admins = await getAdminEmployees();
-        const message = `Order ${ref}: Odoo removed a line item (${ex.odoo_product_name || 'unknown product'}, line ${ex.odoo_line_id}) that is already in progress or delivered in CE Hub. The line was kept, not deleted — please verify with Odoo.`;
-        await Promise.all(admins.map(admin => createInAppNotification(admin.id, message, 'warning', orderId)));
-      } catch (notifyErr) {
-        console.error('[Odoo push] Failed to notify admins of protected line:', notifyErr.message);
-      }
-
-      continue;
-    }
-
-    await prisma.order_products.delete({ where: { id: ex.id } });
-    deleted++;
+async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null, db = prisma, ready = false) {
+  const existing = await db.order_products.findMany({ where: { order_id: orderId } });
+  const incoming = normalizePreparation(newLines, ready);
+  await assertNoSerialConflicts(db, incoming, orderId);
+  const ids = new Set(incoming.map(line => line.odoo_line_id));
+  const removed = existing.filter(line => line.odoo_line_id && !ids.has(line.odoo_line_id));
+  if (removed.some(line => unitsFor(line).some(unit => unit.handling_status !== 'pending'))) {
+    throw preparationError('Cannot remove an Odoo line after scanning started.', 'PREPARATION_LOCKED', 409);
   }
-
-  // Lines present in the new payload
-  for (const inc of incoming) {
-    const match = existing.find(ex => ex.odoo_line_id === inc.odoo_line_id);
-
-    if (!match) {
-      await prisma.order_products.create({
-        data: {
-          order_id:          orderId,
-          odoo_line_id:      inc.odoo_line_id,
-          odoo_product_name: inc.odoo_product_name,
-          quantity:          inc.quantity,
-          assigned_serial:   inc.assigned_serial,
-          service_type:      'delivery',
-        },
-      });
-      created++;
-      continue;
-    }
-
-    if (match.handling_status === 'pending' && !match.unit_scans?.some(unit => unit.handling_status !== 'pending')) {
-      await prisma.order_products.update({
-        where: { id: match.id },
-        data:  {
-          odoo_product_name: inc.odoo_product_name,
-          quantity:          inc.quantity,
-          assigned_serial:   match.unit_scans ? match.assigned_serial : inc.assigned_serial,
-        },
-      });
-      updated++;
-    }
+  const updates = incoming.map(line => {
+    const match = existing.find(item => item.odoo_line_id === line.odoo_line_id);
+    return { match, data: { ...line, ...summarizeUnits(mergePreparationUnits(match, line)) } };
+  });
+  for (const line of removed) await db.order_products.delete({ where: { id: line.id } });
+  for (const { match, data } of updates) {
+    if (match) await db.order_products.update({ where: { id: match.id }, data });
+    else await db.order_products.create({ data: { ...data, order_id: orderId, service_type: 'delivery' } });
   }
-
-  return { created, updated, deleted, protected: protectedCount };
+  return { created: updates.filter(update => !update.match).length, updated: updates.filter(update => update.match).length, deleted: removed.length, protected: 0 };
 }
 
 /**
@@ -120,7 +64,7 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null) {
  * Returns a result object; never throws for expected business conditions
  * (missing ref, order already in motion) — only throws on unexpected DB errors.
  */
-async function pushOrder(payload) {
+async function ingestOrder(payload, db) {
   const {
     name: odoo_order_ref,
     sales_order_name: odoo_sales_ref,
@@ -138,7 +82,12 @@ async function pushOrder(payload) {
     return { success: false, error: 'Payload must include name (order reference)' };
   }
 
-  const existing = await prisma.orders.findFirst({ where: { odoo_order_ref } });
+  const existing = await db.orders.findFirst({ where: { odoo_order_ref } });
+  if (!Number.isInteger(payload.id) || payload.id <= 0) throw preparationError('A positive Odoo stock.picking id is required.');
+  if (payload.doo_ready !== undefined && typeof payload.doo_ready !== 'boolean') throw preparationError('doo_ready must be a boolean.');
+  if (existing?.odoo_picking_id != null && existing.odoo_picking_id !== payload.id) throw preparationError('DO reference does not match its Odoo picking id.', 'ODOO_REFERENCE_MISMATCH', 409);
+  const ready = payload.doo_ready ?? existing?.doo_ready ?? false;
+  const preparation = normalizePreparation(order_lines, ready);
 
   if (existing) {
     if (IN_MOTION_STATUSES.includes(existing.order_status)) {
@@ -151,7 +100,7 @@ async function pushOrder(payload) {
       };
     }
 
-    const changes = { updated_at: new Date() };
+    const changes = { updated_at: new Date(), odoo_picking_id: payload.id, doo_ready: ready };
     const addressChanged = delivery_address && delivery_address !== existing.delivery_address;
 
     if (odoo_sales_ref)       changes.odoo_sales_ref    = odoo_sales_ref;
@@ -169,32 +118,32 @@ async function pushOrder(payload) {
       changes.remarks_contact_phone    = null;
       changes.remarks_contact_name     = null;
       changes.remarks_driver_notes     = null;
-      const building = await resolveBuilding(delivery_address, delivery_zip);
+      const building = await resolveBuilding(delivery_address, delivery_zip, '', db);
       changes.building_id = building.id;
     }
 
-    await prisma.orders.update({ where: { id: existing.id }, data: changes });
+    await db.orders.update({ where: { id: existing.id }, data: changes });
 
     if (existing.customer_id && (partner_name || partner_phone || partner_email)) {
       const customerUpdate = {};
       if (partner_name)  customerUpdate.full_name = partner_name;
       if (partner_phone) customerUpdate.phone     = partner_phone;
       if (partner_email) customerUpdate.email     = partner_email;
-      await prisma.customers.update({ where: { id: existing.customer_id }, data: customerUpdate });
+      await db.customers.update({ where: { id: existing.customer_id }, data: customerUpdate });
     }
 
-    const lineResult = await mergeOrderLines(existing.id, order_lines, odoo_order_ref);
+    const lineResult = await mergeOrderLines(existing.id, order_lines, odoo_order_ref, db, ready);
 
     return { success: true, action: 'updated', order_id: existing.id, address_changed: !!addressChanged, lines: lineResult };
   }
 
   // ── New order — create ──────────────────────────────────────────────────
   let customer = partner_email
-    ? await prisma.customers.findFirst({ where: { email: partner_email } })
+    ? await db.customers.findFirst({ where: { email: partner_email } })
     : null;
 
   if (!customer) {
-    customer = await prisma.customers.create({
+    customer = await db.customers.create({
       data: {
         full_name:  partner_name        || 'Unknown',
         email:      partner_email       || null,
@@ -208,20 +157,15 @@ async function pushOrder(payload) {
     });
   }
 
-  const building = await resolveBuilding(delivery_address, delivery_zip, partner_name);
+  const building = await resolveBuilding(delivery_address, delivery_zip, partner_name, db);
 
-  const productLines = order_lines
-    .filter(l => l.product_name && l.order_line_id)
-    .map(l => ({
-      odoo_line_id:      l.order_line_id,
-      odoo_product_name: l.product_name,
-      quantity:          Number(l.product_uom_qty) || 1,
-      service_type:      'delivery',
-      dismantle_required: false,
-      assigned_serial:   l.serial_number || null,
-    }));
+  const productLines = preparation.map(line => ({ ...line,
+    ...summarizeUnits(mergePreparationUnits(null, line)),
+    service_type: 'delivery', dismantle_required: false,
+  }));
+  await assertNoSerialConflicts(db, preparation);
 
-  const order = await prisma.orders.create({
+  const order = await db.orders.create({
     data: {
       customer_id:               customer.id,
       building_id:               building.id,
@@ -234,6 +178,8 @@ async function pushOrder(payload) {
       delivery_remarks:          delivery_remarks    || null,
       original_delivery_address: delivery_address    || null,
       odoo_sales_ref:            odoo_sales_ref      || null,
+      odoo_picking_id:           payload.id,
+      doo_ready:                 ready,
       preferred_timeslot:        preferred_delivery_time ? new Date(preferred_delivery_time) : null,
       salesperson_name:          salesperson_name    || null,
       salesperson_phone:         salesperson_phone   || null,
@@ -247,4 +193,48 @@ async function pushOrder(payload) {
   return { success: true, action: 'created', order_id: order.id };
 }
 
-module.exports = { pushOrder, mergeOrderLines, resolveBuilding };
+async function withPreparationLock(work) {
+  try {
+    return await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+      return work(tx);
+    }, { timeout: 20000 });
+  } catch (error) {
+    if (error.status) return { success: false, action: error.status === 409 ? 'blocked' : 'invalid', error: error.message, code: error.code };
+    if (error.code === 'P2002') return { success: false, action: 'blocked', error: 'This Odoo reference is already registered.', code: 'ODOO_REFERENCE_CONFLICT' };
+    throw error;
+  }
+}
+
+async function assertNoSerialConflicts(db, lines, orderId = null) {
+  const wanted = new Set(lines.flatMap(line => line.assigned_serials).map(serial => serial.toLowerCase()));
+  if (!wanted.size) return;
+  const others = await db.order_products.findMany({ where: {
+    ...(orderId ? { order_id: { not: orderId } } : {}),
+    orders: { order_status: { notIn: ['Delivered', 'Completed', 'Cancelled', 'Failed'] } },
+  } });
+  if (others.some(line => unitsFor(line).some(unit => ['assigned_serial', 'loaded_serial', 'unloaded_serial'].some(field => unit[field] && wanted.has(unit[field].trim().toLowerCase()))))) {
+    throw preparationError('An assigned serial is already used by another active DOO.', 'SERIAL_DUPLICATE', 409);
+  }
+}
+
+const pushOrder = payload => withPreparationLock(tx => ingestOrder(payload, tx));
+
+// Separate from appointment/order edits: a full, authoritative preparation snapshot.
+// Scheduled DOOs can receive their warehouse preparation without being rescheduled.
+async function syncOrderPreparation(payload) {
+  return withPreparationLock(async tx => {
+    if (!payload?.name || !Number.isInteger(payload.id) || payload.id <= 0 || typeof payload.doo_ready !== 'boolean') throw preparationError('id, name and boolean doo_ready are required.');
+    const order = await tx.orders.findFirst({ where: { odoo_order_ref: payload.name } });
+    if (!order) throw preparationError('DOO must be imported before preparation can be synchronized.', 'ORDER_NOT_FOUND');
+    if (order.odoo_picking_id != null && order.odoo_picking_id !== payload.id) throw preparationError('DO reference does not match its Odoo picking id.', 'ODOO_REFERENCE_MISMATCH', 409);
+    if (['Delivering', 'In Progress', 'Delivered', 'Failed', 'Cancelled', 'Completed'].includes(order.order_status)) throw preparationError('Preparation cannot change after departure or a terminal outcome.', 'PREPARATION_LOCKED', 409);
+    const current = await tx.order_products.findMany({ where: { order_id: order.id } });
+    if (order.doo_ready !== payload.doo_ready && current.some(line => unitsFor(line).some(unit => unit.handling_status !== 'pending'))) throw preparationError('Reset scans before changing DOO Ready.', 'PREPARATION_LOCKED', 409);
+    const result = await mergeOrderLines(order.id, payload.order_lines, payload.name, tx, payload.doo_ready);
+    await tx.orders.update({ where: { id: order.id }, data: { odoo_picking_id: payload.id, doo_ready: payload.doo_ready, updated_at: new Date() } });
+    return { success: true, action: 'preparation_updated', order_id: order.id, doo_ready: payload.doo_ready, lines: result };
+  });
+}
+
+module.exports = { pushOrder, syncOrderPreparation, mergeOrderLines, resolveBuilding };

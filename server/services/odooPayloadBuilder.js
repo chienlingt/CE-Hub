@@ -6,6 +6,7 @@
 // every call site now enqueues the result of buildOdooEventPayload() instead.
 
 const prisma = require('../prismaClient');
+const { unitsFor } = require('./orderProductUnits');
 
 // Every timestamp sent to Odoo uses Malaysia time (UTC+8) — matches the
 // contract documented in Section 1 of the reference doc ("ISO 8601 in
@@ -111,6 +112,11 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
     quantity:               item.quantity,
     actual_delivered_qty:  resolveDeliveredQty(item),
     serial_number:          resolveSerial(item),
+    serial_numbers:         unitsFor(item).map(unit => unit.unloaded_serial || unit.loaded_serial || unit.assigned_serial).filter(Boolean),
+    assigned_serial_numbers: unitsFor(item).map(unit => unit.assigned_serial).filter(Boolean),
+    loaded_serial_numbers:   unitsFor(item).map(unit => unit.loaded_serial).filter(Boolean),
+    unloaded_serial_numbers: unitsFor(item).map(unit => unit.unloaded_serial).filter(Boolean),
+    prepared_quantity:      item.prepared_quantity,
     status:                 resolveLineStatus(item),
   }));
 
@@ -122,6 +128,7 @@ async function buildOdooEventPayload(orderId, ceHubStatus) {
   return {
     do_ref:                 order.odoo_order_ref || null,
     so_ref:                 order.odoo_sales_ref || null,
+    doo_ready:              order.doo_ready ?? null,
     status:                 ceHubStatus,
     order_lines:            orderLines,
     ...(ceHubStatus === 'Delivered' && { is_partial: isPartial }),

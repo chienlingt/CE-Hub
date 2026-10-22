@@ -3,6 +3,7 @@ const prisma = require('../prismaClient');
 const { unitsFor, expandUnits, summarizeUnits } = require('../services/orderProductUnits');
 const { enqueue } = require('../services/integrationOutboxService');
 const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
+const { isOdooManaged, preparationProblem } = require('../services/odooPreparation');
 
 // Serial edits and scans share one transaction/lock, including single-unit lines.
 // This prevents two simultaneous scans from claiming the same serial.
@@ -17,6 +18,13 @@ router.use(async (req, res, next) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
       const item = await tx.order_products.findUnique({ where: { id: Number(lineId) }, include: { products: true } });
       if (!item) fail(404, 'Item not found');
+      const order = await tx.orders.findUnique({ where: { id: item.order_id }, include: { order_products: true } });
+      const managed = isOdooManaged(order, item);
+      if (action === 'assigned-serial' && managed) fail(409, 'Odoo controls this serial assignment. Correct it in Odoo and synchronize the DOO.', 'ODOO_SERIAL_READ_ONLY');
+      if (['handling-status', 'picking-status'].includes(action) && req.body?.stage === 'loading' && managed) {
+        const problem = preparationProblem(order);
+        if (problem) fail(409, problem, 'ODOO_NOT_READY');
+      }
       const units = unitsFor(item);
       if (units.length > 1 && !unitNumber) fail(400, 'Select an individual unit to edit or scan.');
       const index = Number(unitNumber || 1) - 1;
@@ -27,7 +35,7 @@ router.use(async (req, res, next) => {
       const adminAction = ['assigned-serial', 'cancel-scan', 'scan'].includes(action);
       if (adminAction) {
         const employee = employee_id && await tx.employees.findUnique({ where: { id: employee_id }, include: { role: true } });
-        if (!employee || employee.is_active === false || employee.role?.name?.trim().toLowerCase() !== 'admin') fail(403, 'Admin access required.');
+        if (!employee || employee.active_flag === false || employee.role?.name?.trim().toLowerCase() !== 'admin') fail(403, 'Admin access required.');
       }
       if (action === 'assigned-serial' || action === 'handling-status' || action === 'picking-status') {
         if (!serial) fail(400, 'Serial number is required.');
@@ -54,6 +62,7 @@ router.use(async (req, res, next) => {
         if (stage === 'loading' && unit.handling_status !== 'pending') fail(409, `Serial "${serial}" is duplicated.`, 'SERIAL_DUPLICATE');
         if (stage === 'unloading' && unit.handling_status !== 'loaded') fail(400, 'Item must be loaded before it can be unloaded.', 'NOT_LOADED');
         const expected = stage === 'loading' ? unit.assigned_serial : unit.loaded_serial;
+        if (managed && stage === 'loading' && item.serial_tracking !== 'none' && !expected) fail(409, 'This unit has no Odoo-assigned serial.', 'ODOO_SERIAL_MISSING');
         if (expected && expected.trim().toLowerCase() !== serial.toLowerCase()) fail(400, `Serial mismatch. Expected: ${expected}`, 'SERIAL_MISMATCH');
         const prefix = stage === 'loading' ? 'loaded' : 'unloaded';
         Object.assign(unit, { handling_status: prefix, [`${prefix}_serial`]: serial, [`${prefix}_at`]: new Date().toISOString(), [`${prefix}_by`]: employee_id || null });

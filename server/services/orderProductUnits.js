@@ -7,6 +7,7 @@ function unitsFor(item) {
     if (saved) return { ...saved };
     return Object.fromEntries(scanFields.map(field => [field,
       field === 'handling_status' ? (Array.isArray(item.unit_scans) ? 'pending' : item.handling_status || 'pending')
+        : field === 'assigned_serial' && item.assigned_serials?.length ? item.assigned_serials[index] || null
         : field.endsWith('_serial') && index > 0 ? null
         : item[field] instanceof Date ? item[field].toISOString() : item[field] ?? null,
     ]));

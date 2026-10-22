@@ -403,6 +403,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
   const renderAdminSerialControl = (row, mobile = false) => {
     if (tab !== 'loading' || !isAdmin) return null;
     const currentSerial = row.loaded_serial || row.assigned_serial || '';
+    if (row.is_odoo_managed || row.odoo_line_id != null) return <div className="flex items-center justify-end gap-2" title="Serial assignments are managed in Odoo"><span className="break-all font-mono text-xs text-gray-600">{currentSerial || 'Awaiting Odoo serial'}</span><span className="text-[10px] text-gray-400">Odoo</span></div>;
     if (editingSerial !== row.id) {
       return (
         <div className={`${mobile ? 'md:hidden mt-2' : ''} flex items-center gap-1.5`}>
@@ -625,6 +626,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
             </div>
           </div>
         </header>
+        {order?.odoo_picking_id != null && order.doo_ready !== true && <p className="bg-amber-50 px-4 py-2 text-xs text-amber-800">Awaiting Odoo preparation confirmation</p>}
         <div className="divide-y divide-gray-100">{[...products.entries()].map(([key, { name, units }]) => <div key={key} className="px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] lg:items-start lg:gap-x-5 lg:py-1.5">
           <p className={`text-sm font-medium lg:py-2 ${muted ? 'text-gray-500' : 'text-gray-800'}`}>{name} <span className="font-normal text-gray-400">×{units.reduce((sum, unit) => sum + Number(unit.quantity || 1), 0)}</span></p>
           <div className="mt-1 min-w-0 divide-y divide-gray-100 lg:mt-0 lg:border-l lg:border-gray-100 lg:pl-5">{units.map(item => <div key={item.id} className="py-2">

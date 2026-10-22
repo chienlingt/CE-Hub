@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
-const { pushOrder } = require('../services/odooOrderIngestService');
+const { pushOrder, syncOrderPreparation } = require('../services/odooOrderIngestService');
 
 const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET;
 
@@ -12,6 +12,16 @@ function verifySecret(req, res, next) {
   }
   next();
 }
+
+router.post('/odoo/order-readiness', verifySecret, async (req, res) => {
+  try {
+    const result = await syncOrderPreparation(req.body);
+    return res.status(result.success ? 200 : result.action === 'blocked' ? 409 : 400).json(result);
+  } catch (error) {
+    console.error('[Odoo readiness]', error.message);
+    return res.status(500).json({ error: 'Unable to synchronize DOO preparation. Please retry.' });
+  }
+});
 
 router.post('/odoo/order', verifySecret, async (req, res) => {
   try {

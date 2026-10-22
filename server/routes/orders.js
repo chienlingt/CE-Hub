@@ -777,6 +777,10 @@ router.put('/:id', async (req, res) => {
     }
 
     const previousTimeSlotId = existingOrder.time_slot_id;
+    const managedLines = await prisma.order_products.count({ where: { order_id: existingOrder.id, odoo_line_id: { not: null } } });
+    if (Object.hasOwn(data, 'doo_ready') || Object.hasOwn(data, 'odoo_picking_id') || ((existingOrder.odoo_picking_id != null || managedLines > 0) && products)) {
+      return res.status(409).json({ error: 'Odoo preparation and order lines must be changed through the Odoo integration.', code: 'ODOO_PREPARATION_READ_ONLY' });
+    }
 
     // Check if order status allows editing
     if (existingOrder.order_status === 'Delivered') {
@@ -1292,7 +1296,7 @@ router.get('/:id/loading-status', async (req, res) => {
   try {
     const items = await prisma.order_products.findMany({
       where:   { order_id: req.params.id },
-      include: { products: { select: { id: true, product_name: true } } },
+      include: { products: { select: { id: true, product_name: true } }, orders: { select: { odoo_picking_id: true, doo_ready: true } } },
       orderBy: { id: 'asc' },
     });
 
@@ -1320,6 +1324,7 @@ router.get('/:id/loading-status', async (req, res) => {
 
     const enriched = items.flatMap(expandUnits).map(item => ({
       ...item,
+      is_odoo_managed: item.orders?.odoo_picking_id != null || item.odoo_line_id != null,
       loaded_by_name:   item.loaded_by   ? (empMap[item.loaded_by]   || 'Unknown') : null,
       unloaded_by_name: item.unloaded_by ? (empMap[item.unloaded_by] || 'Unknown') : null,
     }));
@@ -1330,7 +1335,7 @@ router.get('/:id/loading-status', async (req, res) => {
     // Fetch order-level status + delivery info
     const order = await prisma.orders.findUnique({
       where:  { id: req.params.id },
-      select: { order_status: true, delivered_by: true, delivery_end_date_time: true },
+      select: { order_status: true, delivered_by: true, delivery_end_date_time: true, odoo_picking_id: true, doo_ready: true },
     });
 
     let deliveredByName = null;
@@ -1346,7 +1351,9 @@ router.get('/:id/loading-status', async (req, res) => {
       items:             enriched,
       all_loaded,
       all_unloaded,
-      ready_to_dispatch: all_loaded,
+      ready_to_dispatch: all_loaded && !require('../services/odooPreparation').preparationProblem(order, items),
+      doo_ready: order?.doo_ready ?? null,
+      preparation_message: require('../services/odooPreparation').preparationProblem(order, items),
       ready_to_deliver:  all_unloaded,
       loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.handling_status)).length,
       unloaded_count: enriched.filter(i => i.handling_status === 'unloaded').length,

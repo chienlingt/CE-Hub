@@ -139,9 +139,11 @@ async function getOrdersForDeliveryDate(dateStr) {
  * @param {number} odooPickingId - stock.picking integer id
  */
 async function getOrderDetail(odooPickingId) {
+  const readyField = process.env.ODOO_READY_FIELD;
+  const preparedField = process.env.ODOO_PREPARED_QUANTITY_FIELD;
   // 1. Read stock.picking
   const [picking] = await callModel('stock.picking', 'read', [[odooPickingId]], {
-    fields: ['id', 'name', 'sale_id', 'partner_id', 'scheduled_date', 'move_ids'],
+    fields: ['id', 'name', 'sale_id', 'partner_id', 'scheduled_date', 'move_ids', ...(readyField ? [readyField] : [])],
   });
   if (!picking) return null;
 
@@ -174,7 +176,7 @@ async function getOrderDetail(odooPickingId) {
   // 5. Read stock.move for order lines — sale_line_id gives odoo_line_id directly
   const moves = picking.move_ids?.length
     ? await callModel('stock.move', 'read', [picking.move_ids], {
-        fields: ['id', 'product_id', 'product_uom_qty', 'sale_line_id'],
+        fields: ['id', 'product_id', 'product_uom_qty', 'sale_line_id', ...(preparedField ? [preparedField] : [])],
       })
     : [];
 
@@ -183,16 +185,38 @@ async function getOrderDetail(odooPickingId) {
     ? await callModel('stock.move.line', 'search_read',
         [[['picking_id', '=', odooPickingId]]],
         { fields: ['move_id', 'lot_id'] }
-      ).catch(() => [])
+      )
     : [];
 
   const serialByMove = {};
   for (const ml of moveLines) {
     const mid = ml.move_id?.[0];
-    if (mid && ml.lot_id && !serialByMove[mid]) {
-      serialByMove[mid] = ml.lot_id[1] || null;
+    if (mid && ml.lot_id) {
+      if (!serialByMove[mid]) serialByMove[mid] = [];
+      serialByMove[mid].push(ml.lot_id[1]);
     }
   }
+
+  const productIds = [...new Set(moves.map(move => move.product_id?.[0]).filter(Boolean))];
+  const productTracking = productIds.length ? await callModel('product.product', 'read', [productIds], { fields: ['id', 'tracking'] }) : [];
+  const trackingByProduct = new Map(productTracking.map(product => [product.id, product.tracking]));
+  const preparedLines = new Map();
+  for (const move of moves) {
+    const id = move.sale_line_id?.[0];
+    if (!id) throw new Error(`DOO ${picking.name}: stock move ${move.id} has no agreed order-line reference.`);
+    const tracking = trackingByProduct.get(move.product_id?.[0]);
+    if (!['serial', 'none'].includes(tracking)) throw new Error(`DOO ${picking.name}: unsupported or unavailable product tracking for move ${move.id}.`);
+    if (!preparedLines.has(id)) preparedLines.set(id, { order_line_id: id, product_name: move.product_id?.[1], product_uom_qty: 0, prepared_quantity: preparedField ? 0 : null, tracking, serial_numbers: [] });
+    const line = preparedLines.get(id);
+    if (line.tracking !== tracking) throw new Error('Conflicting tracking modes for the same Odoo line.');
+    line.product_uom_qty += move.product_uom_qty;
+    if (preparedField) {
+      if (!Number.isInteger(move[preparedField])) throw new Error(`Invalid prepared quantity on Odoo move ${move.id}.`);
+      line.prepared_quantity += move[preparedField];
+    }
+    line.serial_numbers.push(...(serialByMove[move.id] || []));
+  }
+  if (readyField && typeof picking[readyField] !== 'boolean') throw new Error('Configured Odoo DOO Ready field must return a boolean.');
 
   // Strip HTML tags from sale.order note field
   const stripHtml = html => (html ? html.replace(/<[^>]*>/g, '').trim() : null);
@@ -202,6 +226,7 @@ async function getOrderDetail(odooPickingId) {
 
   return {
     id:                      picking.id,
+    doo_ready:               readyField ? picking[readyField] : false,
     name:                    picking.name,
     sales_order_name:        saleOrder?.name                                          || null,
     preferred_delivery_time: picking.scheduled_date                                   || null,
@@ -215,12 +240,7 @@ async function getOrderDetail(odooPickingId) {
     delivery_remarks:        stripHtml(saleOrder?.note),
     salesperson_name:        saleOrder?.user_id?.[1]                                  || null,
     salesperson_phone:       salespersonPartner?.phone || salespersonPartner?.mobile  || null,
-    order_lines: moves.map(m => ({
-      order_line_id:   m.sale_line_id?.[0] || null,
-      product_name:    m.product_id?.[1]   || null,
-      product_uom_qty: m.product_uom_qty,
-      serial_number:   serialByMove[m.id]  || null,
-    })),
+    order_lines: [...preparedLines.values()],
   };
 }
 

@@ -189,6 +189,9 @@ model order_products {
   handling_status              String?   @default("pending") @db.VarChar(20)
   loaded_serial                String?
   assigned_serial              String?
+  assigned_serials             String[]  @default([])
+  prepared_quantity            Int?
+  serial_tracking              String?
   // Per-unit scan records; legacy scalar fields remain the line-level summary.
   unit_scans                   Json?
   unloaded_at                  DateTime?
@@ -246,6 +249,8 @@ model orders {
   issue_status               String?
   is_complaint_submitted     Boolean?                  @default(false)
   odoo_order_ref             String?                   @unique @db.VarChar(100)
+  odoo_picking_id            Int?                      @unique
+  doo_ready                  Boolean?
   assignment_status          String?                   @default("unassigned") @db.VarChar(30)
   delivery_remarks           String?
   original_delivery_address  String?
