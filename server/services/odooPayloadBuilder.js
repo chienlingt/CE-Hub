@@ -73,11 +73,11 @@ function resolveLineStatus(item) {
  * hand-rolled { orderId, odooRef, status } literal.
  *
  * @param {string} orderId
- * @param {string} ceHubStatus - Loaded|Arrived|Delivering|Delivered|Failed|Scheduled
+ * @param {string} ceHubStatus - Picked|Loaded|Arrived|Delivering|Delivered|Failed|Scheduled
  * @returns {Promise<object|null>} null if the order can't be found
  */
-async function buildOdooEventPayload(orderId, ceHubStatus) {
-  const order = await prisma.orders.findUnique({
+async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
+  const order = await db.orders.findUnique({
     where: { id: orderId },
     include: {
       order_products: true,

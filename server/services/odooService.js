@@ -68,16 +68,31 @@ async function callModel(model, method, args = [], kwargs = {}) {
 // Shared CE Hub → Odoo x_delivery_status mapping.
 // Completed has no Odoo counterpart — it returns null (no-op).
 const CE_HUB_STATUS_MAP = {
+  Picked:     'picked',
   Loaded:     'loaded',
   Unloaded:   'unloaded',
   Delivering: 'in_transit',
+  Arrived:    'arrived',
   Delivered:  'delivered',
   Failed:     'failed',
 };
 
+// A delayed/retried Picked or Arrived event must not roll back a later state.
+// Explicit post-failure corrections/re-attempts require a separate agreed flow.
+function canAdvanceDeliveryStatus(current, next) {
+  if (current === next) return false;
+  if (['delivered', 'failed'].includes(current)) return false;
+  const rank = { picked: 1, loaded: 2, in_transit: 3, arrived: 4, unloaded: 4, delivered: 5, failed: 5 };
+  return rank[current] == null || rank[next] >= rank[current];
+}
+
 async function pushDeliveryStatus(odooPickingId, localStatus) {
   const odooStatus = CE_HUB_STATUS_MAP[localStatus];
   if (!odooStatus) return null;
+
+  const [picking] = await callModel('stock.picking', 'read', [[odooPickingId]], { fields: ['id', 'x_delivery_status'] });
+  if (!picking) throw new Error('Odoo Delivery Order was not found.');
+  if (!canAdvanceDeliveryStatus(picking.x_delivery_status, odooStatus)) return picking.x_delivery_status === odooStatus ? null : { status_ignored: true };
 
   return callModel('stock.picking', 'write', [[odooPickingId], { x_delivery_status: odooStatus }]);
 }
@@ -88,7 +103,7 @@ async function pushDeliveryStatus(odooPickingId, localStatus) {
  * Returns null (non-fatal) if Odoo is unreachable or the picking is not found.
  *
  * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
- * @param {string} localStatus   - CE Hub status (Loaded|Arrived|Delivering|Delivered|Failed); Completed is a no-op
+ * @param {string} localStatus   - CE Hub status (Picked|Loaded|Arrived|Delivering|Delivered|Failed); Completed is a no-op
  */
 async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
@@ -98,10 +113,11 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
 
   const pickings = await callModel('stock.picking', 'search_read',
     [[['name', '=', odooOrderRef]]],
-    { fields: ['id'], limit: 1 }
+    { fields: ['id', 'x_delivery_status'], limit: 1 }
   );
 
   if (!pickings?.length) return null;
+  if (!canAdvanceDeliveryStatus(pickings[0].x_delivery_status, odooStatus)) return pickings[0].x_delivery_status === odooStatus ? null : { status_ignored: true };
 
   return callModel('stock.picking', 'write', [[pickings[0].id], { x_delivery_status: odooStatus }]);
 }

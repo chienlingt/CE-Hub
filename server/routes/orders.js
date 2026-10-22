@@ -1353,6 +1353,7 @@ router.get('/:id/loading-status', async (req, res) => {
       all_unloaded,
       ready_to_dispatch: all_loaded && !require('../services/odooPreparation').preparationProblem(order, items),
       doo_ready: order?.doo_ready ?? null,
+      serials_assigned: require('../services/odooPreparation').hasCompleteSerialAssignments(items),
       preparation_message: require('../services/odooPreparation').preparationProblem(order, items),
       ready_to_deliver:  all_unloaded,
       loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.handling_status)).length,

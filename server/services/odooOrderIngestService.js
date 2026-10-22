@@ -8,6 +8,7 @@ const prisma = require('../prismaClient');
 const { extractBuildingName } = require('../utils/addressParser');
 const { normalizePreparation, mergePreparationUnits, preparationError } = require('./odooPreparation');
 const { unitsFor, summarizeUnits } = require('./orderProductUnits');
+const { recordPickedMilestone } = require('./odooProgressService');
 
 const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Cancelled'];
 
@@ -197,7 +198,9 @@ async function withPreparationLock(work) {
   try {
     return await prisma.$transaction(async tx => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
-      return work(tx);
+      const result = await work(tx);
+      if (result.success && result.order_id) await recordPickedMilestone(tx, result.order_id);
+      return result;
     }, { timeout: 20000 });
   } catch (error) {
     if (error.status) return { success: false, action: error.status === 409 ? 'blocked' : 'invalid', error: error.message, code: error.code };

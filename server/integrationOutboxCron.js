@@ -80,7 +80,11 @@ async function handleOdoo(row) {
     return;
   }
 
-  await writeOdooDeliveryStatus(odooRef, status);
+  const statusResult = await writeOdooDeliveryStatus(odooRef, status);
+  if (statusResult?.status_ignored) {
+    console.log(`[OutboxWorker] Ignored older status ${status} for ${odooRef}`);
+    return;
+  }
   await writeOdooExtendedFields(odooRef, payload);
   if (['Loaded', 'Arrived'].includes(status)) {
     await writeOdooOrderLines(odooRef, payload.order_lines);

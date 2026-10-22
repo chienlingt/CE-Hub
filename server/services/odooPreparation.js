@@ -62,4 +62,22 @@ function preparationProblem(order, items = order?.order_products || []) {
   return null;
 }
 
-module.exports = { normalizePreparation, mergePreparationUnits, preparationProblem, preparationError, isOdooManaged };
+// Picked is serial assignment, not a driver action or a DOO Ready assertion.
+// Non-serial-only DOOs do not infer this serial-assignment milestone.
+function hasCompleteSerialAssignments(items = []) {
+  const serialItems = items.filter(item => item.serial_tracking !== 'none');
+  if (!serialItems.length) return false;
+  const seen = new Set();
+  return serialItems.every(item => {
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) return false;
+    const units = unitsFor(item);
+    return units.length === item.quantity && units.every(unit => {
+      const serial = unit.assigned_serial?.trim().toLowerCase();
+      if (!serial || seen.has(serial)) return false;
+      seen.add(serial);
+      return true;
+    });
+  });
+}
+
+module.exports = { normalizePreparation, mergePreparationUnits, preparationProblem, preparationError, isOdooManaged, hasCompleteSerialAssignments };
