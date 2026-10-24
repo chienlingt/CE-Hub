@@ -181,6 +181,7 @@ export default function SyncMonitor() {
       const data = await res.json();
       setSyncResult(data);
       fetchOrders();
+      fetchOutbox();
     } catch (err) {
       setSyncResult({ error: err.message });
     } finally {
@@ -292,17 +293,19 @@ export default function SyncMonitor() {
 
       {/* Sync result banner */}
       {syncResult && (
-        <div className={`mb-4 p-4 rounded-xl border text-sm flex items-start gap-3 ${
-          syncResult.error
-            ? 'bg-red-50 border-red-200 text-red-700'
-            : 'bg-green-50 border-green-200 text-green-700'
-        }`}>
-          {syncResult.error
-            ? <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-            : <CheckCircle size={16} className="shrink-0 mt-0.5" />}
-          {syncResult.error
-            ? `Sync failed: ${syncResult.error}`
-            : `Sync complete — ${syncResult.synced} new orders imported, ${syncResult.skipped} already existed.`}
+        <div role="status" className={`mb-4 flex items-start gap-3 rounded-xl border p-4 text-sm ${syncResult.error
+          ? 'border-red-200 bg-red-50 text-red-700'
+          : syncResult.failed > 0 || syncResult.audit_error ? 'border-amber-200 bg-amber-50 text-amber-800'
+          : 'border-green-200 bg-green-50 text-green-700'}`}>
+          {syncResult.error || syncResult.failed > 0 || syncResult.audit_error
+            ? <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            : <CheckCircle size={16} className="mt-0.5 shrink-0" />}
+          <div>
+            <p>{syncResult.error || `Fallback: ${syncResult.synced} imported · ${syncResult.skipped} skipped · ${syncResult.failed || 0} failed.`}</p>
+            {syncResult.error && syncResult.synced > 0 && <p className="mt-1">{syncResult.synced} successful imports were preserved.</p>}
+            {syncResult.failed > 0 && <p className="mt-1">Other orders continued. Retry fallback after correcting the failed DOOs.</p>}
+            {syncResult.audit_error && <p className="mt-1">{syncResult.audit_error}</p>}
+          </div>
         </div>
       )}
 

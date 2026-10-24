@@ -16,7 +16,7 @@
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
-const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines } = require('./services/odooService');
+const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification } = require('./services/odooService');
 const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
 const {
   fetchPendingBatch,
@@ -95,22 +95,12 @@ async function handleOdoo(row) {
 // ── A5.3: ORDER_FAILED handler — write Failed status to Odoo ──────────────
 
 async function handleOrderFailed(row) {
-  if (!process.env.ODOO_URL) {
-    console.log('[OutboxWorker] ODOO_URL not set — skipping ORDER_FAILED:', row.id);
-    return;
-  }
-
   const payload = row.payload || {};
-  const odooRef = payload.do_ref || payload.odooRef;
-  if (!odooRef) {
-    // No Odoo ref — mark processed silently (nothing to sync)
-    console.log(`[OutboxWorker] ORDER_FAILED skipped (no odooRef) for order ${payload.orderId || payload.ce_hub_order_ref}`);
-    return;
-  }
-
-  await writeOdooDeliveryStatus(odooRef, 'Failed');
-  await writeOdooExtendedFields(odooRef, payload);
-  console.log(`[OutboxWorker] ORDER_FAILED: wrote Failed to Odoo for ${odooRef}`);
+  await triggerOdooFailureNotification(payload);
+  if (payload.failure_event_id) await prisma.delivery_failure_events.updateMany({
+    where: { id: payload.failure_event_id }, data: { odoo_sync_status: 'synced' },
+  });
+  console.log(`[OutboxWorker] ORDER_FAILED: Odoo accepted the failure/WhatsApp trigger for ${payload.do_ref || payload.odooRef}`);
 }
 
 // ── ORDER_SCHEDULED handler — write the assigned window back to Odoo ──────
@@ -260,19 +250,11 @@ async function handleD1Reminder(row) {
 }
 
 // ── FALLBACK_POLL_COMPLETE handler ────────────────────────────────────────────
-// Signals Odoo/GCA that the 5PM fallback sync finished and all next-day DOs are
-// now in CE Hub. GCA uses this event to trigger the D-1 WhatsApp reminders.
-// TODO: replace the log with a real Odoo API call once GCA confirms the endpoint.
-
+// Internal run audit only. Fallback does not trigger customer notifications.
 async function handleFallbackPollComplete(row) {
-  const { date, synced_dos = [], skipped_dos = [], synced_count, skipped_count } = row.payload || {};
-  console.log(
-    `[OutboxWorker] FALLBACK_POLL_COMPLETE: date=${date}, synced=${synced_count ?? synced_dos.length} [${synced_dos.join(', ')}], ` +
-    `skipped=${skipped_count ?? skipped_dos.length} [${skipped_dos.join(', ')}]. ` +
-    'D-1 WhatsApp trigger pending GCA API confirmation.'
-  );
-  // TODO: call Odoo endpoint here when GCA provides it, e.g.:
-  // await callModel('some.model', 'trigger_d1_whatsapp', [[]], { date, synced_dos });
+  const { date, run_id, status, synced_dos = [], skipped_dos = [], failed_dos = [] } = row.payload || {};
+  console.log('[OutboxWorker] FALLBACK_POLL_COMPLETE:', run_id || row.id, date, status || 'legacy',
+    'synced:', synced_dos.length, 'skipped:', skipped_dos.length, 'failed:', failed_dos.length);
 }
 
 // ── Internal event handler (logging only) ─────────────────────────────────────

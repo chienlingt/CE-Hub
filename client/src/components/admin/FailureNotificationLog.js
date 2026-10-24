@@ -53,8 +53,6 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
   const navigate = useNavigate();
   const [items,          setItems]          = useState(order.order_products || []);
   const [resolving,      setResolving]      = useState(false);
-  const [sendingWA,      setSendingWA]      = useState(false);
-  const [waResult,       setWaResult]       = useState(null);
   const [updatingItem,   setUpdatingItem]   = useState(null);
 
   const isResolved = order.issue_status === 'resolved';
@@ -99,24 +97,6 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
       alert('Failed to resolve case');
     } finally {
       setResolving(false);
-    }
-  };
-
-  // Send WhatsApp manually
-  const handleSendWhatsApp = async () => {
-    setSendingWA(true);
-    setWaResult(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/notifications/whatsapp/${order.id}`, {
-        method: 'POST',
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setWaResult({ success: true, msg: `WhatsApp sent to ${customer?.phone}` });
-    } catch (err) {
-      setWaResult({ success: false, msg: err.message });
-    } finally {
-      setSendingWA(false);
     }
   };
 
@@ -259,29 +239,9 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
             )}
           </div>
 
-          {/* WhatsApp result */}
-          {waResult && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
-              waResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-            }`}>
-              {waResult.success ? <CheckCircle size={14} /> : <AlertTriangle size={14} />}
-              {waResult.msg}
-            </div>
-          )}
-
           {/* Action buttons */}
           {!isResolved && (
             <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-100">
-
-              {/* WhatsApp */}
-              <button
-                onClick={handleSendWhatsApp}
-                disabled={sendingWA}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-              >
-                <MessageCircle size={15} />
-                {sendingWA ? 'Sending...' : 'Send WhatsApp to Customer'}
-              </button>
 
               {/* Reschedule */}
               {failedItems.length > 0 && (

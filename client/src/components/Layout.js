@@ -367,7 +367,11 @@ const Layout = () => {
         <AlertCircle size={20} />
         {!useBottomNav && <span className="hidden md:block font-medium">Report Issue</span>}
       </button>
-      <NotificationBell userId={employeeData?.id} />
+      <NotificationBell
+        key={employeeData?.id || 'guest'}
+        userId={employeeData?.id}
+        enableToasts={/admin|sales/i.test(typeof employeeData?.role === 'object' ? employeeData?.role?.name || '' : employeeData?.role || '')}
+      />
       <button
         type="button"
         onClick={openProfileModal}

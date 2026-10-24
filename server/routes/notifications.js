@@ -1,7 +1,6 @@
 const express             = require('express');
 const router              = express.Router();
 const prisma              = require('../prismaClient');
-const { sendWhatsAppDirect, normalizePhone } = require('../services/whatsappService');
 
 // ── Per-user notifications ────────────────────────────────────────────────────
 
@@ -87,48 +86,9 @@ router.patch('/read-all', async (req, res) => {
   }
 });
 
-// POST /api/notifications/whatsapp/:orderId — manually send WhatsApp to customer
-router.post('/whatsapp/:orderId', async (req, res) => {
-  try {
-    // 1. Load order + customer
-    const order = await prisma.orders.findUnique({
-      where:   { id: req.params.orderId },
-      include: { customers: true },
-    });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    const phone    = order.customers?.phone;
-    const name     = order.customers?.full_name || 'Customer';
-    const orderRef = order.odoo_order_ref || 'Not Synced';
-    const reason   = order.issue_reason   || 'Delivery issue';
-
-    if (!phone) {
-      return res.status(400).json({ error: 'Customer has no phone number on record' });
-    }
-
-    // 2. Load message template
-    const setting  = await prisma.system_settings.findUnique({
-      where: { setting_key: 'whatsapp_failure_message_template' },
-    });
-    const template = setting?.setting_value
-      || 'Hi {customerName}, your delivery for order {orderRef} was unsuccessful. Reason: {reason}. Our team will contact you to reschedule.';
-
-    const body = template
-      .replace('{customerName}', name)
-      .replace('{orderRef}',     orderRef)
-      .replace('{reason}',       reason);
-
-    // 3. Send directly — bypasses the enabled toggle (admin manual send)
-    const normalized = normalizePhone(phone);
-    const result     = await sendWhatsAppDirect(phone, body);
-
-    console.log(`[WhatsApp] Manual send to ${normalized}:`, result);
-    res.json({ success: true, result, to: normalized });
-
-  } catch (err) {
-    console.error('POST /api/notifications/whatsapp error:', err.message);
-    res.status(500).json({ error: 'Failed to send WhatsApp', details: err.message });
-  }
+// Retired direct failure sender: keep an explicit response for older clients.
+router.post('/whatsapp/:orderId', (req, res) => {
+  res.status(410).json({ error: 'Direct failure WhatsApp sending is retired. Customer messages are handled by Odoo after failure synchronization.' });
 });
 
 // DELETE /api/notifications/:id — dismiss a single notification

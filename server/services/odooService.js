@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { loadFallbackPolicy, fallbackDomain } = require('./odooFallbackPolicy');
 
 const ODOO_URL      = process.env.ODOO_URL;
 const ODOO_DB       = process.env.ODOO_DB;
@@ -14,7 +15,7 @@ async function authenticate() {
     method:  'call',
     id:      1,
     params:  { db: ODOO_DB, login: ODOO_USER, password: ODOO_PASSWORD },
-  });
+  }, { timeout: 15000 });
 
   const uid = res.data?.result?.uid;
   if (!uid) throw new Error(`Odoo auth failed: ${JSON.stringify(res.data?.error)}`);
@@ -35,7 +36,7 @@ async function _rpc(sessionId, model, method, args, kwargs) {
   return axios.post(
     `${ODOO_URL}/web/dataset/call_kw`,
     { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
-    { headers: sessionId ? { Cookie: `session_id=${sessionId}` } : {} }
+    { headers: sessionId ? { Cookie: `session_id=${sessionId}` } : {}, timeout: 15000 }
   );
 }
 
@@ -122,29 +123,78 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   return callModel('stock.picking', 'write', [[pickings[0].id], { x_delivery_status: odooStatus }]);
 }
 
+// Driver confirmation is the user trigger. Odoo owns customer WhatsApp via
+// its automation on x_delivery_status -> failed; CE Hub does not send it.
+// One atomic write includes any GCA-confirmed failure context fields BEFORE
+// Odoo evaluates its automation. No guessed custom RPC method is called.
+async function triggerOdooFailureNotification(payload) {
+  if (!process.env.ODOO_URL) throw new Error('Odoo is not configured; failure notification handoff remains pending.');
+  const reference = payload?.do_ref || payload?.odooRef;
+  if (!reference) throw new Error('Missing DO reference for Odoo failure notification.');
+  const pickings = await callModel('stock.picking', 'search_read', [[['name', '=', reference]]], { fields: ['id', 'x_delivery_status'], limit: 1 });
+  if (!pickings?.length) throw new Error('Odoo Delivery Order not found; failure notification handoff remains pending.');
+  const picking = pickings[0];
+  if (picking.x_delivery_status === 'delivered') throw new Error('Cannot trigger a failure notification for an Odoo delivery already marked delivered.');
+  // A timeout may happen after Odoo committed the first write. Do not rewrite
+  // failed on retry and retrigger an on-update WhatsApp automation.
+  if (picking.x_delivery_status === 'failed') return { already_failed: true, notification_owner: 'odoo' };
+  const fields = { x_delivery_status: 'failed' };
+  for (const [setting, value] of [
+    ['ODOO_FAILURE_REASON_FIELD', payload.failure_reason],
+    ['ODOO_FAILURE_NOTES_FIELD', payload.remarks],
+    ['ODOO_FAILURE_EVENT_REFERENCE_FIELD', payload.failure_event_id],
+  ]) {
+    const field = process.env[setting];
+    if (!field) continue;
+    if (!/^x_[A-Za-z0-9_]+$/.test(field) || field === 'x_delivery_status') throw new Error(`Invalid configured failure field: ${setting}`);
+    fields[field] = value || false;
+  }
+  const accepted = await callModel('stock.picking', 'write', [[picking.id], fields]);
+  if (accepted !== true) throw new Error('Odoo did not acknowledge the failure notification trigger.');
+  return { triggered: true, notification_owner: 'odoo' };
+}
+
 /**
- * Find outgoing delivery orders (stock.picking) whose scheduled_date falls on
- * a given MYT calendar day — used by the 5PM fallback sync (A1.4).
- * Odoo stores scheduled_date in UTC; MYT is UTC+8.
+ * Stream every missing-DOO candidate using the GCA-approved date and active
+ * appointment rule. Datetime boundaries are the requested MYT calendar day.
  *
  * @param {string} dateStr - 'YYYY-MM-DD' in MYT
  * @returns {Promise<Array<{id:number, name:string, sale_id:any}>>}
  */
-async function getOrdersForDeliveryDate(dateStr) {
-  // Convert MYT day boundaries to UTC for the Odoo filter
-  const utcStart = new Date(`${dateStr}T00:00:00+08:00`).toISOString().replace('T', ' ').slice(0, 19);
-  const utcEnd   = new Date(`${dateStr}T23:59:59+08:00`).toISOString().replace('T', ' ').slice(0, 19);
+async function* iterateOrdersForDeliveryDate(dateStr, policy = loadFallbackPolicy()) {
+  const domain = fallbackDomain(dateStr, policy);
+  // A stable upper bound plus keyset pagination avoids offset skips when records
+  // become ineligible while this run is processing them.
+  const latest = await callModel('stock.picking', 'search_read', [domain], { fields: ['id'], limit: 1, order: 'id desc' });
+  if (!Array.isArray(latest)) throw new Error('Invalid Odoo fallback discovery response.');
+  if (!latest.length) return;
+  const ceiling = latest[0].id;
+  if (!Number.isInteger(ceiling) || ceiling <= 0) throw new Error('Invalid Odoo fallback upper bound.');
+  let cursor = 0;
+  while (cursor < ceiling) {
+    const page = await callModel('stock.picking', 'search_read', [[...domain, ['id', '>', cursor], ['id', '<=', ceiling]]], {
+      fields: ['id', 'name', 'sale_id'], limit: policy.pageSize, order: 'id asc',
+    });
+    if (!Array.isArray(page)) throw new Error('Invalid Odoo fallback page.');
+    if (!page.length) return;
+    for (const order of page) {
+      if (!Number.isInteger(order.id) || order.id <= cursor || order.id > ceiling) throw new Error('Odoo fallback pagination did not advance safely.');
+      cursor = order.id;
+      yield order;
+    }
+  }
+}
 
-  const domain = [
-    ['picking_type_code', '=', 'outgoing'],
-    ['state', 'in', ['assigned', 'confirmed', 'waiting']],
-    ['scheduled_date', '>=', utcStart],
-    ['scheduled_date', '<=', utcEnd],
-  ];
-  return callModel('stock.picking', 'search_read', [domain], {
-    fields: ['id', 'name', 'sale_id'],
-    limit: 200,
-  });
+async function getOrdersForDeliveryDate(dateStr) {
+  const orders = [];
+  for await (const order of iterateOrdersForDeliveryDate(dateStr)) orders.push(order);
+  return orders;
+}
+
+async function isOrderEligibleForDeliveryDate(id, dateStr, policy = loadFallbackPolicy()) {
+  const records = await callModel('stock.picking', 'search_read', [[...fallbackDomain(dateStr, policy), ['id', '=', id]]], { fields: ['id', 'name'], limit: 1 });
+  if (!Array.isArray(records)) throw new Error('Invalid Odoo eligibility response.');
+  return records.some(record => record.id === id);
 }
 
 /**
@@ -344,8 +394,11 @@ module.exports = {
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
+  triggerOdooFailureNotification,
   writeOdooExtendedFields,
   writeOdooOrderLines,
   getOrdersForDeliveryDate,
+  iterateOrdersForDeliveryDate,
+  isOrderEligibleForDeliveryDate,
   getOrderDetail,
 };

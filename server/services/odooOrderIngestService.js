@@ -65,7 +65,7 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null, db =
  * Returns a result object; never throws for expected business conditions
  * (missing ref, order already in motion) — only throws on unexpected DB errors.
  */
-async function ingestOrder(payload, db) {
+async function ingestOrder(payload, db, { createOnly = false } = {}) {
   const {
     name: odoo_order_ref,
     sales_order_name: odoo_sales_ref,
@@ -84,6 +84,7 @@ async function ingestOrder(payload, db) {
   }
 
   const existing = await db.orders.findFirst({ where: { odoo_order_ref } });
+  if (existing && createOnly) return { success: true, action: 'skipped', reason: 'already_exists', order_id: existing.id };
   if (!Number.isInteger(payload.id) || payload.id <= 0) throw preparationError('A positive Odoo stock.picking id is required.');
   if (payload.doo_ready !== undefined && typeof payload.doo_ready !== 'boolean') throw preparationError('doo_ready must be a boolean.');
   if (existing?.odoo_picking_id != null && existing.odoo_picking_id !== payload.id) throw preparationError('DO reference does not match its Odoo picking id.', 'ODOO_REFERENCE_MISMATCH', 409);
@@ -199,7 +200,7 @@ async function withPreparationLock(work) {
     return await prisma.$transaction(async tx => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
       const result = await work(tx);
-      if (result.success && result.order_id) await recordPickedMilestone(tx, result.order_id);
+      if (result.success && result.order_id && result.action !== 'skipped') await recordPickedMilestone(tx, result.order_id);
       return result;
     }, { timeout: 20000 });
   } catch (error) {
@@ -221,7 +222,7 @@ async function assertNoSerialConflicts(db, lines, orderId = null) {
   }
 }
 
-const pushOrder = payload => withPreparationLock(tx => ingestOrder(payload, tx));
+const pushOrder = (payload, options) => withPreparationLock(tx => ingestOrder(payload, tx, options));
 
 // Separate from appointment/order edits: a full, authoritative preparation snapshot.
 // Scheduled DOOs can receive their warehouse preparation without being rescheduled.

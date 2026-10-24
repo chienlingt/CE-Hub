@@ -17,7 +17,6 @@
 
 const prisma = require('../prismaClient');
 const { sendDeliveryFailureNotifications } = require('./notificationService');
-const { enqueue } = require('./integrationOutboxService');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 // FR-05-001 — five permitted failure reasons; "Other" requires a description
@@ -36,7 +35,7 @@ const ELIGIBLE_STATUSES = ['Delivering', 'In Progress'];
  * Confirm a failed delivery.
  *
  * Validates all business rules, persists failure state, fires A6 notifications,
- * and enqueues ORDER_FAILED + RETURN_DO_CREATE outbox events.
+ * and atomically enqueues ORDER_FAILED for Odoo's customer WhatsApp automation.
  *
  * @param {string} orderId
  * @param {{
@@ -129,6 +128,16 @@ async function confirmFailure(orderId, {
 
   // ── 7. Item outcome completeness ───────────────────────────────────────────
   const allowedItemStatuses = ['delivered', 'failed'];
+  const ownedLines = new Map(order.order_products.map(item => [String(item.id), item]));
+  const seenIds = new Set();
+  if (!Array.isArray(order_products_status)) throw Object.assign(new Error('Order item outcomes must be a list.'), { statusCode: 400, code: 'INVALID_ITEMS' });
+  for (const item of order_products_status) {
+    const id = String(item.id), owned = ownedLines.get(id);
+    if (!owned || seenIds.has(id)) throw Object.assign(new Error('Each submitted item must belong to this DO and appear only once.'), { statusCode: 400, code: 'INVALID_ITEMS' });
+    seenIds.add(id);
+    if (item.delivered_quantity != null && (!Number.isInteger(item.delivered_quantity) || item.delivered_quantity < 0 || item.delivered_quantity > owned.quantity
+      || (item.item_delivery_status === 'failed' && item.delivered_quantity !== 0))) throw Object.assign(new Error('Invalid delivered quantity for an order item.'), { statusCode: 400, code: 'INVALID_DELIVERED_QUANTITY' });
+  }
   const statusMap = Object.fromEntries(
     (order_products_status || []).map(i => [String(i.id), i.item_delivery_status])
   );
@@ -148,71 +157,61 @@ async function confirmFailure(orderId, {
 
   // ── 8. Persist (all writes in one logical block) ───────────────────────────
   const now = new Date();
-
-  // 8a. Update order — set Failed status + issue fields (no is_complaint_submitted)
-  const updatedOrder = await prisma.orders.update({
-    where: { id: orderId },
-    data: {
-      order_status:  'Failed',
-      issue_reason,
-      issue_desc:    issue_desc || null,
-      issue_status:  'open',
-      issue_evidence: [
-        ...(order.issue_evidence || []),
-        ...evidence_paths,
-      ],
-      // Reported-failed date — stamp once; never moved by later updates.
-      ...(order.issue_reported_at ? {} : { issue_reported_at: now }),
-      updated_at: now,
-      // Explicitly keep is_complaint_submitted unchanged (may already be false/null)
-    },
-  });
-
-  // 8b. Update each line item delivery status (+ real delivered_quantity when the
-  // caller supplies one — e.g. a future partial-quantity UI — else default to
-  // the full ordered quantity for delivered / 0 for failed).
-  const orderProductById = Object.fromEntries(order.order_products.map(p => [String(p.id), p]));
-  for (const item of (order_products_status || [])) {
-    if (!allowedItemStatuses.includes(item.item_delivery_status)) continue;
-    const orderedQty = orderProductById[String(item.id)]?.quantity ?? null;
-    const deliveredQty = item.delivered_quantity != null
-      ? parseInt(item.delivered_quantity)
-      : item.item_delivery_status === 'delivered' ? orderedQty : 0;
-    await prisma.order_products.update({
-      where: { id: parseInt(item.id) },
-      data:  { item_delivery_status: item.item_delivery_status, delivered_quantity: deliveredQty },
+  // Save Failed, item outcomes, the immutable failure and its Odoo request
+  // together. If enqueueing fails, roll back instead of losing the message.
+  const updatedOrder = await prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+    const current = await tx.orders.findUnique({ where: { id: orderId }, include: { order_products: true } });
+    if (!current || !ELIGIBLE_STATUSES.includes(current.order_status)) throw Object.assign(
+      new Error('Failure has already been confirmed or this DO is no longer delivering.'),
+      { statusCode: 409, code: 'INELIGIBLE_STATUS' });
+    if (employee_id && current.employee_id && current.employee_id !== employee_id) throw Object.assign(new Error('This delivery is no longer assigned to you.'), { statusCode: 403, code: 'NOT_ASSIGNED_DRIVER' });
+    const currentLines = new Map(current.order_products.map(item => [String(item.id), item]));
+    for (const item of order_products_status) {
+      const owned = currentLines.get(String(item.id));
+      if (!owned || (item.delivered_quantity != null && item.delivered_quantity > owned.quantity)) throw Object.assign(new Error('Order lines changed; reload the delivery before confirming failure.'), { statusCode: 409, code: 'ORDER_ITEMS_CHANGED' });
+    }
+    const updated = await tx.orders.update({
+      where: { id: orderId },
+      data: {
+        order_status: 'Failed', issue_reason, issue_desc: issue_desc || null,
+        issue_status: 'open', issue_evidence: [...(current.issue_evidence || []), ...evidence_paths],
+        ...(current.issue_reported_at ? {} : { issue_reported_at: now }),
+        updated_at: now,
+      },
     });
-  }
+    for (const item of order_products_status) {
+      const owned = currentLines.get(String(item.id));
+      const quantity = item.delivered_quantity != null ? item.delivered_quantity
+        : item.item_delivery_status === 'delivered' ? owned.quantity : 0;
+      await tx.order_products.update({
+        where: { id: owned.id },
+        data: { item_delivery_status: item.item_delivery_status, delivered_quantity: quantity },
+      });
+    }
+    const failure = await tx.delivery_failure_events.create({
+      data: { order_id: orderId, failure_reason: issue_reason, failure_desc: issue_desc || null,
+        evidence_urls: evidence_paths, confirmed_by: employee_id || null,
+        odoo_sync_status: current.odoo_order_ref ? 'pending' : 'not_applicable', created_at: now },
+    });
+    if (current.odoo_order_ref) {
+      const payload = await buildOdooEventPayload(orderId, 'Failed', tx);
+      const key = `order:${orderId}:failure:${failure.id}:odoo`;
+      await tx.integration_outbox.upsert({
+        where: { idempotency_key: key }, update: {},
+        create: { event_type: 'ORDER_FAILED', target: 'odoo', idempotency_key: key,
+          status: 'pending', attempts: 0, next_retry_at: now,
+          payload: { ...payload, ce_hub_order_ref: orderId, failure_event_id: failure.id,
+            customer_notification_requested: true, notification_owner: 'odoo' } },
+      });
+    }
+    return updated;
+  }, { timeout: 15000 });
 
-  // 8c. Write immutable audit row (A5.12)
-  const failureEvent = await prisma.delivery_failure_events.create({
-    data: {
-      order_id:       orderId,
-      failure_reason: issue_reason,
-      failure_desc:   issue_desc || null,
-      evidence_urls:  evidence_paths,
-      confirmed_by:   employee_id || null,
-      odoo_sync_status: 'pending',
-      created_at:     now,
-    },
-  });
-
-  // ── 9. A6 notifications (fire-and-forget, non-fatal) ──────────────────────
+  // Internal notifications stay in CE Hub; customer WhatsApp belongs to Odoo.
   sendDeliveryFailureNotifications(orderId).catch(err =>
-    console.error('[A5] sendDeliveryFailureNotifications error:', err.message)
+    console.error('[A5] Internal failure notification failed:', err.message)
   );
-
-  // ── 10. Outbox: ORDER_FAILED → Odoo Failed sync (A5.3) ────────────────────
-  if (order.odoo_order_ref) {
-    await enqueue({
-      eventType:      'ORDER_FAILED',
-      target:         'odoo',
-      // Rebuilt from DB state after the 8b/8c writes above, so failure_reason
-      // and the per-line delivered/failed outcomes are already reflected.
-      payload:        await buildOdooEventPayload(orderId, 'Failed'),
-      idempotencyKey: `order:${orderId}:odoo:Failed`,
-    });
-  }
 
   return updatedOrder;
 }

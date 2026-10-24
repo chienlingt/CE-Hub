@@ -262,7 +262,8 @@ router.post('/sync-odoo', async (req, res) => {
     const { syncOrdersFromOdoo } = require('../services/odooSyncService');
     const targetDate = req.query.date || null;
     const result = await syncOrdersFromOdoo(targetDate);
-    res.json({ success: true, date: targetDate || 'tomorrow', ...result });
+    const status = ['blocked', 'busy'].includes(result.status) ? 409 : result.status === 'discovery_failed' ? 502 : 200;
+    res.status(status).json({ success: result.status === 'completed' && !result.audit_error, ...result });
   } catch (err) {
     console.error('POST /api/orders/sync-odoo error', err);
     res.status(500).json({ error: 'Sync failed', details: err.message });
@@ -1732,7 +1733,9 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
       const lng = longitude != null ? parseFloat(longitude) : null;
       await upsertEmployeeLocation(employee_id, lat, lng);
 
-      return res.json({ success: true, order });
+      return res.json({ success: true, order, customer_notification: {
+        owner: 'odoo', status: order.odoo_order_ref ? 'queued' : 'unavailable_no_odoo_reference',
+      } });
     } catch (err) {
       const status = err.statusCode || 500;
       console.error(`[A5] confirm_failure error (${err.code || 'ERR'}):`, err.message);

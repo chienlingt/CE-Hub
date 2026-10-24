@@ -1,100 +1,91 @@
-/**
- * A1.4 — Odoo Order Ingestion Polling Service
- *
- * Safety net for the Odoo "push" button workflow: runs once daily at 5PM MYT
- * and makes sure every confirmed sale order delivering TOMORROW already
- * exists in CE Hub, in case it was never pushed (or push failed) from Odoo.
- * Only creates missing orders — does not touch orders already present
- * (those are kept in sync via the push endpoints instead).
- */
-const dayjs  = require('dayjs');
+// 5 PM MYT recovery of missing, eligible outgoing DOOs only. No bookings,
+// appointment edits or customer messages are triggered by this process.
+const { randomUUID } = require('crypto');
 const prisma = require('../prismaClient');
+const { loadFallbackPolicy, validateDate, tomorrowMalaysia } = require('./odooFallbackPolicy');
+
+let activeRun = null;
 
 async function syncOrdersFromOdoo(targetDate = null) {
-  if (!process.env.ODOO_URL) {
-    console.log('[OdooSync] ODOO_URL not configured — skipping sync.');
-    return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [] };
-  }
-
+  if (activeRun) return { status: 'busy', run_id: activeRun, synced: 0, skipped: 0, failed: 0, synced_dos: [], skipped_dos: [], failed_dos: [], error: 'A fallback run is already in progress.' };
+  const result = { run_id: randomUUID(), date: null, status: 'completed', complete: false, candidates: 0,
+    synced: 0, skipped: 0, failed: 0, synced_dos: [], skipped_dos: [], failed_dos: [], failures: [], skips: [] };
+  activeRun = result.run_id;
+  const skip = (order, reason) => {
+    result.skipped_dos.push(order.name);
+    result.skips.push({ picking_id: order.id, do_ref: order.name, reason });
+  };
+  const fail = (order, stage, code, message) => {
+    result.failed_dos.push(order.name || 'picking:' + order.id);
+    result.failures.push({ picking_id: order.id, do_ref: order.name || null, stage, code, message });
+  };
   try {
-    const { getOrdersForDeliveryDate, getOrderDetail } = require('./odooService');
+    result.date = validateDate(targetDate || tomorrowMalaysia());
+    if (!process.env.ODOO_URL) throw Object.assign(new Error('Odoo integration is not configured.'), { code: 'FALLBACK_POLICY_NOT_CONFIGURED' });
+    const policy = loadFallbackPolicy();
+    // Persist the actual agreed eligibility rule with each run for support/audit.
+    result.policy = policy;
+    const { iterateOrdersForDeliveryDate, getOrderDetail, isOrderEligibleForDeliveryDate } = require('./odooService');
     const { pushOrder } = require('./odooOrderIngestService');
-
-    const tomorrow = targetDate || dayjs().add(1, 'day').format('YYYY-MM-DD');
-    const odooOrders = await getOrdersForDeliveryDate(tomorrow);
-
-    if (!odooOrders?.length) {
-      console.log(`[OdooSync] No confirmed orders in Odoo for ${tomorrow}.`);
-      return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [] };
-    }
-
-    // Track the actual DO references, not just counts, so GCA can see which
-    // DOs were imported vs. skipped in the FALLBACK_POLL_COMPLETE payload.
-    const syncedDos  = [];
-    const skippedDos = [];
-
-    for (const oo of odooOrders) {
-      const odooRef = oo.name;
-      if (!odooRef) continue;
-
-      // Skip if already in CE Hub — push endpoints own keeping it up to date
-      const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: odooRef } });
-      if (existing) { skippedDos.push(odooRef); continue; }
-
-      const detail = await getOrderDetail(oo.id);
-      if (!detail) { console.warn(`[OdooSync] Could not resolve detail for ${odooRef} — skipped.`); skippedDos.push(odooRef); continue; }
-
-      const result = await pushOrder(detail);
-      if (result.success) {
-        console.log(`[OdooSync] Imported next-day order missed by push: ${odooRef}`);
-        syncedDos.push(odooRef);
-      } else {
-        console.warn(`[OdooSync] Failed to import ${odooRef}: ${result.error}`);
-        skippedDos.push(odooRef);
+    for await (const order of iterateOrdersForDeliveryDate(result.date, policy)) {
+      result.candidates++;
+      let stage = 'lookup';
+      try {
+        if (typeof order.name !== 'string' || !order.name.trim()) {
+          fail(order, 'validation', 'MISSING_DO_REFERENCE', 'Odoo returned a DOO without a reference.');
+          continue;
+        }
+        const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: order.name } });
+        if (existing) { skip(order, 'already_exists'); continue; }
+        stage = 'detail';
+        const detail = await getOrderDetail(order.id);
+        if (!detail || detail.id !== order.id || detail.name !== order.name) {
+          fail(order, stage, 'INVALID_DOO_DETAIL', 'DOO detail is unavailable or does not match the requested reference.');
+          continue;
+        }
+        // Appointments can be cancelled/changed between page discovery and import.
+        stage = 'eligibility';
+        if (!await isOrderEligibleForDeliveryDate(order.id, result.date, policy)) {
+          skip(order, 'no_longer_eligible');
+          continue;
+        }
+        stage = 'import';
+        // The importer rechecks existence under its transaction lock. A concurrent
+        // push or another app instance must not turn fallback into an update.
+        const imported = await pushOrder(detail, { createOnly: true });
+        if (imported.success && imported.action === 'created') result.synced_dos.push(order.name);
+        else if (imported.success && imported.action === 'skipped') skip(order, 'already_exists');
+        else fail(order, stage, imported.code || 'IMPORT_REJECTED', imported.error || 'DOO import was not accepted.');
+      } catch (error) {
+        fail(order, stage, 'DOO_PROCESSING_FAILED', 'Unable to process this DOO; correct the data or retry fallback.');
+        console.warn('[OdooSync] DOO failed; continuing:', order.name || order.id, 'stage:', stage);
       }
     }
-
-    const synced  = syncedDos.length;
-    const skipped = skippedDos.length;
-
-    console.log(`[OdooSync] Done for ${tomorrow} — synced: ${synced}, skipped: ${skipped}`);
-
-    // Emit outbox event so Odoo/GCA knows polling is complete and can trigger D-1 WhatsApp.
-    // Carries the actual DO references (not just counts) so GCA can identify exactly which
-    // orders CE Hub now has — the send-to-Odoo side is still a stub (see integrationOutboxCron.js
-    // handleFallbackPollComplete) pending GCA confirming the receiving mechanism.
+    result.complete = true;
+    if (result.failures.length) result.status = 'partial_failure';
+  } catch (error) {
+    result.status = error.code === 'FALLBACK_POLICY_NOT_CONFIGURED' ? 'blocked' : 'discovery_failed';
+    result.error = error.code === 'FALLBACK_POLICY_NOT_CONFIGURED' ? error.message
+      : 'Unable to finish Odoo discovery. Previously imported DOOs are preserved; retry fallback.';
+    console.warn('[OdooSync]', result.status, result.error);
+  } finally {
+    result.synced = result.synced_dos.length;
+    result.skipped = result.skipped_dos.length;
+    result.failed = result.failed_dos.length;
     try {
-      await prisma.integration_outbox.create({
-        data: {
-          event_type:      'FALLBACK_POLL_COMPLETE',
-          target:          'odoo',
-          payload:         {
-            date:          tomorrow,
-            synced_dos:    syncedDos,
-            skipped_dos:   skippedDos,
-            synced_count:  synced,
-            skipped_count: skipped,
-          },
-          idempotency_key: `fallback_poll:${tomorrow}`,
-          status:          'pending',
-          attempts:        0,
-          created_at:      new Date(),
-        },
-      });
-    } catch (outboxErr) {
-      console.warn('[OdooSync] Could not write FALLBACK_POLL_COMPLETE to outbox:', outboxErr.message);
+      await prisma.integration_outbox.create({ data: {
+        event_type: 'FALLBACK_POLL_COMPLETE', target: 'internal', payload: result,
+        idempotency_key: 'fallback_poll:' + (result.date || 'invalid-date') + ':' + result.run_id,
+        status: 'pending', attempts: 0, next_retry_at: new Date(),
+      } });
+    } catch {
+      result.audit_error = 'Unable to persist the fallback-run audit record.';
+      console.error('[OdooSync]', result.audit_error, result.run_id);
     }
-
-    return {
-      synced,
-      skipped,
-      synced_dos:  syncedDos,
-      skipped_dos: skippedDos,
-    };
-  } catch (err) {
-    console.error('[OdooSync] Sync failed:', err.message);
-    return { synced: 0, skipped: 0, synced_dos: [], skipped_dos: [], error: err.message };
+    activeRun = null;
   }
+  console.log('[OdooSync] Run', result.run_id, result.status, 'synced:', result.synced, 'skipped:', result.skipped, 'failed:', result.failed);
+  return result;
 }
 
 module.exports = { syncOrdersFromOdoo };
