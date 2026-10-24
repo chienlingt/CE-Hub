@@ -58,3 +58,4 @@ graphify-out
 
 # Local Odoo integration notes
 /server/ODOO_PREPARATION_CONTRACT.md
+/server/ODOO_FALLBACK_CONTRACT.md
