@@ -171,6 +171,7 @@ async function fetchPendingBatch(limit = 20) {
   return prisma.integration_outbox.findMany({
     where: {
       status:       'pending',
+      NOT: { idempotency_key: { startsWith: 'sync_preview:' } },
       next_retry_at: { lte: new Date() },
     },
     orderBy: { created_at: 'asc' },

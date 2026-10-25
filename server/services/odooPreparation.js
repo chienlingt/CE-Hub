@@ -1,4 +1,5 @@
 const { unitsFor } = require('./orderProductUnits');
+const { ODOO_LINE_MODEL, assertStoredLineIdentity } = require('./odooLineIdentity');
 
 function preparationError(message, code = 'INVALID_PREPARATION', status = 400) {
   return Object.assign(new Error(message), { status, statusCode: status, code });
@@ -11,7 +12,7 @@ function normalizePreparation(lines, ready = false) {
   const ids = new Set(), serials = new Set();
   return lines.map(line => {
     const id = line.order_line_id, quantity = line.product_uom_qty ?? line.quantity;
-    if (!Number.isInteger(id) || id <= 0 || ids.has(id)) throw preparationError('Each Odoo line must have a distinct positive order_line_id.');
+    if (!Number.isInteger(id) || id <= 0 || ids.has(id)) throw preparationError('Each Odoo line must have a distinct positive order_line_id (stock.move.id).');
     ids.add(id);
     if (!Number.isInteger(quantity) || quantity <= 0) throw preparationError(`Line ${id}: required quantity must be a positive integer.`);
     if (typeof line.product_name !== 'string' || !line.product_name.trim()) throw preparationError(`Line ${id}: product_name is required.`);
@@ -31,7 +32,7 @@ function normalizePreparation(lines, ready = false) {
       serials.add(key);
     });
     if (ready && (prepared !== quantity || (tracking === 'serial' && assigned.length !== prepared))) throw preparationError(`Line ${id}: DOO Ready requires the full required quantity to be prepared and all serial-tracked units assigned.`);
-    return { odoo_line_id: id, odoo_product_name: line.product_name.trim(), quantity,
+    return { odoo_line_id: id, odoo_line_model: ODOO_LINE_MODEL, odoo_product_name: line.product_name.trim(), quantity,
       prepared_quantity: prepared, serial_tracking: tracking, assigned_serials: assigned,
       assigned_serial: assigned[0] || null };
   });
@@ -53,6 +54,7 @@ function mergePreparationUnits(existing, incoming) {
 
 function preparationProblem(order, items = order?.order_products || []) {
   if (!isOdooManaged(order) && !items.some(item => isOdooManaged(order, item))) return null;
+  try { assertStoredLineIdentity(items, order?.odoo_picking_id != null); } catch (error) { return error.message; }
   if (order?.doo_ready !== true) return 'Awaiting Odoo DOO Ready confirmation.';
   for (const item of items) {
     if (!isOdooManaged(order, item)) continue;

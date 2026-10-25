@@ -1,548 +1,108 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  Activity, CheckCircle, AlertTriangle, RefreshCw,
-  Link, Clock, XCircle, Loader2, Info,
-  GitBranch, ShieldAlert,
-} from 'lucide-react';
-import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Activity, ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { API_BASE_URL } from '../../utils/apiBaseUrl';
+import OdooChangeReview from './OdooChangeReview';
+import SyncRunHistory from './SyncRunHistory';
 
-function formatDateTime(str) {
-  if (!str) return '—';
-  return new Date(str).toLocaleString('en-MY', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+const time = value => value ? new Date(value).toLocaleString('en-MY', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+const sourceName = value => ({ odoo_webhook: 'Webhook', fallback_5pm: '5 PM fallback', unknown: 'Not recorded' }[value] || 'Not recorded');
+const statuses = { imported: 'Imported', updated: 'Updated', failed: 'Failed', retrying: 'Retry scheduled', pending_approval: 'Needs approval', rejected: 'Rejected', not_recorded: 'Not recorded', skipped: 'Skipped', unchanged: 'Unchanged', accepted: 'Accepted', previously_reviewed: 'Previously reviewed' };
+function Badge({ value, children }) {
+  const tone = ['failed', 'dead', 'rejected'].includes(value) ? 'bg-red-50 text-red-700' : ['pending', 'pending_approval', 'retrying'].includes(value) ? 'bg-amber-50 text-amber-800' : ['processed', 'imported', 'updated'].includes(value) ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600';
+  return <span className={'inline-flex whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium ' + tone}>{children || statuses[value] || value}</span>;
 }
-
-function formatTimeAgo(str) {
-  if (!str) return null;
-  const diff = Date.now() - new Date(str).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 2)   return 'just now';
-  if (mins < 60)  return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)   return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+function Pager({ offset, total, setOffset }) {
+  if (total <= 25) return null;
+  return <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-gray-500"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 25))} className="rounded px-2 py-1 disabled:opacity-30">Previous</button><span>{offset + 1}–{Math.min(offset + 25, total)} of {total}</span><button type="button" disabled={offset + 25 >= total} onClick={() => setOffset(offset + 25)} className="rounded px-2 py-1 disabled:opacity-30">Next</button></div>;
 }
-
-// ── Per-DO sync status badge ──────────────────────────────────────────────────
-function DOSyncBadge({ syncInfo }) {
-  const { status, lastSyncAt, retrying } = syncInfo;
-
-  if (status === 'failed') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-        <XCircle size={10} /> Sync Failed
-      </span>
-    );
-  }
-  if (status === 'pending') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-        <Loader2 size={10} className="animate-spin" /> Syncing{retrying ? ` (retry #${retrying})` : '…'}
-      </span>
-    );
-  }
-  if (status === 'synced') {
-    return (
-      <span className="inline-flex flex-col gap-0.5">
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-          <CheckCircle size={10} /> Synced
-        </span>
-        {lastSyncAt && (
-          <span className="text-gray-400 text-xs ml-1">{formatTimeAgo(lastSyncAt)}</span>
-        )}
-      </span>
-    );
-  }
-  // local only
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-      Local Only
-    </span>
-  );
-}
-
-// ── Small anomaly reason chips ────────────────────────────────────────────────
-function AnomalyChip({ type }) {
-  const map = {
-    SYNC_PUSH_FAILED: { label: 'Sync push failed',        color: 'bg-red-100 text-red-700'    },
-    STATUS_MISMATCH:  { label: 'Delivered w/o approval',  color: 'bg-orange-100 text-orange-700' },
-    APPROVAL_STUCK:   { label: 'Approved but not scheduled', color: 'bg-yellow-100 text-yellow-700' },
-  };
-  const cfg = map[type] || { label: type, color: 'bg-gray-100 text-gray-600' };
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.color}`}>
-      <ShieldAlert size={9} /> {cfg.label}
-    </span>
-  );
-}
-
-function OutboxStatusBadge({ row }) {
-  if (row.status === 'processed') {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700"><CheckCircle size={10} /> Sent OK</span>;
-  }
-  if (row.status === 'dead') {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><XCircle size={10} /> Failed — gave up</span>;
-  }
-  if (row.status === 'pending' && row.attempts > 0) {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"><RefreshCw size={10} /> Retrying (#{row.attempts})</span>;
-  }
-  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Queued</span>;
-}
-
-// ── Anomaly summary panel ─────────────────────────────────────────────────────
-function AnomalyPanel({ anomalyOrders, getAnomalies }) {
-  const typeCounts = {};
-  anomalyOrders.forEach(o => {
-    getAnomalies(o).forEach(f => {
-      typeCounts[f.type] = (typeCounts[f.type] || 0) + 1;
-    });
-  });
-
-  const descriptions = {
-    SYNC_PUSH_FAILED: 'CE Hub sent a status update to Odoo but the push failed permanently. Odoo may show the wrong delivery status. Retry or manually update in Odoo.',
-    STATUS_MISMATCH:  'Order is marked Delivered in CE Hub but was never moved to "approved" assignment status. This may indicate an incomplete workflow.',
-    APPROVAL_STUCK:   'Order assignment was approved but the order is still showing as Pending, suggesting the scheduling step did not complete.',
-  };
-
-  return (
-    <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <ShieldAlert className="text-red-600" size={16} />
-        <h3 className="font-semibold text-red-800 text-sm">
-          {anomalyOrders.length} order{anomalyOrders.length !== 1 ? 's' : ''} flagged for review
-        </h3>
-      </div>
-      <div className="space-y-2">
-        {Object.entries(typeCounts).map(([type, count]) => (
-          <div key={type} className="flex items-start gap-3 bg-white rounded-lg border border-red-100 px-3 py-2.5">
-            <AnomalyChip type={type} />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-600">{descriptions[type]}</p>
-            </div>
-            <span className="shrink-0 text-xs font-semibold text-red-600 bg-red-100 rounded-full px-2 py-0.5">
-              {count}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
 export default function SyncMonitor() {
-  const [ceHubOrders,  setCeHubOrders]  = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [syncing,      setSyncing]      = useState(false);
-  const [error,        setError]        = useState(null);
-  const [syncResult,   setSyncResult]   = useState(null);
-  const [filter,       setFilter]       = useState('all');
-
-  const [outboxRows,   setOutboxRows]   = useState([]);
-  const [outboxFilter, setOutboxFilter] = useState('all');
-
-  const fetchOrders = useCallback(async () => {
-    setError(null);
+  const [token] = useState(() => { try { return JSON.parse(sessionStorage.getItem('adminSession'))?.token || ''; } catch { return ''; } });
+  const [tab, setTab] = useState('incoming'), [refresh, setRefresh] = useState(0);
+  const [source, setSource] = useState(''), [status, setStatus] = useState(''), [search, setSearch] = useState(''), [debouncedSearch, setDebouncedSearch] = useState('');
+  const [offset, setOffset] = useState(0), [jobOffset, setJobOffset] = useState(0), [jobStatus, setJobStatus] = useState('');
+  const [incoming, setIncoming] = useState({ rows: [], total: 0, summary: {} }), [outgoing, setOutgoing] = useState({ rows: [], total: 0, summary: {} });
+  const [error, setError] = useState(''), [loading, setLoading] = useState(false), [open, setOpen] = useState(null), [jobOpen, setJobOpen] = useState(null);
+  const seq = useRef(0);
+  const history = useRef(null);
+  const invalidate = useCallback(() => { seq.current++; }, []);
+  useEffect(() => { const timer = setTimeout(() => { setDebouncedSearch(search); setOffset(0); }, 250); return () => clearTimeout(timer); }, [search]);
+  const load = useCallback(async () => {
+    if (!token) return;
+    const current = ++seq.current; setLoading(true);
     try {
-      const res  = await fetch(`${API_BASE}/api/orders?sort=created_desc`);
-      const data = await res.json();
-      setCeHubOrders(Array.isArray(data) ? data : []);
-    } catch {
-      setError('Failed to load orders.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const fetchOutbox = useCallback(async () => {
-    try {
-      const res  = await fetch(`${API_BASE}/api/integration-outbox`);
-      const data = await res.json();
-      setOutboxRows(Array.isArray(data.rows) ? data.rows : []);
-    } catch {
-      // non-fatal
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchOrders();
-    fetchOutbox();
-    const timer = setInterval(() => { fetchOrders(); fetchOutbox(); }, 30000);
-    return () => clearInterval(timer);
-  }, [fetchOrders, fetchOutbox]);
-
-  const triggerSync = async () => {
-    setSyncing(true);
-    setSyncResult(null);
-    try {
-      const res  = await fetch(`${API_BASE}/api/orders/sync-odoo`, { method: 'POST' });
-      const data = await res.json();
-      setSyncResult(data);
-      fetchOrders();
-      fetchOutbox();
-    } catch (err) {
-      setSyncResult({ error: err.message });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  // ── Join: outbox rows indexed by orderId ──────────────────────────────────
-  const orderOutboxMap = useMemo(() => {
-    const map = {};
-    outboxRows.forEach(row => {
-      const id = row.payload?.ce_hub_order_ref || row.payload?.orderId;
-      if (id) {
-        if (!map[id]) map[id] = [];
-        map[id].push(row);
-      }
-    });
-    return map;
-  }, [outboxRows]);
-
-  // ── Per-order sync status ─────────────────────────────────────────────────
-  function getSyncInfo(order) {
-    if (!order.odoo_order_ref) return { status: 'local' };
-
-    const jobs = (orderOutboxMap[order.id] || []).filter(j => j.target === 'odoo');
-    const dead    = jobs.filter(j => j.status === 'dead');
-    const pending = jobs.filter(j => j.status === 'pending');
-
-    if (dead.length > 0)    return { status: 'failed', failedJobs: dead };
-    if (pending.length > 0) return { status: 'pending', retrying: Math.max(...pending.map(j => j.attempts)) };
-
-    const lastSync = jobs
-      .filter(j => j.status === 'processed' && j.processed_at)
-      .sort((a, b) => new Date(b.processed_at) - new Date(a.processed_at))[0];
-
-    return { status: 'synced', lastSyncAt: lastSync?.processed_at };
-  }
-
-  // ── Per-order anomaly flags ───────────────────────────────────────────────
-  function getAnomalies(order) {
-    const flags = [];
-    const sync = getSyncInfo(order);
-
-    if (sync.status === 'failed') {
-      flags.push({ type: 'SYNC_PUSH_FAILED', jobs: sync.failedJobs });
-    }
-    if (order.order_status === 'Delivered' && order.assignment_status !== 'approved') {
-      flags.push({ type: 'STATUS_MISMATCH' });
-    }
-    if (order.assignment_status === 'approved' && order.order_status === 'Pending') {
-      flags.push({ type: 'APPROVAL_STUCK' });
-    }
-    return flags;
-  }
-
-  // ── Derived lists ─────────────────────────────────────────────────────────
-  const odooLinked     = ceHubOrders.filter(o => o.odoo_order_ref);
-  const localOnly      = ceHubOrders.filter(o => !o.odoo_order_ref);
-  const anomalyOrders  = ceHubOrders.filter(o => getAnomalies(o).length > 0);
-
-  const display =
-    filter === 'odoo'    ? odooLinked    :
-    filter === 'local'   ? localOnly     :
-    filter === 'anomaly' ? anomalyOrders :
-    ceHubOrders;
-
-  const outboxPending   = outboxRows.filter(r => r.status === 'pending');
-  const outboxDead      = outboxRows.filter(r => r.status === 'dead');
-  const outboxProcessed = outboxRows.filter(r => r.status === 'processed');
-
-  const outboxDisplay =
-    outboxFilter === 'pending'   ? outboxPending   :
-    outboxFilter === 'dead'      ? outboxDead      :
-    outboxFilter === 'processed' ? outboxProcessed :
-    outboxRows;
-
-  // ── Render ────────────────────────────────────────────────────────────────
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
-
-      {/* Header */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Activity className="text-blue-600" size={22} />
-            Sync Monitor
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Track synchronization status between CE Hub and Odoo ERP.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => { fetchOrders(); fetchOutbox(); }}
-            className="flex items-center px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
-          >
-            <RefreshCw size={14} className="mr-1.5" /> Refresh
-          </button>
-          <button
-            onClick={triggerSync}
-            disabled={syncing}
-            className="flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-          >
-            <Link size={14} className="mr-1.5" />
-            {syncing ? 'Syncing...' : 'Sync Now'}
-          </button>
-        </div>
+      const query = new URLSearchParams({ source, status, search: debouncedSearch, offset: String(offset) });
+      const jobs = new URLSearchParams({ status: jobStatus, offset: String(jobOffset) });
+      const responses = await Promise.all([fetch(API_BASE_URL + '/api/odoo-change-requests/monitor/orders?' + query, { headers: { Authorization: 'Bearer ' + token } }), fetch(API_BASE_URL + '/api/odoo-change-requests/monitor/outgoing?' + jobs, { headers: { Authorization: 'Bearer ' + token } })]);
+      const data = await Promise.all(responses.map(res => res.json()));
+      const failure = responses.findIndex(res => !res.ok);
+      if (failure >= 0) throw new Error(data[failure].error || 'Unable to load sync monitor.');
+      if (current !== seq.current) return;
+      setIncoming(data[0]); setOutgoing(data[1]); setError('');
+    } catch (err) { if (current === seq.current) setError(err.message); }
+    finally { if (current === seq.current) setLoading(false); }
+  }, [token, source, status, offset, jobStatus, jobOffset, debouncedSearch]);
+  useEffect(() => { load(); const timer = setInterval(load, 30000); return () => { clearInterval(timer); invalidate(); }; }, [load, refresh, invalidate]);
+  const refreshAll = () => setRefresh(value => value + 1);
+  if (!token) return <div className="m-6 rounded-xl border bg-white p-6"><h1 className="text-xl font-semibold">Sync Monitor</h1><p className="mt-2 text-sm text-gray-600">Please sign out and sign in once to activate your admin login. No separate password verification is needed here.</p></div>;
+  return <div className="min-h-screen bg-gray-50 p-3 sm:p-6">
+    <div className="mx-auto max-w-[1500px] space-y-5">
+      <header className="flex items-center justify-between gap-3"><div><h1 className="flex items-center gap-2 text-xl font-bold text-gray-900"><Activity size={22} className="text-blue-600" />Sync Monitor</h1><p className="mt-1 text-xs text-gray-500">Odoo → CE Hub → Odoo · automatic fallback at 5 PM MYT</p></div><button type="button" onClick={refreshAll} className="flex items-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm"><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /><span className="hidden sm:inline">Refresh</span></button></header>
+      {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[{ label: 'Incoming issues', value: (incoming.summary.attention || 0) + (outgoing.summary.run_issues || 0), color: 'text-red-700', action: () => { setTab('incoming'); setStatus('attention'); setOffset(0); } },
+          { label: 'Needs approval', value: outgoing.summary.approvals || 0, color: 'text-amber-700', action: () => setTab('approvals') },
+          { label: 'Outgoing queued', value: outgoing.summary.pending || 0, color: 'text-blue-700', action: () => { setTab('outgoing'); setJobStatus('pending'); setJobOffset(0); } },
+          { label: 'Outgoing failed', value: outgoing.summary.dead || 0, color: 'text-red-700', action: () => { setTab('outgoing'); setJobStatus('dead'); setJobOffset(0); } }].map(item => <button type="button" key={item.label} onClick={item.action} className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-left hover:border-gray-400"><p className="text-xs text-gray-500">{item.label}</p><p className={'mt-1 text-2xl font-semibold ' + item.color}>{item.value}</p></button>)}
       </div>
-
-      {/* Sync result banner */}
-      {syncResult && (
-        <div role="status" className={`mb-4 flex items-start gap-3 rounded-xl border p-4 text-sm ${syncResult.error
-          ? 'border-red-200 bg-red-50 text-red-700'
-          : syncResult.failed > 0 || syncResult.audit_error ? 'border-amber-200 bg-amber-50 text-amber-800'
-          : 'border-green-200 bg-green-50 text-green-700'}`}>
-          {syncResult.error || syncResult.failed > 0 || syncResult.audit_error
-            ? <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            : <CheckCircle size={16} className="mt-0.5 shrink-0" />}
-          <div>
-            <p>{syncResult.error || `Fallback: ${syncResult.synced} imported · ${syncResult.skipped} skipped · ${syncResult.failed || 0} failed.`}</p>
-            {syncResult.error && syncResult.synced > 0 && <p className="mt-1">{syncResult.synced} successful imports were preserved.</p>}
-            {syncResult.failed > 0 && <p className="mt-1">Other orders continued. Retry fallback after correcting the failed DOOs.</p>}
-            {syncResult.audit_error && <p className="mt-1">{syncResult.audit_error}</p>}
+      <nav aria-label="Sync monitor sections" className="flex gap-1 overflow-x-auto rounded-xl border bg-white p-1">
+        {[{ key: 'incoming', label: 'Incoming orders', short: 'Incoming', icon: ArrowDownLeft }, { key: 'approvals', label: 'Needs approval', short: 'Review', icon: ShieldCheck }, { key: 'outgoing', label: 'Outgoing jobs', short: 'Outgoing', icon: ArrowUpRight }].map(item => <button type="button" key={item.key} aria-label={item.label} aria-current={tab === item.key ? 'page' : undefined} onClick={() => setTab(item.key)} className={'flex min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 py-2.5 text-xs font-semibold sm:flex-none sm:px-5 sm:text-sm ' + (tab === item.key ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50')}><item.icon size={16} className="hidden sm:block" /><span className="hidden sm:inline">{item.label}</span><span className="sm:hidden">{item.short}</span>{item.key === 'approvals' && outgoing.summary.approvals > 0 && <span className="rounded-full bg-amber-100 px-1.5 text-xs text-amber-900">{outgoing.summary.approvals}</span>}</button>)}
+      </nav>
+      {tab === 'incoming' && <>
+        {outgoing.summary.run_issues > 0 && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900"><p>{outgoing.summary.run_issues} run-level issue(s), such as discovery or configuration failure, have no DO to list below.</p><button type="button" onClick={() => { if (history.current) { history.current.open = true; history.current.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); } }} className="font-semibold underline">View run history</button></div>}
+        <section aria-label="Incoming orders" className="overflow-hidden rounded-xl border bg-white">
+          <div className="flex flex-wrap items-center gap-2 border-b p-3 sm:p-4">
+            <label className="relative min-w-[180px] flex-1"><Search size={16} className="absolute left-3 top-2.5 text-gray-400" /><input aria-label="Search incoming orders" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search DO or customer" className="w-full rounded-lg border py-2 pl-9 pr-3 text-sm" /></label>
+            <select aria-label="Incoming source" value={source} onChange={e => { setSource(e.target.value); setOffset(0); }} className="rounded-lg border bg-white p-2 text-sm"><option value="">All sources</option><option value="odoo_webhook">Webhook</option><option value="fallback_5pm">5 PM fallback</option><option value="unknown">Not recorded</option></select>
+            <select aria-label="Incoming result" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }} className="rounded-lg border bg-white p-2 text-sm"><option value="">All results</option><option value="attention">Needs investigation</option>{Object.entries(statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
           </div>
-        </div>
-      )}
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        {[
-          { key: 'all',    label: 'Total Orders',  value: ceHubOrders.length,   color: 'text-gray-900',   border: 'border-gray-200'   },
-          { key: 'odoo',   label: 'Odoo-linked',   value: odooLinked.length,    color: 'text-purple-700', border: 'border-purple-200' },
-          { key: 'local',  label: 'CE Hub Only',   value: localOnly.length,     color: 'text-blue-700',   border: 'border-blue-200'   },
-          { key: 'anomaly',label: 'Anomalies',     value: anomalyOrders.length, color: anomalyOrders.length > 0 ? 'text-red-600' : 'text-gray-400', border: anomalyOrders.length > 0 ? 'border-red-200' : 'border-gray-200' },
-        ].map(c => (
-          <div
-            key={c.key}
-            onClick={() => setFilter(c.key)}
-            className={`bg-white rounded-xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${c.border} ${filter === c.key ? 'ring-2 ring-blue-400' : ''}`}
-          >
-            <p className="text-xs text-gray-500 uppercase tracking-wide">{c.label}</p>
-            <p className={`text-2xl font-bold mt-1 ${c.color}`}>{c.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Filter tabs */}
-      <div className="flex items-center space-x-1 bg-white border border-gray-200 rounded-lg p-1 mb-4 w-fit">
-        {[
-          { key: 'all',    label: 'All' },
-          { key: 'odoo',   label: 'Odoo-linked' },
-          { key: 'local',  label: 'CE Hub Only' },
-          { key: 'anomaly',label: 'Anomalies' },
-        ].map(f => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-              filter === f.key ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            {f.label}
-            {f.key === 'anomaly' && anomalyOrders.length > 0 && (
-              <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 font-sans ${
-                filter === f.key ? 'bg-red-400 text-white' : 'bg-red-100 text-red-600'
-              }`}>
-                {anomalyOrders.length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Anomaly detail panel — shown when viewing anomalies */}
-      {filter === 'anomaly' && anomalyOrders.length > 0 && (
-        <AnomalyPanel anomalyOrders={anomalyOrders} getAnomalies={getAnomalies} />
-      )}
-
-      {/* Order table */}
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-        </div>
-      ) : error ? (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">{error}</div>
-      ) : display.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-16 text-center">
-          <Activity className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">
-            {filter === 'anomaly' ? 'No anomalies detected. All orders are in sync.' : 'No orders match this filter.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-100">
-              <thead className="bg-gray-50">
-                <tr>
-                  {['DO / Order Ref', 'SO Ref', 'Customer', 'CE Hub Status', 'Sync Status', 'Flags', 'Created'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {display.map(order => {
-                  const syncInfo  = getSyncInfo(order);
-                  const anomalies = getAnomalies(order);
-                  const hasAnomaly = anomalies.length > 0;
-                  return (
-                    <tr key={order.id} className={`hover:bg-gray-50 ${hasAnomaly ? 'bg-red-50 hover:bg-red-100' : ''}`}>
-                      {/* DO ref */}
-                      <td className="px-4 py-3">
-                        <span className="font-mono text-sm font-medium text-gray-900">
-                          {order.odoo_order_ref || 'Not Synced'}
-                        </span>
-                      </td>
-                      {/* SO ref */}
-                      <td className="px-4 py-3">
-                        {order.odoo_sales_ref ? (
-                          <span className="inline-flex items-center gap-1 font-mono text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-0.5">
-                            <GitBranch size={9} /> {order.odoo_sales_ref}
-                          </span>
-                        ) : '—'}
-                      </td>
-                      {/* Customer */}
-                      <td className="px-4 py-3 text-sm text-gray-700">
-                        {order.customers?.full_name || '—'}
-                      </td>
-                      {/* CE Hub status */}
-                      <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                          order.order_status === 'Delivered'  ? 'bg-green-100 text-green-700'   :
-                          order.order_status === 'Scheduled'  ? 'bg-blue-100 text-blue-700'     :
-                          order.order_status === 'Delivering' ? 'bg-yellow-100 text-yellow-700' :
-                          order.order_status === 'Cancelled'  ? 'bg-gray-100 text-gray-500'     :
-                          order.order_status === 'Completed'  ? 'bg-teal-100 text-teal-700'     :
-                                                                'bg-gray-100 text-gray-700'
-                        }`}>
-                          {order.order_status || 'Pending'}
-                        </span>
-                      </td>
-                      {/* Sync status */}
-                      <td className="px-4 py-3">
-                        <DOSyncBadge syncInfo={syncInfo} />
-                      </td>
-                      {/* Anomaly flags */}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {anomalies.map((f, i) => <AnomalyChip key={i} type={f.type} />)}
-                          {anomalies.length === 0 && (
-                            <span className="text-gray-300 text-xs">—</span>
-                          )}
-                        </div>
-                      </td>
-                      {/* Created */}
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          <Clock size={10} />
-                          {formatDateTime(order.created_at)}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Integration Outbox ─────────────────────────────────────────────── */}
-      <div className="mt-10">
-        <div className="mb-4">
-          <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <Link className="text-purple-600" size={18} />
-            Odoo Sync Queue
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Outgoing jobs to Odoo and notifications — shows what's still retrying or has permanently failed.
-          </p>
-          {outboxDead.length > 0 && (
-            <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-              <Info size={12} /> {outboxDead.length} job{outboxDead.length !== 1 ? 's' : ''} failed permanently — Odoo may be out of sync for these orders.
-            </div>
-          )}
-        </div>
-
-        {/* Outbox summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-          {[
-            { key: 'all',       label: 'Total Jobs',       value: outboxRows.length,       color: 'text-gray-900',   border: 'border-gray-200'   },
-            { key: 'pending',   label: 'Pending/Retrying', value: outboxPending.length,    color: 'text-amber-700',  border: 'border-amber-200'  },
-            { key: 'dead',      label: 'Failed (gave up)', value: outboxDead.length,       color: outboxDead.length > 0 ? 'text-red-600' : 'text-gray-400', border: outboxDead.length > 0 ? 'border-red-200' : 'border-gray-200' },
-            { key: 'processed', label: 'Sent OK',          value: outboxProcessed.length,  color: 'text-green-700',  border: 'border-green-200'  },
-          ].map(c => (
-            <div
-              key={c.key}
-              onClick={() => setOutboxFilter(c.key)}
-              className={`bg-white rounded-xl p-4 border shadow-sm cursor-pointer hover:shadow-md transition-all ${c.border} ${outboxFilter === c.key ? 'ring-2 ring-blue-400' : ''}`}
-            >
-              <p className="text-xs text-gray-500 uppercase tracking-wide">{c.label}</p>
-              <p className={`text-2xl font-bold mt-1 ${c.color}`}>{c.value}</p>
-            </div>
-          ))}
-        </div>
-
-        {outboxDisplay.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
-            <Link className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 text-sm">No outbox jobs match this filter.</p>
-          </div>
-        ) : (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-100">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {['DO Ref', 'Event', 'Target', 'Status', 'Attempts', 'Last Error', 'Next Retry', 'Created'].map(h => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {outboxDisplay.map(row => {
-                    const doRef = row.payload?.do_ref || row.payload?.odooRef || 'Not Synced';
-                    return (
-                      <tr key={row.id} className={`hover:bg-gray-50 ${row.status === 'dead' ? 'bg-red-50' : ''}`}>
-                        <td className="px-4 py-3">
-                          <span className="font-mono text-xs font-medium text-gray-800">{doRef}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="font-mono text-xs font-medium text-gray-900">{row.event_type}</span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{row.target}</td>
-                        <td className="px-4 py-3"><OutboxStatusBadge row={row} /></td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{row.attempts}</td>
-                        <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title={row.last_error || ''}>
-                          {row.last_error || '—'}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                          {row.status === 'pending' ? formatDateTime(row.next_retry_at) : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                          <div className="flex items-center gap-1">
-                            <Clock size={10} />
-                            {formatDateTime(row.created_at)}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
+          <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500"><tr>{['DO / Customer', 'Source', 'CE Hub status', 'Incoming result', 'Last activity', ''].map((label, i) => <th key={i} className="whitespace-nowrap px-4 py-3 font-medium">{label}</th>)}</tr></thead>
+            <tbody className="divide-y">{incoming.rows.map(row => <React.Fragment key={row.do_ref}>
+              <tr className={['failed', 'retrying', 'rejected'].includes(row.sync_status) ? 'bg-red-50/40' : ''}>
+                <td className="px-4 py-3"><p className="whitespace-nowrap font-mono text-xs font-semibold text-gray-900">{row.do_ref}{row.preview_only && <span className="ml-2 font-sans text-[10px] text-violet-600">DEMO</span>}</p><p className="mt-1 text-xs text-gray-500">{row.customer_name || 'Not imported into CE Hub'}</p></td>
+                <td className="whitespace-nowrap px-4 py-3 text-xs">{sourceName(row.source)}</td>
+                <td className="px-4 py-3"><Badge value={row.ce_hub_status || 'Not imported'} /></td>
+                <td className="px-4 py-3"><div className="flex flex-wrap gap-1"><Badge value={row.sync_status} />{row.needs_approval && row.sync_status !== 'pending_approval' && <Badge value="pending_approval" />}</div></td>
+                <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">{time(row.activity_at)}</td>
+                <td className="px-3"><button type="button" aria-label={'Details for ' + row.do_ref} aria-expanded={open === row.do_ref} onClick={() => setOpen(open === row.do_ref ? null : row.do_ref)} className="rounded-lg p-2 hover:bg-gray-100">{open === row.do_ref ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</button></td>
+              </tr>
+              {open === row.do_ref && <tr><td colSpan={6} className="bg-gray-50 px-4 py-4"><div className="space-y-2 text-xs text-gray-600">
+                {row.preview_only && <p className="text-violet-700">Layout preview only. Demo retry states are static; no request is sent to Odoo.</p>}
+                {row.reason && <p className="font-medium text-red-700">{row.reason}{row.code ? ' (' + row.code + ')' : ''}</p>}
+                <p>{row.next_action || (row.sync_status === 'not_recorded' ? 'This older order has no recorded incoming event. Its source cannot be confirmed.' : 'Incoming result only; outgoing delivery updates are tracked separately.')}</p>
+                {row.review_note && <p>Review note: {row.review_note}</p>}
+                {row.next_retry_at && <p>Next retry: {time(row.next_retry_at)}</p>}
+                <p>Latest event: {sourceName(row.latest_source)} · first successful import: {row.import_source ? sourceName(row.import_source) : row.order_id ? 'Not recorded' : 'Not imported'}</p>
+                <div className="flex flex-wrap items-center gap-2"><span>Resend through Odoo/GCA:</span><code className="rounded border bg-white px-2 py-1">POST /api/webhooks{row.endpoint || '/odoo/order'}</code><span>{row.endpoint === '/odoo/order-cancel' ? 'Corrected cancellation request' : 'Full corrected snapshot'} · no automatic manual resend from this page</span></div>
+                {row.needs_approval && <button type="button" onClick={() => setTab('approvals')} className="rounded-lg bg-amber-100 px-3 py-2 font-semibold text-amber-900">Review pending changes</button>}
+              </div></td></tr>}
+            </React.Fragment>)}</tbody></table></div>
+          {!incoming.rows.length && !error && <p className="p-10 text-center text-sm text-gray-500">{loading ? 'Loading…' : 'No incoming orders match these filters.'}</p>}
+          <Pager offset={offset} total={incoming.total} setOffset={setOffset} />
+        </section>
+        <details ref={history} className="overflow-hidden rounded-xl border bg-white"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-700">Run history <span className="ml-2 text-xs font-normal text-gray-400">Polling attempts and webhook receipts</span></summary><SyncRunHistory token={token} refreshVersion={refresh} /></details>
+      </>}
+      {tab === 'approvals' && <OdooChangeReview token={token} refreshVersion={refresh} onChanged={refreshAll} />}
+      {tab === 'outgoing' && <section aria-label="Outgoing jobs" className="overflow-hidden rounded-xl border bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3"><div><h2 className="text-sm font-semibold text-gray-900">CE Hub → Odoo</h2><p className="mt-1 text-xs text-gray-500">Queued, processed and failed status updates. Internal audit events are excluded.</p></div><select aria-label="Outgoing result" value={jobStatus} onChange={e => { setJobStatus(e.target.value); setJobOffset(0); }} className="rounded-lg border bg-white p-2 text-sm"><option value="">All jobs</option><option value="pending">Queued / retrying</option><option value="processed">Processed</option><option value="dead">Failed</option></select></div>
+        <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-gray-50 text-[11px] uppercase text-gray-500"><tr>{['DO', 'Update', 'Result', 'Attempts', 'Next retry', ''].map((label, i) => <th key={i} className="whitespace-nowrap px-4 py-3 font-medium">{label}</th>)}</tr></thead><tbody className="divide-y">{outgoing.rows.map(row => <React.Fragment key={row.id}><tr className={row.status === 'dead' ? 'bg-red-50/40' : ''}>
+          <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold">{row.payload?.do_ref || row.payload?.odooRef || '—'}{row.payload?.preview_only && <span className="ml-2 font-sans text-[10px] text-violet-600">DEMO</span>}</td>
+          <td className="px-4 py-3 text-xs">{row.payload?.status || row.event_type}</td><td className="px-4 py-3"><Badge value={row.status}>{row.status === 'processed' ? 'Processed' : row.status === 'dead' ? 'Failed' : row.attempts ? 'Retry scheduled' : 'Queued'}</Badge></td>
+          <td className="px-4 py-3 text-xs">{row.attempts}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">{row.status === 'pending' ? time(row.next_retry_at) : '—'}</td>
+          <td className="px-3"><button type="button" aria-label={'Job details for ' + (row.payload?.do_ref || row.id)} aria-expanded={jobOpen === row.id} onClick={() => setJobOpen(jobOpen === row.id ? null : row.id)} className="rounded-lg p-2 hover:bg-gray-100">{jobOpen === row.id ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</button></td>
+        </tr>{jobOpen === row.id && <tr><td colSpan={6} className="space-y-2 bg-gray-50 px-4 py-4 text-xs text-gray-600">{row.last_error && <p className="text-red-700">{row.last_error}</p>}<p>Created {time(row.created_at)} · processed {time(row.processed_at)} · {row.event_type}</p><p>{row.payload?.preview_only ? 'Layout preview only. This job is excluded from the worker and will never be sent to Odoo.' : row.status === 'dead' ? 'Investigate the failure and confirm the actual status in Odoo. No manual retry endpoint is available.' : 'Processed describes the worker outcome; it is not a universal proof that Odoo accepted every field.'}</p></td></tr>}</React.Fragment>)}</tbody></table></div>
+        {!outgoing.rows.length && !error && <p className="p-10 text-center text-sm text-gray-500">No outgoing jobs match this filter.</p>}
+        <Pager offset={jobOffset} total={outgoing.total} setOffset={setJobOffset} />
+      </section>}
     </div>
-  );
+  </div>;
 }

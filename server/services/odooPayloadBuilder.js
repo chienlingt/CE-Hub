@@ -7,6 +7,7 @@
 
 const prisma = require('../prismaClient');
 const { unitsFor } = require('./orderProductUnits');
+const { ODOO_LINE_MODEL, assertStoredLineIdentity } = require('./odooLineIdentity');
 
 // Every timestamp sent to Odoo uses Malaysia time (UTC+8) — matches the
 // contract documented in Section 1 of the reference doc ("ISO 8601 in
@@ -103,6 +104,7 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
   });
 
   if (!order) return null;
+  assertStoredLineIdentity(order.order_products, order.odoo_picking_id != null || order.order_products.some(item => item.odoo_line_id != null));
 
   const latestFailure = order.delivery_failure_events?.[0] || null;
   const crew = resolveCrew(order.time_slots);
@@ -129,6 +131,7 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     do_ref:                 order.odoo_order_ref || null,
     so_ref:                 order.odoo_sales_ref || null,
     doo_ready:              order.doo_ready ?? null,
+    order_line_model:       ODOO_LINE_MODEL,
     status:                 ceHubStatus,
     order_lines:            orderLines,
     ...(ceHubStatus === 'Delivered' && { is_partial: isPartial }),

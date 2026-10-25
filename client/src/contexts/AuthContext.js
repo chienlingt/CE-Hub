@@ -110,6 +110,8 @@ export function AuthProvider({ children }) {
       }
 
       // Login successful - now set up the session and fetch permissions
+      if (data.admin_session) sessionStorage.setItem('adminSession', JSON.stringify(data.admin_session));
+      else sessionStorage.removeItem('adminSession');
       await signIn(data.employee);
 
       return { success: true };
@@ -171,6 +173,10 @@ export function AuthProvider({ children }) {
 
   // Logout handler
   const logout = () => {
+    try {
+      const token = JSON.parse(sessionStorage.getItem('adminSession'))?.token;
+      if (token) fetch(`${REACT_APP_API_BASE_URL}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    } catch { /* no admin session */ }
     setCurrentUser(null);
     setEmployeeData(null);
     setPermissions([]);

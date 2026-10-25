@@ -127,6 +127,7 @@ app.use('/api/webhooks',      require('./routes/webhooks'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/driver',        require('./routes/driver'));
 app.use('/api/integration-outbox', require('./routes/integrationOutbox'));
+app.use('/api/odoo-change-requests', require('./routes/odooChangeRequests'));
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -205,11 +206,16 @@ app.listen(port, async () => {
     const { syncOrdersFromOdoo } = require('./services/odooSyncService');
     cron.schedule('0 17 * * *', () => {
       console.log('[OdooSync] Running daily 5PM sync check...');
-      syncOrdersFromOdoo();
+      syncOrdersFromOdoo().catch(() => console.error('[OdooSync] Failed to persist/start fallback run.'));
     }, { timezone: 'Asia/Kuala_Lumpur' });
     console.log('[OdooSync] Polling cron registered — daily at 5PM MYT.');
   }
 
+  {
+    const cron = require('node-cron');
+    const { retryDueSyncRuns } = require('./services/odooSyncService');
+    cron.schedule('* * * * *', () => { retryDueSyncRuns().catch(() => console.error('[OdooSync] Retry worker failed; durable jobs remain for recovery.')); }, { timezone: 'Asia/Kuala_Lumpur' });
+  }
   // A.3.2a: Integration outbox worker — flushes pending outbox rows every minute
   {
     const cron = require('node-cron');

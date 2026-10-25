@@ -4,6 +4,21 @@ const prisma  = require('../prismaClient');
 const { pushOrder, syncOrderPreparation } = require('../services/odooOrderIngestService');
 
 const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET;
+const { recordWebhook } = require('../services/odooSyncRunService');
+router.use((req, res, next) => {
+  if (req.method === 'POST' && WEBHOOK_SECRET && req.headers['x-odoo-secret'] === WEBHOOK_SECRET) {
+    const send = res.json.bind(res), started = new Date().toISOString();
+    res.json = body => {
+      recordWebhook(req, body, res.statusCode, started).catch(() => console.error('[OdooSync] Webhook audit could not be saved.'));
+      return send(body);
+    };
+  }
+  next();
+});
+
+// Import/update/readiness payloads require order_line_model: 'stock.move'.
+// Each order_lines[].order_line_id is a stock.move.id from this DO, not an SO
+// line or individual stock.move.line serial record. Cancellation has no lines.
 
 function verifySecret(req, res, next) {
   const provided = req.headers['x-odoo-secret'];
@@ -16,7 +31,7 @@ function verifySecret(req, res, next) {
 router.post('/odoo/order-readiness', verifySecret, async (req, res) => {
   try {
     const result = await syncOrderPreparation(req.body);
-    return res.status(result.success ? 200 : result.action === 'blocked' ? 409 : 400).json(result);
+    return res.status(result.success ? (result.action === 'pending_approval' ? 202 : 200) : result.action === 'blocked' ? 409 : 400).json(result);
   } catch (error) {
     console.error('[Odoo readiness]', error.message);
     return res.status(500).json({ error: 'Unable to synchronize DOO preparation. Please retry.' });
@@ -36,8 +51,8 @@ router.post('/odoo/order', verifySecret, async (req, res) => {
       return res.status(result.action === 'blocked' ? 409 : 400).json(result);
     }
 
-    console.log(`[Odoo Webhook] ${result.action === 'created' ? 'Created' : 'Updated'} ${name} → local id ${result.order_id}`);
-    return res.status(result.action === 'created' ? 201 : 200).json(result);
+    console.log(`[Odoo Webhook] ${result.action} ${name} → local id ${result.order_id}`);
+    return res.status(result.action === 'pending_approval' ? 202 : result.action === 'created' ? 201 : 200).json(result);
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order error:', err);
     return res.status(500).json({ error: 'Failed to process webhook', details: err.message });
@@ -69,7 +84,7 @@ router.post('/odoo/order-update', verifySecret, async (req, res) => {
     }
 
     console.log(`[Odoo order-update] ${odoo_order_ref} — lines: ${JSON.stringify(result.lines)}, addressChanged: ${result.address_changed}`);
-    return res.json(result);
+    return res.status(result.action === 'pending_approval' ? 202 : 200).json(result);
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order-update error:', err);
     return res.status(500).json({ error: 'Failed to update order', details: err.message });
