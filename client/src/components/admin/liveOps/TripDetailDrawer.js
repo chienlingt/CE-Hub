@@ -78,11 +78,11 @@ export default function TripDetailDrawer({ trip, loading, error, onClose, refres
         {/* Footer links */}
         <div className="flex items-center gap-3 px-5 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0">
           <button
-            onClick={() => navigate('/delivery')}
+            onClick={() => navigate('/schedule')}
             className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 transition-colors"
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            Delivery Schedule
+            Schedule
           </button>
           <span className="text-gray-300">|</span>
           <button

@@ -15,6 +15,38 @@ const roleValue = role => (role && typeof role === 'object' ? role.name || role.
 
 const REACT_APP_API_BASE_URL = getApiBaseUrl();
 
+// ---------------------------------------------------------------------------
+// Demo mode (stakeholder walkthrough build — see client/DEMO.md)
+//
+// REACT_APP_DEMO_AUTH=1 makes the app render with no backend at all: no
+// verify-session, no /api/roles, no login. It exists because every route is
+// behind ProtectedRoute -> Layout, and Layout's navigation is gated on
+// permissions fetched from /api/roles, so a mock-data build still needs the
+// server without this seam.
+//
+// Defaults OFF. A normal `npm run build` never takes these branches.
+// ---------------------------------------------------------------------------
+// Read per-call rather than at module scope so this stays unit-testable. CRA
+// inlines process.env.REACT_APP_* at build time either way.
+const isDemoAuth = () => process.env.REACT_APP_DEMO_AUTH === '1';
+
+// Must stay in sync with the keys of `navigationData` in components/Layout.js.
+// Layout also short-circuits on role === 'admin', so the role below is what
+// actually unlocks the nav; this list keeps hasPermission() honest too.
+const DEMO_PERMISSIONS = [
+  'dashboard', 'driver', 'schedule', 'info', 'cases',
+  'access', 'delivery', 'customer', 'scanning', 'settings',
+];
+
+const DEMO_EMPLOYEE = {
+  id: 'demo-admin',
+  EmployeeID: 'demo-admin',
+  name: 'Demo Admin',
+  email: 'demo@cehub.local',
+  active_flag: true,
+  role: { id: 'demo-role-admin', name: 'Admin', permissions: DEMO_PERMISSIONS },
+};
+
 /**
  * Fetch permissions for a given role from PostgreSQL API.
  * Tries to match by role ID or name.
@@ -171,6 +203,13 @@ export function AuthProvider({ children }) {
 
   // Logout handler
   const logout = () => {
+    // In the demo build there is no server to log back in against, so a real
+    // logout would dead-end at /login. Keep the button inert instead.
+    if (isDemoAuth()) {
+      console.warn('[AuthContext] logout ignored — demo build.');
+      return;
+    }
+
     setCurrentUser(null);
     setEmployeeData(null);
     setPermissions([]);
@@ -186,6 +225,37 @@ export function AuthProvider({ children }) {
 
     const restoreSession = async () => {
       setLoading(true);
+
+      // Demo build: resolve the session locally and return BEFORE any fetch.
+      // This must come first — verify-session failing would otherwise hit the
+      // catch below, call logout(), and bounce straight to /login.
+      if (isDemoAuth()) {
+        console.warn('[AuthContext] DEMO AUTH ACTIVE — authentication is bypassed.');
+        try {
+          sessionStorage.setItem('isAuthenticated', 'true');
+          sessionStorage.setItem('employeeData', JSON.stringify(DEMO_EMPLOYEE));
+          sessionStorage.setItem('employeeRole', DEMO_EMPLOYEE.role.name);
+          sessionStorage.setItem('employeeId', DEMO_EMPLOYEE.id);
+          sessionStorage.setItem('employeeName', DEMO_EMPLOYEE.name);
+          sessionStorage.setItem('employeeEmail', DEMO_EMPLOYEE.email);
+          sessionStorage.setItem('employeePermissions', JSON.stringify(DEMO_PERMISSIONS));
+        } catch (err) {
+          console.warn('[AuthContext] demo session persist failed', err);
+        }
+        if (!mounted) return;
+        setEmployeeData(DEMO_EMPLOYEE);
+        setCurrentUser({
+          email: DEMO_EMPLOYEE.email,
+          name: DEMO_EMPLOYEE.name,
+          role: DEMO_EMPLOYEE.role.name,
+          employeeId: DEMO_EMPLOYEE.id,
+        });
+        setPermissions(DEMO_PERMISSIONS);
+        setLoadingPermissions(false);
+        setLoading(false);
+        return;
+      }
+
       try {
         const storedData = sessionStorage.getItem('employeeData');
         const isAuth = sessionStorage.getItem('isAuthenticated');
