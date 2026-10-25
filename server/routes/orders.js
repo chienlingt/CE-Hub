@@ -255,20 +255,8 @@ async function estimateTravelMinutes(fromAddress, toAddress) {
   }
 }
 
-// POST /api/orders/sync-odoo — manually trigger Odoo sync (A1.4)
-// Optional query param: ?date=YYYY-MM-DD  overrides the default "tomorrow" target date
-router.post('/sync-odoo', async (req, res) => {
-  try {
-    const { syncOrdersFromOdoo } = require('../services/odooSyncService');
-    const targetDate = req.query.date || null;
-    const result = await syncOrdersFromOdoo(targetDate);
-    const status = ['blocked', 'busy'].includes(result.status) ? 409 : result.status === 'discovery_failed' ? 502 : 200;
-    res.status(status).json({ success: result.status === 'completed' && !result.audit_error, ...result });
-  } catch (err) {
-    console.error('POST /api/orders/sync-odoo error', err);
-    res.status(500).json({ error: 'Sync failed', details: err.message });
-  }
-});
+// Missing-DO fallback is automatic only: server/index.js runs it at 5 PM MYT.
+// No manual import HTTP endpoint is registered here.
 
 // GET /completed-deliveries — FR-04-004: admin view of completed delivery records
 router.get('/completed-deliveries', async (req, res) => {

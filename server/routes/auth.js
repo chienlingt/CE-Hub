@@ -5,13 +5,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('../prismaClient');
 const { sendPasswordResetEmail } = require('../services/emailService');
+const { issueAdminSession, revokeAdminSession } = require('../middleware/odooApprovalAuth');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
-  console.log(`🔐 Login attempt for email: ${email}`);
-  // TEMP DEBUG — remove after diagnosing ngrok/proxy login issue
-  console.log(`[DEBUG] raw req.body =`, JSON.stringify(req.body));
-  console.log(`[DEBUG] password length = ${password ? password.length : 'undefined'}, first char = ${password ? JSON.stringify(password[0]) : 'n/a'}, last char = ${password ? JSON.stringify(password[password.length - 1]) : 'n/a'}`);
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
@@ -48,7 +45,8 @@ router.post('/login', async (req, res) => {
 
     return res.json({
       success: true,
-      employee: employee,
+      employee: { ...employee, password: undefined },
+      admin_session: issueAdminSession(employee),
       message: 'Login successful'
     });
   } catch (err) {
@@ -56,6 +54,8 @@ router.post('/login', async (req, res) => {
     res.status(500).json({ error: 'Server error during login' });
   }
 });
+
+router.post('/logout', (req, res) => { revokeAdminSession(req); res.json({ success: true }); });
 
 // POST /api/auth/reset-request
 // Body: { email }
@@ -229,7 +229,7 @@ router.post('/verify-session', async (req, res) => {
 
     return res.json({
       success: true,
-      employee: employee
+      employee: { ...employee, password: undefined }
     });
   } catch (err) {
     console.error('POST /api/auth/verify-session error', err);

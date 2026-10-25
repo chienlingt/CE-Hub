@@ -18,6 +18,7 @@
 
 const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification } = require('./services/odooService');
 const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
+const { assertOutboundLineIdentity } = require('./services/odooLineIdentity');
 const {
   fetchPendingBatch,
   markProcessed,
@@ -74,6 +75,8 @@ async function handleOdoo(row) {
     throw new Error('Missing odooRef in payload');
   }
 
+  // Validate old queued line IDs before any external status/line write.
+  if (['Loaded', 'Arrived'].includes(status)) assertOutboundLineIdentity(payload);
   if (shouldUseWebhook(status)) {
     await sendOdooStatusWebhook(payload);
     console.log(`[OutboxWorker] Odoo webhook sync: ${odooRef} → ${status}`);
@@ -87,7 +90,7 @@ async function handleOdoo(row) {
   }
   await writeOdooExtendedFields(odooRef, payload);
   if (['Loaded', 'Arrived'].includes(status)) {
-    await writeOdooOrderLines(odooRef, payload.order_lines);
+    await writeOdooOrderLines(odooRef, payload.order_lines, payload.order_line_model);
   }
   console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}`);
 }
@@ -301,6 +304,7 @@ async function runOutboxWorker() {
     console.log(`[OutboxWorker] Processing ${rows.length} pending rows…`);
 
     for (const row of rows) {
+      if (row.payload?.preview_only || row.idempotency_key?.startsWith('sync_preview:') || (row.payload?.do_ref || row.payload?.odooRef || '').startsWith('SYNC-DEMO-')) continue;
       try {
         await dispatchRow(row);
         await markProcessed(row.id);

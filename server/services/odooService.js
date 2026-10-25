@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { loadFallbackPolicy, fallbackDomain } = require('./odooFallbackPolicy');
+const { ODOO_LINE_MODEL, assertOutboundLineIdentity } = require('./odooLineIdentity');
 
 const ODOO_URL      = process.env.ODOO_URL;
 const ODOO_DB       = process.env.ODOO_DB;
@@ -18,7 +19,7 @@ async function authenticate() {
   }, { timeout: 15000 });
 
   const uid = res.data?.result?.uid;
-  if (!uid) throw new Error(`Odoo auth failed: ${JSON.stringify(res.data?.error)}`);
+  if (!uid) throw Object.assign(new Error('Odoo authentication failed. Check credentials and access.'), { code: 'ODOO_AUTH_FAILED' });
 
   const cookieHeader = res.headers['set-cookie'] ?? [];
   const sessionId = cookieHeader.join(';').match(/session_id=([^;]+)/)?.[1];
@@ -53,7 +54,8 @@ async function callModel(model, method, args = [], kwargs = {}) {
   }
 
   if (res.data?.error) {
-    throw new Error(`Odoo RPC error: ${JSON.stringify(res.data.error)}`);
+    const temporary = /SerializationFailure|DeadlockDetected|LockNotAvailable/.test(res.data.error?.data?.name || '');
+    throw Object.assign(new Error('Odoo RPC failed. Check field mapping and access permissions.'), { code: temporary ? 'ODOO_TEMPORARY' : 'ODOO_RPC_REJECTED' });
   }
 
   return res.data?.result;
@@ -239,10 +241,10 @@ async function getOrderDetail(odooPickingId) {
     ? partners.find(p => p.id === salespersonPartnerId)
     : null;
 
-  // 5. Read stock.move for order lines — sale_line_id gives odoo_line_id directly
+  // 5. One Delivery Order line per stock.move; never group by Sales Order line.
   const moves = picking.move_ids?.length
     ? await callModel('stock.move', 'read', [picking.move_ids], {
-        fields: ['id', 'product_id', 'product_uom_qty', 'sale_line_id', ...(preparedField ? [preparedField] : [])],
+        fields: ['id', 'product_id', 'product_uom_qty', ...(preparedField ? [preparedField] : [])],
       })
     : [];
 
@@ -268,20 +270,19 @@ async function getOrderDetail(odooPickingId) {
   const trackingByProduct = new Map(productTracking.map(product => [product.id, product.tracking]));
   const preparedLines = new Map();
   for (const move of moves) {
-    const id = move.sale_line_id?.[0];
-    if (!id) throw new Error(`DOO ${picking.name}: stock move ${move.id} has no agreed order-line reference.`);
+    const id = move.id;
+    if (!Number.isInteger(id) || id <= 0 || !picking.move_ids.includes(id) || preparedLines.has(id)) throw new Error(`DOO ${picking.name}: invalid, repeated or unrelated stock.move.id.`);
     const tracking = trackingByProduct.get(move.product_id?.[0]);
     if (!['serial', 'none'].includes(tracking)) throw new Error(`DOO ${picking.name}: unsupported or unavailable product tracking for move ${move.id}.`);
-    if (!preparedLines.has(id)) preparedLines.set(id, { order_line_id: id, product_name: move.product_id?.[1], product_uom_qty: 0, prepared_quantity: preparedField ? 0 : null, tracking, serial_numbers: [] });
-    const line = preparedLines.get(id);
-    if (line.tracking !== tracking) throw new Error('Conflicting tracking modes for the same Odoo line.');
-    line.product_uom_qty += move.product_uom_qty;
-    if (preparedField) {
-      if (!Number.isInteger(move[preparedField])) throw new Error(`Invalid prepared quantity on Odoo move ${move.id}.`);
-      line.prepared_quantity += move[preparedField];
-    }
-    line.serial_numbers.push(...(serialByMove[move.id] || []));
+    if (preparedField && !Number.isInteger(move[preparedField])) throw new Error(`Invalid prepared quantity on Odoo move ${move.id}.`);
+    preparedLines.set(id, {
+      order_line_id: id, product_name: move.product_id?.[1],
+      product_uom_qty: move.product_uom_qty,
+      prepared_quantity: preparedField ? move[preparedField] : null,
+      tracking, serial_numbers: [...(serialByMove[id] || [])],
+    });
   }
+  if (preparedLines.size !== new Set(picking.move_ids || []).size) throw new Error(`DOO ${picking.name}: incomplete stock.move snapshot.`);
   if (readyField && typeof picking[readyField] !== 'boolean') throw new Error('Configured Odoo DOO Ready field must return a boolean.');
 
   // Strip HTML tags from sale.order note field
@@ -292,6 +293,7 @@ async function getOrderDetail(odooPickingId) {
 
   return {
     id:                      picking.id,
+    order_line_model:        ODOO_LINE_MODEL,
     doo_ready:               readyField ? picking[readyField] : false,
     name:                    picking.name,
     sales_order_name:        saleOrder?.name                                          || null,
@@ -358,8 +360,8 @@ async function writeOdooExtendedFields(odooOrderRef, payload) {
  * Deliberately NOT native stock.move.line writes (qty_done + lot_id per line).
  * That would be the "correct" Odoo-native target — it'd show up in Odoo's own
  * delivery UI instead of a hidden field — but it needs domain knowledge we
- * don't have from outside GCA's instance: matching move lines to CE Hub's
- * order_line_id requires stock.move.sale_line_id to be populated, and most
+ * don't have from outside GCA's instance: CE Hub's order_line_id is stock.move.id,
+ * and matching its native serial move lines still needs an agreed write contract. Some
  * Odoo versions require a stock.production.lot record to exist before a
  * serial can be assigned to a move line. Both are real ways for this write to
  * silently fail or attach data to the wrong line. A single JSON text field is
@@ -369,10 +371,11 @@ async function writeOdooExtendedFields(odooOrderRef, payload) {
  * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
  * @param {Array}  orderLines   - payload.order_lines from buildOdooEventPayload()
  */
-async function writeOdooOrderLines(odooOrderRef, orderLines) {
+async function writeOdooOrderLines(odooOrderRef, orderLines, orderLineModel) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
   if (process.env.ODOO_SEND_EXTENDED_FIELDS !== 'true') return null;
   if (!Array.isArray(orderLines) || orderLines.length === 0) return null;
+  assertOutboundLineIdentity({ order_line_model: orderLineModel, order_lines: orderLines });
 
   const pickings = await callModel('stock.picking', 'search_read',
     [[['name', '=', odooOrderRef]]],

@@ -3,10 +3,11 @@
 const { randomUUID } = require('crypto');
 const prisma = require('../prismaClient');
 const { loadFallbackPolicy, validateDate, tomorrowMalaysia } = require('./odooFallbackPolicy');
+const { classifyFailure } = require('./odooSyncRunService');
 
 let activeRun = null;
 
-async function syncOrdersFromOdoo(targetDate = null) {
+async function runFallbackAttempt(targetDate, { excludeIds = [], retryOrders = null, onProgress = null } = {}) {
   if (activeRun) return { status: 'busy', run_id: activeRun, synced: 0, skipped: 0, failed: 0, synced_dos: [], skipped_dos: [], failed_dos: [], error: 'A fallback run is already in progress.' };
   const result = { run_id: randomUUID(), date: null, status: 'completed', complete: false, candidates: 0,
     synced: 0, skipped: 0, failed: 0, synced_dos: [], skipped_dos: [], failed_dos: [], failures: [], skips: [] };
@@ -15,9 +16,9 @@ async function syncOrdersFromOdoo(targetDate = null) {
     result.skipped_dos.push(order.name);
     result.skips.push({ picking_id: order.id, do_ref: order.name, reason });
   };
-  const fail = (order, stage, code, message) => {
+  const fail = (order, stage, code, message, retryable = false) => {
     result.failed_dos.push(order.name || 'picking:' + order.id);
-    result.failures.push({ picking_id: order.id, do_ref: order.name || null, stage, code, message });
+    result.failures.push({ picking_id: order.id, do_ref: order.name || null, stage, code, message, retryable });
   };
   try {
     result.date = validateDate(targetDate || tomorrowMalaysia());
@@ -27,7 +28,9 @@ async function syncOrdersFromOdoo(targetDate = null) {
     result.policy = policy;
     const { iterateOrdersForDeliveryDate, getOrderDetail, isOrderEligibleForDeliveryDate } = require('./odooService');
     const { pushOrder } = require('./odooOrderIngestService');
-    for await (const order of iterateOrdersForDeliveryDate(result.date, policy)) {
+    const excluded = new Set(excludeIds);
+    for await (const order of retryOrders || iterateOrdersForDeliveryDate(result.date, policy)) {
+      if (excluded.has(order.id)) continue;
       result.candidates++;
       let stage = 'lookup';
       try {
@@ -57,13 +60,17 @@ async function syncOrdersFromOdoo(targetDate = null) {
         else if (imported.success && imported.action === 'skipped') skip(order, 'already_exists');
         else fail(order, stage, imported.code || 'IMPORT_REJECTED', imported.error || 'DOO import was not accepted.');
       } catch (error) {
-        fail(order, stage, 'DOO_PROCESSING_FAILED', 'Unable to process this DOO; correct the data or retry fallback.');
+        const failure = classifyFailure(error);
+        fail(order, stage, failure.code, failure.message, failure.retryable);
         console.warn('[OdooSync] DOO failed; continuing:', order.name || order.id, 'stage:', stage);
+      } finally {
+        if (onProgress) await onProgress(result);
       }
     }
     result.complete = true;
     if (result.failures.length) result.status = 'partial_failure';
   } catch (error) {
+    result.discovery_error = classifyFailure(error);
     result.status = error.code === 'FALLBACK_POLICY_NOT_CONFIGURED' ? 'blocked' : 'discovery_failed';
     result.error = error.code === 'FALLBACK_POLICY_NOT_CONFIGURED' ? error.message
       : 'Unable to finish Odoo discovery. Previously imported DOOs are preserved; retry fallback.';
@@ -88,4 +95,8 @@ async function syncOrdersFromOdoo(targetDate = null) {
   return result;
 }
 
-module.exports = { syncOrdersFromOdoo };
+module.exports = {
+  runFallbackAttempt,
+  syncOrdersFromOdoo: (...args) => require('./odooFallbackRunner').syncOrdersFromOdoo(...args),
+  retryDueSyncRuns: () => require('./odooFallbackRunner').retryDueSyncRuns(),
+};

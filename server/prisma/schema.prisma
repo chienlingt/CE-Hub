@@ -198,6 +198,8 @@ model order_products {
   unloaded_by                  String?   @db.Uuid
   unloaded_serial              String?
   odoo_line_id                 Int?
+  // stock.move for new DO lines; null marks legacy/unknown IDs for reconciliation.
+  odoo_line_model              String?   @db.VarChar(30)
   odoo_product_name            String?   @db.VarChar(255)
   orders                       orders    @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products                     products? @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -502,4 +504,44 @@ model integration_outbox {
   last_error      String?
   created_at      DateTime  @default(now()) @db.Timestamp(6)
   processed_at    DateTime? @db.Timestamp(6)
+}
+
+// Immutable incoming request + decision history. Keep it even if the DO is deleted.
+model odoo_sync_runs {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_key       String   @unique
+  source        String
+  target_date   String?
+  status        String   @default("queued")
+  attempts      Int      @default(0)
+  next_retry_at DateTime? @db.Timestamp(6)
+  lease_until   DateTime? @db.Timestamp(6)
+  report        Json
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+  updated_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([status, next_retry_at])
+  @@index([created_at])
+}
+
+model odoo_change_requests {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id            String    @db.Uuid
+  do_ref              String
+  request_kind        String    @db.VarChar(20)
+  request_key         String    @unique @db.VarChar(64)
+  payload             Json
+  before_snapshot     Json
+  baseline_hash       String    @db.VarChar(64)
+  changes             Json
+  status              String    @default("pending") @db.VarChar(20)
+  reviewed_by         String?   @db.Uuid
+  reviewed_by_name    String?
+  review_note         String?
+  reviewed_at         DateTime? @db.Timestamp(6)
+  applied_snapshot    Json?
+  created_at          DateTime  @default(now()) @db.Timestamp(6)
+
+  @@index([status, created_at])
+  @@index([order_id])
 }

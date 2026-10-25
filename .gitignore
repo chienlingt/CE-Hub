@@ -59,3 +59,6 @@ graphify-out
 # Local Odoo integration notes
 /server/ODOO_PREPARATION_CONTRACT.md
 /server/ODOO_FALLBACK_CONTRACT.md
+
+# Local Sync Monitor preview seed
+/server/seedSyncMonitor.js

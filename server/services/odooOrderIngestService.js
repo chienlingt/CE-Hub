@@ -1,16 +1,17 @@
 // server/services/odooOrderIngestService.js
 //
-// Shared create-or-update logic for ingesting an Odoo sale.order into CE Hub.
-// Used by: the single-order push webhook, the bulk push webhook, and the
-// 5PM next-day fallback sync — so all three entry points behave identically.
+// Shared create-or-update logic for an Odoo stock.picking and its stock.move
+// lines. Used by order webhooks and the 5PM next-day fallback sync.
 
 const prisma = require('../prismaClient');
 const { extractBuildingName } = require('../utils/addressParser');
 const { normalizePreparation, mergePreparationUnits, preparationError } = require('./odooPreparation');
 const { unitsFor, summarizeUnits } = require('./orderProductUnits');
 const { recordPickedMilestone } = require('./odooProgressService');
+const { assertIncomingLineIdentity, assertStoredLineIdentity } = require('./odooLineIdentity');
+const { saveChangeRequest, approvalBlockers } = require('./odooChangeReviewService');
 
-const IN_MOTION_STATUSES = ['Scheduled', 'Delivering', 'Delivered', 'Cancelled'];
+const IN_MOTION_STATUSES = ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Installing', 'Delivered', 'Failed', 'Cancelled', 'Completed'];
 
 async function resolveBuilding(address, zip, fallbackName = '', db = prisma) {
   const buildingName = extractBuildingName(address || fallbackName || '') || 'Unknown';
@@ -34,12 +35,12 @@ async function resolveBuilding(address, zip, fallbackName = '', db = prisma) {
 
 /**
  * Diff an order's existing order_products against a fresh set of Odoo order
- * lines. Lines are matched by odoo_line_id (Odoo sale.order.line ID).
- * Lines removed from Odoo are deleted UNLESS the item already has progress
- * (loaded/unloaded) — those are kept and logged, never silently destroyed.
+ * lines. Match odoo_line_id within this DO using stock.move.id only.
+ * Reject unknown/legacy models and removing lines with scan progress.
  */
 async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null, db = prisma, ready = false) {
   const existing = await db.order_products.findMany({ where: { order_id: orderId } });
+  assertStoredLineIdentity(existing, true);
   const incoming = normalizePreparation(newLines, ready);
   await assertNoSerialConflicts(db, incoming, orderId);
   const ids = new Set(incoming.map(line => line.odoo_line_id));
@@ -65,7 +66,7 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null, db =
  * Returns a result object; never throws for expected business conditions
  * (missing ref, order already in motion) — only throws on unexpected DB errors.
  */
-async function ingestOrder(payload, db, { createOnly = false } = {}) {
+async function ingestOrder(payload, db, { createOnly = false, approvedChange = false } = {}) {
   const {
     name: odoo_order_ref,
     sales_order_name: odoo_sales_ref,
@@ -83,7 +84,9 @@ async function ingestOrder(payload, db, { createOnly = false } = {}) {
     return { success: false, error: 'Payload must include name (order reference)' };
   }
 
-  const existing = await db.orders.findFirst({ where: { odoo_order_ref } });
+  assertIncomingLineIdentity(payload);
+
+  const existing = await db.orders.findFirst({ where: { odoo_order_ref }, ...(approvedChange ? { include: { order_products: true, customers: true } } : {}) });
   if (existing && createOnly) return { success: true, action: 'skipped', reason: 'already_exists', order_id: existing.id };
   if (!Number.isInteger(payload.id) || payload.id <= 0) throw preparationError('A positive Odoo stock.picking id is required.');
   if (payload.doo_ready !== undefined && typeof payload.doo_ready !== 'boolean') throw preparationError('doo_ready must be a boolean.');
@@ -92,10 +95,15 @@ async function ingestOrder(payload, db, { createOnly = false } = {}) {
   const preparation = normalizePreparation(order_lines, ready);
 
   if (existing) {
-    if (IN_MOTION_STATUSES.includes(existing.order_status)) {
+    if (approvedChange) {
+      const blockers = approvalBlockers(existing, payload, 'order');
+      if (blockers.length) throw preparationError(blockers.join(' '), 'RECONCILIATION_REQUIRED', 409);
+    }
+    if (!approvedChange && IN_MOTION_STATUSES.includes(existing.order_status)) {
       return {
         success:      false,
         action:       'blocked',
+        code:         'ORDER_PROTECTED',
         order_id:     existing.id,
         order_status: existing.order_status,
         error:        `Cannot update — order is already ${existing.order_status}. Admin must intervene manually.`,
@@ -116,10 +124,12 @@ async function ingestOrder(payload, db, { createOnly = false } = {}) {
     if (salesperson_phone)   changes.salesperson_phone = salesperson_phone;
 
     if (addressChanged) {
-      changes.remarks_delivery_address = null;
-      changes.remarks_contact_phone    = null;
-      changes.remarks_contact_name     = null;
-      changes.remarks_driver_notes     = null;
+      if (!approvedChange) {
+        changes.remarks_delivery_address = null;
+        changes.remarks_contact_phone    = null;
+        changes.remarks_contact_name     = null;
+        changes.remarks_driver_notes     = null;
+      }
       const building = await resolveBuilding(delivery_address, delivery_zip, '', db);
       changes.building_id = building.id;
     }
@@ -222,17 +232,29 @@ async function assertNoSerialConflicts(db, lines, orderId = null) {
   }
 }
 
-const pushOrder = (payload, options) => withPreparationLock(tx => ingestOrder(payload, tx, options));
+async function submitForImportOrReview(payload, kind, work) {
+  const result = await withPreparationLock(work);
+  if (result.action !== 'blocked' || !['ORDER_PROTECTED', 'PREPARATION_LOCKED', 'ODOO_LINE_MIGRATION_REQUIRED'].includes(result.code)) return result;
+  try { return await saveChangeRequest(payload, kind); }
+  catch (error) {
+    if (error.status) return { success: false, action: error.status === 409 ? 'blocked' : 'invalid', error: error.message, code: error.code };
+    throw error;
+  }
+}
+// Never take approval flags from a webhook body/options. The internal apply
+// function below is called only after verified-admin review and stale checks.
+const pushOrder = (payload, options = {}) => submitForImportOrReview(payload, 'order', tx => ingestOrder(payload, tx, { createOnly: options.createOnly === true }));
 
 // Separate from appointment/order edits: a full, authoritative preparation snapshot.
 // Scheduled DOOs can receive their warehouse preparation without being rescheduled.
 async function syncOrderPreparation(payload) {
-  return withPreparationLock(async tx => {
+  return submitForImportOrReview(payload, 'preparation', async tx => {
+    assertIncomingLineIdentity(payload);
     if (!payload?.name || !Number.isInteger(payload.id) || payload.id <= 0 || typeof payload.doo_ready !== 'boolean') throw preparationError('id, name and boolean doo_ready are required.');
     const order = await tx.orders.findFirst({ where: { odoo_order_ref: payload.name } });
     if (!order) throw preparationError('DOO must be imported before preparation can be synchronized.', 'ORDER_NOT_FOUND');
     if (order.odoo_picking_id != null && order.odoo_picking_id !== payload.id) throw preparationError('DO reference does not match its Odoo picking id.', 'ODOO_REFERENCE_MISMATCH', 409);
-    if (['Delivering', 'In Progress', 'Delivered', 'Failed', 'Cancelled', 'Completed'].includes(order.order_status)) throw preparationError('Preparation cannot change after departure or a terminal outcome.', 'PREPARATION_LOCKED', 409);
+    if (['Delivering', 'In Progress', 'Installing', 'Delivered', 'Failed', 'Cancelled', 'Completed'].includes(order.order_status)) throw preparationError('Preparation cannot change after departure or a terminal outcome.', 'PREPARATION_LOCKED', 409);
     const current = await tx.order_products.findMany({ where: { order_id: order.id } });
     if (order.doo_ready !== payload.doo_ready && current.some(line => unitsFor(line).some(unit => unit.handling_status !== 'pending'))) throw preparationError('Reset scans before changing DOO Ready.', 'PREPARATION_LOCKED', 409);
     const result = await mergeOrderLines(order.id, payload.order_lines, payload.name, tx, payload.doo_ready);
@@ -241,4 +263,22 @@ async function syncOrderPreparation(payload) {
   });
 }
 
-module.exports = { pushOrder, syncOrderPreparation, mergeOrderLines, resolveBuilding };
+async function applyApprovedChange(payload, kind, tx) {
+  if (kind === 'order') {
+    const result = await ingestOrder(payload, tx, { approvedChange: true });
+    if (!result.success) throw preparationError(result.error || 'Unable to apply approved change.', result.code, 409);
+    await recordPickedMilestone(tx, result.order_id);
+    return result;
+  }
+  if (kind !== 'preparation') throw preparationError('Invalid request kind.');
+  const order = await tx.orders.findFirst({ where: { odoo_order_ref: payload.name }, include: { order_products: true, customers: true } });
+  if (!order) throw preparationError('Order not found.', 'ORDER_NOT_FOUND', 404);
+  const blockers = approvalBlockers(order, payload, kind);
+  if (blockers.length) throw preparationError(blockers.join(' '), 'RECONCILIATION_REQUIRED', 409);
+  await mergeOrderLines(order.id, payload.order_lines, payload.name, tx, payload.doo_ready);
+  await tx.orders.update({ where: { id: order.id }, data: { doo_ready: payload.doo_ready, odoo_picking_id: payload.id, updated_at: new Date() } });
+  await recordPickedMilestone(tx, order.id);
+  return { success: true, order_id: order.id };
+}
+
+module.exports = { pushOrder, syncOrderPreparation, mergeOrderLines, resolveBuilding, applyApprovedChange };

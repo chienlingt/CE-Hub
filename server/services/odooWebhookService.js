@@ -17,6 +17,7 @@
 // from) — one payload shape, two transports, no duplicate payload logic.
 
 const axios = require('axios');
+const { assertOutboundLineIdentity } = require('./odooLineIdentity');
 
 // Statuses this transport is allowed to handle. Anything else must use RPC.
 const WEBHOOK_STATUSES = ['Loaded', 'Arrived'];
@@ -42,6 +43,7 @@ function shouldUseWebhook(status) {
  *         catches this and schedules a retry, same as an RPC failure would.
  */
 async function sendOdooStatusWebhook(payload) {
+  assertOutboundLineIdentity(payload);
   if (!payload?.do_ref) {
     throw new Error('Payload missing do_ref — cannot address the DO in Odoo');
   }
