@@ -26,6 +26,8 @@ import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUr
 const mockNavItems = [
   { key: 'dashboard', name: 'Dashboard', description: 'Main dashboard overview', icon: '📊' },
   { key: 'schedule', name: 'Schedule', description: 'Schedule management and delivery planning', icon: '📅' },
+  // Not a page: without it the Schedule board is view-only (e.g. salespeople).
+  { key: 'schedule_edit', name: 'Schedule — edit', description: 'Drag, approve, reject and move DOs on the Schedule board', icon: '✏️' },
   { key: 'info', name: 'Information', description: 'Employee, team, and building data', icon: '📦' },
   { key: 'cases', name: 'Exceptions', description: 'Failed deliveries, driver escalations, and sync health', icon: '📈' },
   { key: 'access', name: 'Access Control', description: 'Role and permission management', icon: '🛡️' },

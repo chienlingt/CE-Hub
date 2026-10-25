@@ -63,6 +63,10 @@ async function apiFetch(path, options = {}) {
   return res.text();
 }
 
+// Exported so other service modules can reuse the auth-token and
+// ngrok-header handling above instead of duplicating it.
+export { apiFetch };
+
 // ========== GENERIC HELPERS ==========
 
 async function getAllDocs(collectionName, options = {}) {
