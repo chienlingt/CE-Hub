@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-
 import { useAuth } from '../contexts/AuthContext';
 import {
   Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle, Truck, Scan,
-  Shield
+  Shield, Boxes
 } from 'lucide-react';
 import ProfileModal from './common/ProfileModal';
 import NotificationBell from './common/NotificationBell';
@@ -33,6 +33,9 @@ import ReportIssue from './employee/ReportIssue';
 import IssueManagement from './admin/exceptions/IssueManagement';
 import ComplaintManagement from './admin/ComplaintManagement';
 import Schedule from './admin/schedule/Schedule';
+import ScheduleWorkspace from './admin/schedule/ScheduleWorkspace';
+import ScheduleApproval from './admin/schedule/ScheduleApproval';
+import SchedulerSettings from './admin/schedule/SchedulerSettings';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
 import RoleAccessControl from './admin/access/accessControl';
@@ -107,8 +110,16 @@ const Layout = () => {
       icon: Calendar,
       route: '/schedule',
       topNavItems: [
-        { id: 'schedule', label: 'Schedule', path: '', component: Schedule },
-        { id: 'auto-scheduler', label: 'Auto Scheduler', path: 'auto-scheduler', component: AutoScheduleReview },
+        { id: 'schedule',       label: 'Schedule',   path: '',          component: ScheduleWorkspace },
+        { id: 'approval',       label: 'Approval',   path: 'approval',  component: ScheduleApproval  },
+        { id: 'settings',       label: 'Settings',   path: 'settings',  component: SchedulerSettings },
+        // Still holds the warehouse address / cron / enabled fields on
+        // scheduler_config, which SchedulerSettings does not cover yet.
+        { id: 'auto-scheduler', label: 'Engine',     path: 'engine',    component: AutoScheduleReview },
+        // The old board, kept reachable through the stakeholder walkthrough so
+        // there is a fallback and a side-by-side comparison. Delete once the
+        // new workspace has run live for a working day.
+        { id: 'legacy',         label: 'Old board',  path: 'legacy',    component: Schedule },
       ],
     },
     info: {
@@ -137,14 +148,6 @@ const Layout = () => {
         { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
     },
-    access: {
-      title: 'Access Control',
-      icon: Shield,
-      route: '/access',
-      topNavItems: [
-        { id: 'access', label: 'Access Control', path: '', component: RoleAccessControl },
-      ],
-    },
     delivery: {
       title: 'Delivery Schedule',
       icon: Users,
@@ -162,10 +165,10 @@ const Layout = () => {
     //     { id: 'installation', label: 'Installation Schedule', path: '', component: InstallationSchedule },
     //   ],
     // },
-    customer: {
+    order: {
       title: 'Order Management',
-      icon: Users,
-      route: '/customer',
+      icon: Boxes,
+      route: '/order',
       topNavItems: [
         { id: 'place-order',   label: 'Place Order',    path: '',               component: PlaceOrder },
         { id: 'manage-orders', label: 'Manage Orders',  path: 'manage-orders',  component: ManageOrders },
@@ -179,6 +182,14 @@ const Layout = () => {
         { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
+      ],
+    },
+    access: {
+      title: 'Access Control',
+      icon: Shield,
+      route: '/access',
+      topNavItems: [
+        { id: 'access', label: 'Access Control', path: '', component: RoleAccessControl },
       ],
     },
     settings: {
@@ -473,8 +484,8 @@ const Layout = () => {
           {/* Top Tabs */}
           {showTopTabs && (
             <div className="max-w-7xl px-4 sm:px-6 lg:px-8 mt-2">
-              <div className="border-b border-gray-200 overflow-x-auto scrollbar-hide">
-                <nav className="-mb-px flex space-x-8 min-w-max">
+              <div className="border-b border-gray-200">
+                <nav className="-mb-px flex flex-wrap space-x-8">
                   {currentSection.topNavItems.filter(tab => {
                     if (!tab.allowedRoles) return true;
                     const rawRole = typeof employeeData?.role === 'object'
