@@ -12,8 +12,7 @@
     "seed:viva": "node seedDemoViva.js",
     "seed:a6": "node seedA6FailureDemo.js",
     "seed:loading": "node seedLoadingDemo.js",
-    "seed:demo": "node seedDemo.js",
-    "seed:scheduler": "node seedSchedulerDemo.js"
+    "seed:demo": "node seedDemo.js"
   },
   "keywords": [],
   "author": "",

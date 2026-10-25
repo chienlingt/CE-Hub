@@ -1,11 +1,10 @@
 import React from 'react';
 
-// `zIndex` lets a modal open on top of a SlideOver drawer (z-50).
-export default function Modal({ show, onClose, children, maxWidth = 'max-w-lg', zIndex = 'z-40' }) {
+export default function Modal({ show, onClose, children, maxWidth = 'max-w-lg' }) {
     if (!show) return null;
 
     return (
-        <div className={`fixed inset-0 ${zIndex} flex items-center justify-center bg-black bg-opacity-40`}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-40">
             <div
                 className={`bg-white rounded-lg shadow-lg p-6 w-full ${maxWidth} relative max-h-[90vh] overflow-y-auto`}
                 tabIndex={-1}

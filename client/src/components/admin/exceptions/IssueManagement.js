@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../../contexts/AuthContext';
 import { API_BASE_URL as API_BASE } from '../../../utils/apiBaseUrl';
 import { formatDate } from './shared/formatters';
@@ -76,6 +76,7 @@ function SortTh({ children, field, sort, onSort, className = '' }) {
 
 // ── Case Detail Modal ─────────────────────────────────────────────────────────
 function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
+  const navigate    = useNavigate();
   const { employeeData } = useAuth();
   const [items,     setItems]     = useState(order.order_products || []);
   const [resolving, setResolving] = useState(false);
@@ -140,6 +141,17 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
     const clean = customer.phone.replace(/[\s\-+()]/g, '');
     const wa = clean.startsWith('60') ? clean : clean.startsWith('0') ? '60' + clean.slice(1) : '60' + clean;
     window.open(`https://api.whatsapp.com/send/?phone=${wa}&type=phone_number&app_absent=0`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleReschedule = () => {
+    navigate('/customer/', {
+      state: {
+        reschedule:    true,
+        customerId:    order.customer_id,
+        productIds:    failedItems.map(i => i.product_id),
+        sourceOrderId: order.id,
+      },
+    });
   };
 
   const deliveredCount = items.filter(i => i.item_delivery_status === 'delivered').length;
@@ -328,6 +340,16 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
                 >
                   <MessageCircle size={14} />
                   WhatsApp
+                </button>
+              )}
+
+              {failedItems.length > 0 && (
+                <button
+                  onClick={handleReschedule}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 sm:py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors"
+                >
+                  <CalendarPlus size={14} />
+                  Reschedule
                 </button>
               )}
 

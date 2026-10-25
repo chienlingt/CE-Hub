@@ -434,7 +434,7 @@ export default function AutoScheduleReview() {
                         Assign in Schedule
                       </button>
                       <button
-                        onClick={() => navigate('/order/manage-orders')}
+                        onClick={() => navigate('/customer/manage-orders')}
                         className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-md hover:bg-gray-100 text-sm font-medium"
                       >
                         Edit Order

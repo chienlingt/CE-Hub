@@ -1,5 +1,5 @@
 // Shared slot status badge helpers.
-// Extracted from the former DelSchedule.js and truckSchedule.js to avoid duplication.
+// Extracted from DelSchedule.js and truckSchedule.js to avoid duplication.
 
 /**
  * Returns Tailwind classes for the slot status badge background/text.

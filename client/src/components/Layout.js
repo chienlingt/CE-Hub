@@ -40,7 +40,9 @@ import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
 import RoleAccessControl from './admin/access/accessControl';
 import AutoScheduleReview from './admin/schedule/AutoScheduleReview';
+import DeliverySchedule from './delivery/DelSchedule';
 import InstallationSchedule from './installer/InsSchedule';
+import PlaceOrder from './order/PlaceOrder';
 import ManageOrders from './order/ManageOrders';
 import DriverDashboard from './driver/DriverDashboard';
 import DriverDeliveryDetail from './driver/DriverDeliveryDetail';
@@ -146,6 +148,14 @@ const Layout = () => {
         { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
     },
+    delivery: {
+      title: 'Delivery Schedule',
+      icon: Users,
+      route: '/delivery',
+      topNavItems: [
+        { id: 'delivery', label: 'Delivery Schedule', path: '', component: DeliverySchedule },
+      ],
+    },
     // Hidden from sidebar — kept for easy re-enable.
     // installation: {
     //   title: 'Installation Schedule',
@@ -160,6 +170,7 @@ const Layout = () => {
       icon: Boxes,
       route: '/order',
       topNavItems: [
+        { id: 'place-order',   label: 'Place Order',    path: '',               component: PlaceOrder },
         { id: 'manage-orders', label: 'Manage Orders',  path: 'manage-orders',  component: ManageOrders },
       ],
     },

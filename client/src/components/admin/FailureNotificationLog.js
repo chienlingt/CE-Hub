@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, RefreshCw, CheckCircle, Clock, User, MapPin,
   MessageSquare, MessageCircle, Package, ChevronDown, ChevronUp,
-  Send, X
+  CalendarPlus, Send, X
 } from 'lucide-react';
 
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
@@ -50,6 +50,7 @@ function ItemStatusBadge({ status }) {
 
 // ── Case Detail Panel ────────────────────────────────────────────────────────
 function CaseDetail({ order, onClose, onResolved, highlightId }) {
+  const navigate = useNavigate();
   const [items,          setItems]          = useState(order.order_products || []);
   const [resolving,      setResolving]      = useState(false);
   const [updatingItem,   setUpdatingItem]   = useState(null);
@@ -97,6 +98,19 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
     } finally {
       setResolving(false);
     }
+  };
+
+  // Reschedule — navigate to Place Order with failed items pre-filled
+  const handleReschedule = () => {
+    const failedProductIds = failedItems.map(i => i.product_id);
+    navigate('/customer/', {
+      state: {
+        reschedule: true,
+        customerId: order.customer_id,
+        productIds: failedProductIds,
+        sourceOrderId: order.id,
+      },
+    });
   };
 
   return (
@@ -228,6 +242,17 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
           {/* Action buttons */}
           {!isResolved && (
             <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-100">
+
+              {/* Reschedule */}
+              {failedItems.length > 0 && (
+                <button
+                  onClick={handleReschedule}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition-colors"
+                >
+                  <CalendarPlus size={15} />
+                  Reschedule Failed Items ({failedItems.length})
+                </button>
+              )}
 
               {/* Resolve */}
               <button
