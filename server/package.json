@@ -13,7 +13,8 @@
     "seed:a6": "node seedA6FailureDemo.js",
     "seed:loading": "node seedLoadingDemo.js",
     "seed:demo": "node seedDemo.js",
-    "seed:sync-monitor": "node seedSyncMonitor.js"
+    "seed:sync-monitor": "node seedSyncMonitor.js",
+    "seed:scheduler": "node seedSchedulerDemo.js"
   },
   "keywords": [],
   "author": "",

@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, CheckCircle, AlertCircle } from 'lucide-react';
+import { buttonClassNames as sharedButtonClassNames } from './Button';
 
 const typeStyles = {
   success: {
@@ -16,18 +17,10 @@ const typeStyles = {
   },
 };
 
-const buttonClassNames = (variant = 'primary') => {
-  switch (variant) {
-    case 'success':
-      return 'w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors';
-    case 'destructive':
-      return 'w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition-colors';
-    case 'secondary':
-      return 'w-full border border-gray-200 text-gray-700 py-3 rounded-lg hover:bg-gray-50 transition-colors';
-    default:
-      return 'w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors';
-  }
-};
+// Promoted to components/common/Button.js so the dispatch board's ~40 buttons
+// share one definition rather than a second that drifts from this one.
+const buttonClassNames = (variant = 'primary') =>
+  `${sharedButtonClassNames(variant, 'lg', true)} rounded-lg`;
 
 export default function ResultModal({
   open,
