@@ -205,6 +205,13 @@ export function AuthProvider({ children }) {
 
   // Logout handler
   const logout = () => {
+    // In the demo build there is no server to log back in against, so a real
+    // logout would dead-end at /login. Keep the button inert instead.
+    if (isDemoAuth()) {
+      console.warn('[AuthContext] logout ignored — demo build.');
+      return;
+    }
+
     try {
       const token = JSON.parse(sessionStorage.getItem('adminSession'))?.token;
       if (token) fetch(`${REACT_APP_API_BASE_URL}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
