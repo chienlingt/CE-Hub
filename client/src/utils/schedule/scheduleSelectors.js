@@ -314,7 +314,8 @@ export function selectDropVerdict(state, orderId, slotId, cache = {}) {
 
 /**
  * A DO block's state on the Board — its colour and whether it may be dragged.
- * Only unapproved DOs move; approval is a separate, deliberate step.
+ * Unapproved and confirmed DOs move (a confirmed one drops back to pending);
+ * approval is a separate, deliberate step.
  * @returns {'pending'|'confirmed'|'locked'|'done'|'rejected'|'unscheduled'}
  */
 export function doBlockState(order, { slotLocked = false } = {}) {
@@ -326,7 +327,7 @@ export function doBlockState(order, { slotLocked = false } = {}) {
   return 'pending';
 }
 
-const DRAGGABLE_STATES = ['pending', 'rejected', 'unscheduled'];
+const DRAGGABLE_STATES = ['pending', 'confirmed', 'rejected', 'unscheduled'];
 export const isDraggableBlockState = (blockState) => DRAGGABLE_STATES.includes(blockState);
 
 function doBlock(state, order, { slotLocked = false, past = false, slotDateKey = null } = {}) {
@@ -444,6 +445,8 @@ export function selectBoardMatrix(state, dateKey, cache = {}) {
         reason,
         droppable,
         windowFull: totalOf[windowId].full,
+        windowName: windowLabel(windowId),
+        windowCap: totalOf[windowId].doCap,
         blocks,
         pendingIds,
       };

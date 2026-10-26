@@ -67,6 +67,19 @@ function ApprovalQueueInner() {
     }
   }, [actions]);
 
+  const handleUndo = useCallback(async (orderIds) => {
+    setBusy(true);
+    const res = await actions.unapproveOrders(orderIds);
+    setBusy(false);
+    setResult(res.rejected.length
+      ? { type: 'error', title: 'Could not undo approval', message: res.rejected.map(r => r.message).join(' ') }
+      : {
+        type: 'info',
+        title: 'Approval undone',
+        message: `${res.applied.length} order(s) returned to awaiting approval.`,
+      });
+  }, [actions]);
+
   const handleReject = useCallback(async (reason) => {
     if (!rejectTarget) return;
     setBusy(true);
@@ -162,6 +175,7 @@ function ApprovalQueueInner() {
                     config={state.config}
                     busy={busy}
                     onApprove={handleApprove}
+                    onUndo={handleUndo}
                     onReject={(orderIds) => setRejectTarget({ orderIds, lane })}
                   />
                 ))}

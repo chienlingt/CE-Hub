@@ -16,6 +16,10 @@ export const BoardContext = createContext({
   dragActive: false,
   // Salespeople view; only `schedule_edit` may drag, approve, reject or move.
   canEdit: true,
+  // Per-DO ✓ / ✗ on pending blocks; ✗ asks for a reason first.
+  approveOrder: () => {},
+  requestReject: () => {},
+  busy: false,
 });
 
 export const useBoard = () => useContext(BoardContext);

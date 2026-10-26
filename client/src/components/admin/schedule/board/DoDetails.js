@@ -1,5 +1,6 @@
 import React from 'react';
 import { Phone, AlertTriangle } from 'lucide-react';
+import BlockGlyph from './BlockGlyph';
 import { blockMeta } from './boardStates';
 import { weekdayLabel, shortDateLabel } from '../../../../utils/schedule/weekRange';
 
@@ -22,7 +23,7 @@ export default function DoDetails({ detail, pinned = false }) {
       <div className="flex items-start justify-between gap-2">
         <span className="font-mono text-sm font-semibold text-gray-900">{order.doNo}</span>
         <span className="whitespace-nowrap text-[11px] font-medium text-gray-600">
-          <span aria-hidden="true">{meta.glyph}</span> {meta.label}
+          <span aria-hidden="true"><BlockGlyph state={detail.blockState} glyph={meta.glyph} /></span> {meta.label}
         </span>
       </div>
 

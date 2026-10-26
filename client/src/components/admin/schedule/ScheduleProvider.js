@@ -138,12 +138,26 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
       return slot.id;
     },
 
+    /** Advisory only: asks the gateway, touches no state. */
+    recommendSlots: (input) => gateway.recommendSlots(input),
+
     approveOrders: async (orderIds) => {
       const result = await gateway.approveOrders(orderIds);
       if (result.applied.length) {
         dispatch({
           type: ACTIONS.SET_APPROVAL,
           payload: { orderIds: result.applied, assignmentStatus: 'approved' },
+        });
+      }
+      return result;
+    },
+
+    unapproveOrders: async (orderIds) => {
+      const result = await gateway.unapproveOrders(orderIds);
+      if (result.applied.length) {
+        dispatch({
+          type: ACTIONS.SET_APPROVAL,
+          payload: { orderIds: result.applied, assignmentStatus: 'assigned' },
         });
       }
       return result;

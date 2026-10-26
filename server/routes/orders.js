@@ -1003,6 +1003,7 @@ router.patch('/:id', async (req, res) => {
           scheduled_start_date_time: null,
           scheduled_end_date_time: null,
           order_status: 'Pending',
+          ...(existingOrder.assignment_status === 'approved' && { assignment_status: 'unassigned' }),
           updated_at: new Date()
         },
         include: {
@@ -1184,6 +1185,7 @@ router.patch('/:id', async (req, res) => {
     }
 
     // Update order timeslot
+    const wasApproved = existingOrder.assignment_status === 'approved';
     const updatedOrder = await prisma.orders.update({
       where: { id: req.params.id },
       data: {
@@ -1191,6 +1193,8 @@ router.patch('/:id', async (req, res) => {
         scheduled_start_date_time: manualStart ? manualStart.toDate() : req.body.scheduled_start_date_time,
         scheduled_end_date_time: manualEnd ? manualEnd.toDate() : req.body.scheduled_end_date_time,
         order_status: 'Scheduled',
+        // A confirmed DO moved to another slot goes back to awaiting approval.
+        ...(wasApproved && { assignment_status: 'assigned' }),
         updated_at: new Date()
       },
       include: {
@@ -1229,7 +1233,8 @@ router.patch('/:id', async (req, res) => {
 
     // Notify Odoo of the (re)assigned delivery window — extended fields only,
     // see odooService.writeOdooExtendedFields (still gated on GCA field confirmation).
-    if (updatedOrder.odoo_order_ref) {
+    // Skipped for a moved confirmed DO: Odoo keeps its confirmed appointment until re-approval.
+    if (updatedOrder.odoo_order_ref && !wasApproved) {
       buildOdooEventPayload(updatedOrder.id, 'Scheduled').then(payload => enqueue({
         eventType:      'ORDER_SCHEDULED',
         target:         'odoo',
@@ -1672,6 +1677,41 @@ router.post('/:id/approve', async (req, res) => {
   } catch (err) {
     console.error('POST /api/orders/:id/approve error', err);
     res.status(500).json({ error: 'Failed to approve assignment', details: err.message });
+  }
+});
+
+// POST /:id/unapprove — Admin undoes an approval; the DO returns to awaiting approval
+// in its slot. Only while the order has not started delivery. Does not touch Odoo.
+router.post('/:id/unapprove', async (req, res) => {
+  try {
+    const order = await prisma.orders.findUnique({ where: { id: req.params.id } });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.assignment_status !== 'approved') {
+      return res.status(400).json({ error: 'Order is not approved.' });
+    }
+    if (!['Pending', 'Scheduled'].includes(order.order_status)) {
+      return res.status(409).json({ error: `Cannot undo — order is already ${order.order_status}.` });
+    }
+
+    const updated = await prisma.orders.update({
+      where: { id: req.params.id },
+      data:  { assignment_status: 'assigned', updated_at: new Date() },
+    });
+    // Tell Odoo the confirmation is cancelled (FRD §05 confirmation status).
+    if (updated.odoo_order_ref) {
+      buildOdooEventPayload(updated.id, 'Scheduled').then(payload => enqueue({
+        eventType:      'ORDER_APPROVAL_CANCELLED',
+        target:         'odoo',
+        payload:        { ...payload, confirmation_status: 'cancelled' },
+        idempotencyKey: `order:${updated.id}:odoo:unapproved:${Date.now()}`,
+      })).catch(e => console.error('[Unapprove] ORDER_APPROVAL_CANCELLED outbox enqueue failed:', e.message));
+    }
+
+    res.json({ success: true, order: updated });
+  } catch (err) {
+    console.error('POST /api/orders/:id/unapprove error', err);
+    res.status(500).json({ error: 'Failed to undo approval', details: err.message });
   }
 });
 

@@ -1,4 +1,5 @@
 import React, { useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Search, CheckCheck, CalendarDays } from 'lucide-react';
 import { format } from 'date-fns';
 import Button from '../../../common/Button';
@@ -11,7 +12,7 @@ import { addDays, parseDateKey } from '../../../../utils/schedule/weekRange';
  * the lorry/slot geometry never shifts under the eye.
  */
 export default function DayBar({
-  dateKey, query, onQuery, onDate, pendingCount, busy, onApproveAll, canEdit,
+  dateKey, query, onQuery, onDate, pendingCount, busy, onApproveAll, canEdit, approveSlot = null,
 }) {
   const pickerRef = useRef(null);
   const d = parseDateKey(dateKey);
@@ -23,6 +24,12 @@ export default function DayBar({
     // showPicker is the native calendar; older browsers fall back to focus.
     try { input.showPicker(); } catch { input.focus(); }
   };
+
+  const approveButton = (
+    <Button size="sm" icon={CheckCheck} disabled={!pendingCount || busy} onClick={onApproveAll}>
+      Approve all ({pendingCount})
+    </Button>
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -73,17 +80,9 @@ export default function DayBar({
         />
       </div>
 
-      {canEdit && (
-        <Button
-          size="sm"
-          icon={CheckCheck}
-          className="ml-auto"
-          disabled={!pendingCount || busy}
-          onClick={onApproveAll}
-        >
-          Approve all pending ({pendingCount})
-        </Button>
-      )}
+      {canEdit && (approveSlot
+        ? createPortal(approveButton, approveSlot)
+        : <div className="ml-auto">{approveButton}</div>)}
     </div>
   );
 }

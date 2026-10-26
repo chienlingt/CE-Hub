@@ -1,6 +1,6 @@
 import React from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import { Check, Info } from 'lucide-react';
+import { Info } from 'lucide-react';
 import DoBlock from './DoBlock';
 import { useBoard } from './BoardContext';
 import { cellMeta } from './boardStates';
@@ -19,8 +19,8 @@ function refusal(verdict, cell) {
  * full", or the grey reason. Full, off, crewless, past and departed cells are
  * not droppable at all — @dnd-kit would otherwise still offer them as targets.
  */
-export default function BoardCell({ cell, verdict, busy, onApprove, label }) {
-  const { dragActive, openSlot, canEdit } = useBoard();
+export default function BoardCell({ cell, verdict, label, highlighted = false }) {
+  const { dragActive, openSlot } = useBoard();
   const { setNodeRef, isOver } = useDroppable({
     id: cell.slotId ?? `none:${label}`,
     data: { type: 'slot' },
@@ -51,6 +51,7 @@ export default function BoardCell({ cell, verdict, busy, onApprove, label }) {
       className={[
         'group relative border border-gray-200 p-1 align-top transition-opacity',
         meta.className,
+        highlighted && !dragActive ? 'bg-blue-50 ring-2 ring-inset ring-blue-400' : '',
         fits ? 'ring-2 ring-inset ring-green-500' : '',
         fits && isOver ? 'bg-green-50' : '',
         refused ? 'opacity-50' : '',
@@ -70,28 +71,23 @@ export default function BoardCell({ cell, verdict, busy, onApprove, label }) {
         </div>
       ) : (
         <div className="flex items-center justify-between gap-1 px-1 py-2">
-          <p className={`text-[11px] italic ${cell.state === 'open' && cell.windowFull ? 'font-medium not-italic text-red-700' : 'text-gray-400'}`}>
-            {cell.state === 'open'
-              ? (cell.windowFull ? 'Slot full' : 'No DO scheduled')
-              : (cell.reason ?? meta.label)}
-          </p>
+          {cell.state === 'open' && cell.windowFull ? (
+            <p className="text-[11px] leading-tight text-red-700">
+              <span className="font-medium">{cell.windowName} window full</span>
+              {' '}— {cell.windowCap} DOs booked across all lorries. This lorry is empty, but no more DOs fit in this window.
+            </p>
+          ) : (
+            <p className="text-[11px] italic text-gray-400">
+              {cell.state === 'open' ? 'No DO scheduled' : (cell.reason ?? meta.label)}
+            </p>
+          )}
           {slotInfo}
         </div>
       )}
 
       {cell.blocks.length > 0 && (
         <div className="mt-1 flex min-h-[1rem] items-center justify-between gap-1">
-          {canEdit && cell.pendingIds.length > 0 ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onApprove(cell.pendingIds)}
-              className={`inline-flex items-center gap-1 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50 ${FOCUS_RING}`}
-            >
-              <Check className="h-3 w-3" aria-hidden="true" />
-              Approve {cell.pendingIds.length}
-            </button>
-          ) : <span />}
+          <span />
           {cell.state === 'full' && (
             <span className="text-[11px] font-medium text-red-700">{cell.reason ?? 'Lorry full'}</span>
           )}

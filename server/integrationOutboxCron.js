@@ -13,6 +13,7 @@
 //                             see odooWebhookService.js)
 //                             ORDER_FAILED (A5.3)     → writeOdooDeliveryStatus('Failed') + extended fields
 //                             ORDER_SCHEDULED         → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
+//                             ORDER_APPROVAL_CANCELLED → clears the confirmed appointment (extended fields)
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
@@ -125,6 +126,32 @@ async function handleOrderScheduled(row) {
 
   await writeOdooExtendedFields(odooRef, payload);
   console.log(`[OutboxWorker] ORDER_SCHEDULED: pushed schedule fields for ${odooRef}`);
+}
+
+// ── ORDER_APPROVAL_CANCELLED handler — admin undid an approval ────────────
+// FRD §05: the confirmation result carries a status of Confirmed / rejected /
+// cancelled / error. A cancelled confirmation clears the appointment fields on
+// the Odoo side. Rides on writeOdooExtendedFields, so it carries the same
+// still-unconfirmed field names and the ODOO_SEND_EXTENDED_FIELDS gate.
+
+async function handleOrderApprovalCancelled(row) {
+  if (!process.env.ODOO_URL) {
+    console.log('[OutboxWorker] ODOO_URL not set — skipping ORDER_APPROVAL_CANCELLED:', row.id);
+    return;
+  }
+
+  const payload = row.payload || {};
+  const odooRef = payload.do_ref;
+  if (!odooRef) {
+    console.log('[OutboxWorker] ORDER_APPROVAL_CANCELLED skipped (no do_ref) for order', payload.ce_hub_order_ref);
+    return;
+  }
+
+  await writeOdooExtendedFields(odooRef, {
+    ...payload,
+    scheduled_start: null, scheduled_end: null, driver_name: null, assistant_name: null,
+  });
+  console.log(`[OutboxWorker] ORDER_APPROVAL_CANCELLED: cleared confirmed appointment for ${odooRef}`);
 }
 
 // ── Customer notification handler ─────────────────────────────────────────────
@@ -277,6 +304,8 @@ async function dispatchRow(row) {
       return handleOrderFailed(row);
     case 'ORDER_SCHEDULED':
       return handleOrderScheduled(row);
+    case 'ORDER_APPROVAL_CANCELLED':
+      return handleOrderApprovalCancelled(row);
     case 'CUSTOMER_ON_THE_WAY':
       return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':

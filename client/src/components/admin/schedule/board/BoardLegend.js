@@ -1,4 +1,5 @@
 import React from 'react';
+import BlockGlyph from './BlockGlyph';
 import { BLOCK_STATES } from './boardStates';
 
 const BLOCK_KEYS = ['pending', 'confirmed', 'locked', 'done', 'rejected'];
@@ -13,7 +14,7 @@ export default function BoardLegend() {
       {BLOCK_KEYS.map(key => (
         <li key={key} className="flex items-center gap-1">
           <span className={`inline-flex h-3.5 w-5 items-center justify-center rounded border text-[9px] ${BLOCK_STATES[key].className}`} aria-hidden="true">
-            {BLOCK_STATES[key].glyph}
+            <BlockGlyph state={key} glyph={BLOCK_STATES[key].glyph} />
           </span>
           {BLOCK_STATES[key].label}
         </li>

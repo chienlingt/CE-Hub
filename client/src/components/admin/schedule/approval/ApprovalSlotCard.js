@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Truck, Users, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Truck, Users, Check, X, Undo2, ChevronDown, ChevronUp } from 'lucide-react';
 import Button from '../../../common/Button';
 import CapacityMeter from '../week/CapacityMeter';
 import SlotFeasibilityPanel from '../day/SlotFeasibilityPanel';
@@ -20,6 +20,7 @@ export default function ApprovalSlotCard({
   busy = false,
   onApprove,
   onReject,
+  onUndo,
   onOpenOrder,
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -130,6 +131,19 @@ export default function ApprovalSlotCard({
             title={failing.length ? `${failing.length} check(s) failing` : 'Approve this trip'}
           >
             {failing.length ? 'Approve anyway' : 'Approve trip'}
+          </Button>
+        </div>
+      )}
+
+      {lane.lifecycle === 'approved' && (
+        <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-3 py-2">
+          <Button
+            variant="secondary" size="sm" icon={Undo2}
+            onClick={() => onUndo?.(orderIds, lane)}
+            disabled={busy}
+            title="Return this trip to awaiting approval"
+          >
+            Undo approval
           </Button>
         </div>
       )}

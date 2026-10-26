@@ -40,14 +40,18 @@
  * @property {() => Promise<{runId: string, scheduled: number, unscheduled: number, warnings: string[]}>} runAutoSchedule
  * @property {(orderIds: string[]) => Promise<CommitResult>} approveOrders
  * @property {(orderIds: string[], reason: string) => Promise<CommitResult>} rejectOrders
+ * @property {(orderIds: string[]) => Promise<CommitResult>} unapproveOrders
+ *   Undo an approval: the DOs go back to awaiting approval, still in their slot.
  * @property {(args: {dateKey: string, start: string, end: string, truckId: string, teamId: string|null}) => Promise<object>} createSlot
  *   A lorry has no slot in a window until it carries a DO there; the Board
  *   creates one on the first drop. Resolves to the normalized slot.
+ * @property {(input: {address: string, sizeBand: string, installation: boolean, notBefore: string|null}) => Promise<{options: object[], reasons: string[], notCounted: number, addressMatched: boolean}>} recommendSlots
+ *   Advisory slot recommendation for an order Odoo has not synced yet. Writes nothing.
  */
 
 export const GATEWAY_METHODS = [
   'loadSnapshot', 'loadConfig', 'saveConfig', 'commitMoves',
-  'runAutoSchedule', 'approveOrders', 'rejectOrders', 'createSlot',
+  'runAutoSchedule', 'approveOrders', 'rejectOrders', 'unapproveOrders', 'createSlot', 'recommendSlots',
 ];
 
 /** Dev guard: fail loudly rather than at the first missing call. */

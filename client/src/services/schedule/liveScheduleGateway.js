@@ -259,6 +259,12 @@ export const liveScheduleGateway = {
     return normalizeSlot(data);
   },
 
+  // Needs an engine endpoint that does not exist yet; fail specifically rather
+  // than recommend from a partial client-side view of the live schedule.
+  async recommendSlots() {
+    throw new Error('Slot recommendation is not available on live data yet — it needs an engine endpoint.');
+  },
+
   async approveOrders(orderIds = []) {
     const applied = [];
     const rejected = [];
@@ -276,6 +282,28 @@ export const liveScheduleGateway = {
           // Pass the server's own words through — it refuses an order with no
           // timeslot, and that reason is more useful than a generic failure.
           message: data?.error || 'Approval failed.',
+        });
+      }
+    }
+
+    return { applied, rejected };
+  },
+
+  async unapproveOrders(orderIds = []) {
+    const applied = [];
+    const rejected = [];
+
+    for (const orderId of orderIds) {
+      const { ok, data } = await rawRequest(`orders/${encodeURIComponent(orderId)}/unapprove`, {
+        method: 'POST',
+      });
+      if (ok) {
+        applied.push(orderId);
+      } else {
+        rejected.push({
+          orderId,
+          code: data?.code ?? 'UNAPPROVE_FAILED',
+          message: data?.error || 'Undo approval failed.',
         });
       }
     }

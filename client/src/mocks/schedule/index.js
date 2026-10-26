@@ -101,6 +101,18 @@ export const SCENARIOS = {
     overbookFactor: 1.2,
     forceExceptions: true,
   },
+  recommend: {
+    label: 'Find a slot',
+    description: 'The first days are full and later ones open up — what "Find a slot" is for.',
+    seed: 135790,
+    dosPerDay: [96, 94, 92, 38, 30, 26, 20],
+    trucksPerDay: 6,
+    unassignedCount: 5,
+    rejectedCount: 0,
+    liveToday: true,
+    approvedThroughOffset: 0,
+    overbookFactor: 1,
+  },
   awaitingApproval: {
     label: 'Awaiting approval',
     description: 'A full week generated and assigned, nothing approved — Mr Lee’s queue.',

@@ -21,6 +21,7 @@ import SlotDrawer from './SlotDrawer';
 import UndoToast from './UndoToast';
 import DropConfirm from './DropConfirm';
 import { BoardContext } from './BoardContext';
+import RejectReasonModal from '../approval/RejectReasonModal';
 
 import SlideOver from '../../../common/SlideOver';
 import Modal from '../../../common/Modal';
@@ -44,7 +45,7 @@ function slotLabel(state, slotId) {
 }
 
 export default function TodayBoard({
-  state, actions, dateKey, params, setParams, canEdit = true, panelOpen = false, onClosePanel,
+  state, actions, dateKey, params, setParams, canEdit = true, panelOpen = false, onClosePanel, highlightWindow = null, approveSlot = null,
 }) {
   const [drag, setDrag] = useState({ activeId: null, overId: null, verdict: null });
   const [query, setQuery] = useState('');
@@ -52,6 +53,7 @@ export default function TodayBoard({
   const [toast, setToast] = useState(null);
   const [result, setResult] = useState(null);
   const [confirmAll, setConfirmAll] = useState(false);
+  const [rejectingId, setRejectingId] = useState(null);   // DO whose ✗ was clicked, awaiting a reason
   const [pendingDrop, setPendingDrop] = useState(null);   // { orderId, slotId } awaiting confirmation
 
   // One grouping pass per store change, shared by every selector below.
@@ -68,6 +70,16 @@ export default function TodayBoard({
   if (orderRef.current.key !== orderKey) {
     orderRef.current = { key: orderKey, ids: matrix.rows.map(r => r.truck.id) };
   }
+  // What "Approve all" will confirm, in board order: one line per pending DO.
+  const pendingList = useMemo(() => matrix.rows.flatMap(row => row.cells.flatMap((cell, i) =>
+    cell.blocks
+      .filter(b => cell.pendingIds.includes(b.orderId))
+      .map(b => ({
+        orderId: b.orderId, doNo: b.doNo, address: b.address,
+        plate: row.truck.plate, window: `${matrix.columns[i]?.label ?? ''} ${matrix.columns[i]?.timeLabel ?? ''}`.trim(),
+      })),
+  )), [matrix]);
+
   const rows = useMemo(() => {
     const rank = new Map(orderRef.current.ids.map((id, i) => [id, i]));
     return [...matrix.rows].sort((a, b) => (rank.get(a.truck.id) ?? 1e9) - (rank.get(b.truck.id) ?? 1e9));
@@ -92,6 +104,9 @@ export default function TodayBoard({
 
   // --- writes ---------------------------------------------------------------
   const moveOrder = useCallback(async (orderId, targetId, { undoable = true } = {}) => {
+    // Undoing a move cannot restore an approval (that would re-write to Odoo),
+    // so a confirmed DO's move offers no Undo.
+    if (state.entities.orders.byId[orderId]?.assignmentStatus === 'approved') undoable = false;
     const fromSlotId = effectiveSlotId(state, orderId);
     const doNo = state.entities.orders.byId[orderId]?.doNo ?? 'DO';
     const label = slotLabel(state, targetId);
@@ -206,7 +221,8 @@ export default function TodayBoard({
   const boardContext = useMemo(() => ({
     getOrderDetail, getLorryDetail, openOrder, openLorry, openSlot,
     matchesSearch, searching: needle.length > 0, dragActive: Boolean(drag.activeId), canEdit,
-  }), [getOrderDetail, getLorryDetail, openOrder, openLorry, openSlot, matchesSearch, needle, drag.activeId, canEdit]);
+    approveOrder: id => approve([id]), requestReject: setRejectingId, busy,
+  }), [getOrderDetail, getLorryDetail, openOrder, openLorry, openSlot, matchesSearch, needle, drag.activeId, canEdit, approve, busy]);
 
   const today = todayLocalDateKey();
 
@@ -232,6 +248,7 @@ export default function TodayBoard({
             busy={busy}
             canEdit={canEdit}
             onApproveAll={() => setConfirmAll(true)}
+            approveSlot={approveSlot}
           />
 
           <BoardLegend />
@@ -242,7 +259,7 @@ export default function TodayBoard({
             <div className="min-w-0 flex-1">
               {/* Always the full grid: an empty day is still a day the admin can fill. */}
               <div className="hidden sm:block">
-                <BoardGrid matrix={matrix} rows={rows} verdicts={verdicts} busy={busy} onApprove={approve} />
+                <BoardGrid matrix={matrix} rows={rows} verdicts={verdicts} busy={busy} onApprove={approve} highlightWindow={highlightWindow} />
               </div>
               <div className="sm:hidden">
                 <MobileBoard matrix={matrix} rows={rows} busy={busy} onApprove={approve} />
@@ -300,14 +317,23 @@ export default function TodayBoard({
         />
       )}
 
-      <Modal show={confirmAll} onClose={() => setConfirmAll(false)} maxWidth="max-w-sm">
+      <Modal show={confirmAll} onClose={() => setConfirmAll(false)} maxWidth="max-w-2xl">
         <h2 className="text-base font-semibold text-gray-900">
           Approve {matrix.pendingOrderIds.length} pending DO{matrix.pendingOrderIds.length === 1 ? '' : 's'}?
         </h2>
         <p className="mt-1 text-xs text-gray-600">
           For {longDateLabel(dateKey)}. This confirms them for the warehouse and writes back to Odoo.
-          Approved DOs lock and cannot be undone from the Board.
+          Approved DOs lock on the Board; an approval can be undone from the Approval tab.
         </p>
+        <ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-y-auto rounded-md border border-gray-200 text-xs">
+          {pendingList.map(d => (
+            <li key={d.orderId} className="flex items-baseline gap-2 px-2 py-1.5">
+              <span className="w-20 flex-shrink-0 font-mono text-gray-900">{d.doNo}</span>
+              <span className="w-56 flex-shrink-0 whitespace-nowrap tabular-nums text-gray-600">{d.plate} · {d.window}</span>
+              <span className="min-w-0 flex-1 truncate text-gray-500" title={d.address}>{d.address}</span>
+            </li>
+          ))}
+        </ul>
         <div className="mt-4 flex gap-2">
           <Button variant="secondary" fullWidth onClick={() => setConfirmAll(false)}>Cancel</Button>
           <Button
@@ -319,6 +345,17 @@ export default function TodayBoard({
           </Button>
         </div>
       </Modal>
+
+      <RejectReasonModal
+        open={Boolean(rejectingId)}
+        orderCount={1}
+        busy={busy}
+        title={`Reject ${state.entities.orders.byId[rejectingId]?.doNo ?? 'DO'}`}
+        description="It goes back to the unscheduled tray with this reason, so it can be placed again."
+        confirmLabel="Reject DO"
+        onCancel={() => setRejectingId(null)}
+        onConfirm={async (reason) => { const id = rejectingId; setRejectingId(null); await reject(id, reason); }}
+      />
 
       <DropConfirm
         order={pendingDrop ? state.entities.orders.byId[pendingDrop.orderId] : null}

@@ -31,6 +31,13 @@ export default function DropConfirm({ order, target, busy, onCancel, onPlace }) 
         </dd>
       </dl>
 
+      {order.assignmentStatus === 'approved' && (
+        <p className="mt-3 flex gap-1.5 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+          This DO is confirmed. Moving it returns it to Pending WH for re-approval.
+        </p>
+      )}
+
       {(target.startsNight || expected.dateMismatch || warnings.length > 0) && (
         <ul className="mt-3 space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           {target.startsNight && (

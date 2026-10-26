@@ -10,7 +10,7 @@ import { FOCUS_RING } from '../../../common/tokens';
 /**
  * The DO pinned on the same page (?order=). This is where touch and keyboard
  * users get everything hover gives, plus the actions: Move to… for anything
- * still unapproved, Reject… for a pending DO. Approved and departed DOs offer
+ * not yet out for delivery (a confirmed DO returns to pending), Reject… for a pending DO. Approved and departed DOs offer
  * no actions — re-opening them is a separate, out-of-scope step.
  */
 export default function DoDrawer({ detail, moveTargets = [], past, busy, canEdit = true, onClose, onMove, onReject }) {
@@ -22,7 +22,7 @@ export default function DoDrawer({ detail, moveTargets = [], past, busy, canEdit
 
   if (!detail) return null;
   const { order, blockState } = detail;
-  const movable = canEdit && !past && ['pending', 'rejected', 'unscheduled'].includes(blockState);
+  const movable = canEdit && !past && ['pending', 'confirmed', 'rejected', 'unscheduled'].includes(blockState);
   const rejectable = canEdit && !past && blockState === 'pending';
 
   const footer = (movable || rejectable) ? (

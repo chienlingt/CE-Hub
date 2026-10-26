@@ -16,7 +16,7 @@ export const BLOCK_STATES = {
     className: 'border-blue-300 bg-blue-50 text-blue-950',
   },
   locked: {
-    label: 'Out for delivery', glyph: '🔒',
+    label: 'Out for delivery', glyph: '🚚',
     className: 'border-orange-300 bg-orange-50 text-orange-950',
   },
   done: {

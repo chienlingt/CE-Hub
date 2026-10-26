@@ -7,6 +7,8 @@
 
 import { buildMockSnapshot, DEFAULT_SCENARIO } from '../../mocks/schedule';
 import { DEFAULT_SCHEDULE_CONFIG } from '../../utils/schedule/gracePeriod';
+import { recommendSlots, RECOMMEND_HORIZON_DAYS } from '../../utils/schedule/recommendSlots';
+import { todayLocalDateKey, toLocalDateKey } from '../../utils/dateKey';
 
 const LATENCY_MIN_MS = 180;
 const LATENCY_MAX_MS = 480;
@@ -34,6 +36,11 @@ function ensureState(scenario, anchorDateKey) {
     };
   }
   return state;
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  return toLocalDateKey(new Date(y, m - 1, d + days));
 }
 
 function readStoredConfig() {
@@ -195,6 +202,27 @@ export const mockScheduleGateway = {
     return slot;
   },
 
+  async recommendSlots(input) {
+    await delay();
+    if (!state) throw new Error('Nothing loaded.');
+    const todayKey = todayLocalDateKey();
+    const sources = [{ entities: state.snapshot.entities, dateKeys: state.snapshot.range.dateKeys }];
+    // The loaded snapshot is one week; the horizon is two. Build the next week
+    // from the same scenario so the answer reaches the whole horizon.
+    const lastKey = sources[0].dateKeys[sources[0].dateKeys.length - 1];
+    if (RECOMMEND_HORIZON_DAYS > sources[0].dateKeys.length && lastKey) {
+      const next = buildMockSnapshot({
+        scenario: state.scenario, anchorDateKey: addDaysToDateKey(lastKey, 1),
+      });
+      sources.push({ entities: next.entities, dateKeys: next.range.dateKeys });
+    }
+    const now = new Date();
+    const config = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
+    return recommendSlots({
+      input, sources, config, todayKey, nowMinutes: now.getHours() * 60 + now.getMinutes(),
+    });
+  },
+
   async approveOrders(orderIds = []) {
     await delay();
     return setAssignmentStatus(orderIds, 'approved');
@@ -203,6 +231,11 @@ export const mockScheduleGateway = {
   async rejectOrders(orderIds = [], reason = '') {
     await delay();
     return setAssignmentStatus(orderIds, 'rejected', reason);
+  },
+
+  async unapproveOrders(orderIds = []) {
+    await delay();
+    return setAssignmentStatus(orderIds, 'assigned');
   },
 
   /** Test/demo helper — forget the mutable copy so the scenario rebuilds. */

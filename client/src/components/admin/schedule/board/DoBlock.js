@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { useDraggable } from '@dnd-kit/core';
+import { Check, X } from 'lucide-react';
 import { blockMeta } from './boardStates';
 import { useBoard } from './BoardContext';
 import useHoverCard from './useHoverCard';
@@ -10,10 +11,10 @@ import { FOCUS_RING } from '../../../common/tokens';
 /**
  * One DO, its own section inside a cell: number and address, coloured by
  * approval state. Hover previews the details; click / Enter / tap opens them
- * pinned in the drawer. Only unapproved DOs are draggable.
+ * pinned in the drawer. Pending and confirmed DOs are draggable.
  */
 function BlockBody({ block, canDrag = false, dragHandle = {}, dragging = false, hover }) {
-  const { openOrder, matchesSearch, searching } = useBoard();
+  const { openOrder, matchesSearch, searching, canEdit: canAct } = useBoard();
   const meta = blockMeta(block.state);
   const match = !searching || matchesSearch(block);
 
@@ -46,7 +47,9 @@ function BlockBody({ block, canDrag = false, dragHandle = {}, dragging = false, 
             ⚠<span className="sr-only">Placed on a different date from Odoo's expected date</span>
           </span>
         )}
-        <span className="ml-auto flex-shrink-0 text-[10px] leading-none" aria-hidden="true">{meta.glyph}</span>
+        {!(canAct && block.state === 'pending') && (
+          <span className="ml-auto flex-shrink-0 text-[10px] leading-none" aria-hidden="true">{meta.glyph}</span>
+        )}
       </span>
       {/* line-clamp sets its own display; adding `block` here would cancel it. */}
       {block.state === 'rejected' && block.reason ? (
@@ -58,6 +61,37 @@ function BlockBody({ block, canDrag = false, dragHandle = {}, dragging = false, 
         <span className="mt-0.5 line-clamp-2 text-[11px] leading-[0.95rem] text-gray-600">{block.address}</span>
       )}
     </button>
+  );
+}
+
+/** ✓ / ✗ for a pending DO, floated over the block's top-right corner. */
+function PendingActions({ block }) {
+  const { canEdit, busy, approveOrder, requestReject } = useBoard();
+  if (!canEdit || block.state !== 'pending') return null;
+  const base = `rounded p-0.5 disabled:opacity-50 ${FOCUS_RING}`;
+  return (
+    <div className="absolute right-1 top-1 flex items-center gap-0.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => approveOrder(block.orderId)}
+        aria-label={`Approve ${block.doNo}`}
+        title="Approve"
+        className={`${base} text-green-700 hover:bg-green-100`}
+      >
+        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => requestReject(block.orderId)}
+        aria-label={`Reject ${block.doNo}`}
+        title="Reject"
+        className={`${base} text-red-700 hover:bg-red-100`}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -91,8 +125,9 @@ function DraggableDoBlock({ block, width }) {
   };
 
   return (
-    <div ref={setNodeRef} className={width}>
+    <div ref={setNodeRef} className={`relative ${width}`}>
       <BlockBody block={block} canDrag dragHandle={dragHandle} dragging={isDragging} hover={hover} />
+      <PendingActions block={block} />
       <DetailPopover block={block} hover={hover} />
     </div>
   );
@@ -102,8 +137,9 @@ function StaticDoBlock({ block, width }) {
   const { dragActive } = useBoard();
   const hover = useHoverCard({ disabled: dragActive });
   return (
-    <div className={width}>
+    <div className={`relative ${width}`}>
       <BlockBody block={block} hover={hover} />
+      <PendingActions block={block} />
       <DetailPopover block={block} hover={hover} />
     </div>
   );

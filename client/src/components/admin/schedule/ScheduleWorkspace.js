@@ -12,12 +12,14 @@
 // ?exceptions, ?scenario, ?data), following the LiveDeliveries.js precedent,
 // so a walkthrough is reproducible from bookmarks.
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ShieldAlert, RefreshCw, Eye } from 'lucide-react';
 
 import ScheduleProvider, { useScheduleState, useScheduleActions } from './ScheduleProvider';
 import TodayBoard from './board/TodayBoard';
+import RecommendSlotButton from './recommend/RecommendSlotButton';
+import RecommendSlotPanel from './recommend/RecommendSlotPanel';
 
 import Button from '../../common/Button';
 import EmptyState from '../../common/EmptyState';
@@ -25,6 +27,7 @@ import { badgeClass } from '../../common/tokens';
 import { useAuth } from '../../../contexts/AuthContext';
 
 import { todayLocalDateKey } from '../../../utils/dateKey';
+import { sizeBands } from '../../../utils/schedule/sizeBands';
 import { selectTrayBlocks } from '../../../utils/schedule/scheduleSelectors';
 
 export const SCHEDULE_EDIT_PERMISSION = 'schedule_edit';
@@ -55,6 +58,10 @@ function WorkspaceInner() {
   };
   // The unscheduled panel's URL state (kept from the old Exceptions drawer).
   const panelOpen = searchParams.get('exceptions') === '1';
+  // "Find a slot" slide-over: advisory slot recommendation for a not-yet-synced order.
+  const findOpen = searchParams.get('find') === '1';
+  // Set by "Show on Board": which window column to light up for a few seconds.
+  const highlightWindow = searchParams.get('highlight');
 
   const setParams = useCallback((updates, options) => {
     const next = new URLSearchParams(searchParams);
@@ -67,7 +74,19 @@ function WorkspaceInner() {
     setSearchParams(next, options);
   }, [searchParams, setSearchParams]);
 
+  useEffect(() => {
+    if (!highlightWindow) return undefined;
+    const t = setTimeout(() => setParams({ highlight: null }, { replace: true }), 8000);
+    return () => clearTimeout(t);
+  }, [highlightWindow, setParams]);
+
+  // Header slot DayBar portals its Approve button into (see the header row).
+  const [approveSlot, setApproveSlot] = useState(null);
+
   const ready = state.status === 'ready';
+  const asOfLabel = state.asOf
+    ? new Date(state.asOf).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })
+    : '';
   const unscheduledCount = useMemo(() => (ready ? selectTrayBlocks(state).length : 0), [state, ready]);
 
   let body;
@@ -96,6 +115,8 @@ function WorkspaceInner() {
         setParams={setParams}
         canEdit={canEdit}
         panelOpen={panelOpen}
+        highlightWindow={highlightWindow}
+        approveSlot={approveSlot}
         onClosePanel={() => setParams({ exceptions: null })}
       />
     );
@@ -122,20 +143,24 @@ function WorkspaceInner() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] tabular-nums text-gray-400">
-            {state.asOf ? `as of ${new Date(state.asOf).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}` : ''}
-            {state.draft.committing && <span className="ml-1 text-amber-600">· saving…</span>}
-          </span>
-          <Button variant="secondary" size="sm" icon={RefreshCw} onClick={actions.refresh}>
-            Refresh
+          <RecommendSlotButton pressed={findOpen} onClick={() => setParams({ find: '1' })} />
+          <Button
+            variant="ghost" size="sm" icon={RefreshCw} onClick={actions.refresh}
+            aria-label={asOfLabel ? `Refresh, as of ${asOfLabel}` : 'Refresh'}
+            title={asOfLabel ? `Refresh (as of ${asOfLabel})` : 'Refresh'}
+          >
+            <span className="tabular-nums text-gray-500">{asOfLabel}</span>
+            {state.draft.committing && <span className="text-amber-600">· saving…</span>}
           </Button>
           <Button
-            variant="secondary" size="sm" icon={AlertTriangle}
+            variant={unscheduledCount >= 1 ? 'alert' : 'secondary'} size="sm" icon={AlertTriangle}
             aria-pressed={panelOpen}
             onClick={() => setParams({ exceptions: panelOpen ? null : '1' })}
           >
             <span className="tabular-nums">{unscheduledCount} unscheduled</span>
           </Button>
+          {/* DayBar portals "Approve all" here so every top-right action sits on one row. */}
+          <span ref={setApproveSlot} className="contents" />
         </div>
       </div>
 
@@ -154,6 +179,15 @@ function WorkspaceInner() {
 
       {body}
 
+      {ready && (
+        <RecommendSlotPanel
+          open={findOpen}
+          onClose={() => setParams({ find: null })}
+          bands={sizeBands(state.entities.trucks.allIds.map(id => state.entities.trucks.byId[id]))}
+          onRecommend={actions.recommendSlots}
+          onShowOnBoard={option => setParams({ find: null, date: option.dateKey, highlight: option.windowId })}
+        />
+      )}
     </div>
   );
 }

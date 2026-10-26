@@ -41,7 +41,7 @@ function WindowAvailability({ total, open }) {
  * frozen first column and a sticky header that carries each window's
  * availability. Below the minimum column width it scrolls sideways.
  */
-export default function BoardGrid({ matrix, rows, verdicts, busy, onApprove }) {
+export default function BoardGrid({ matrix, rows, verdicts, busy, onApprove, highlightWindow = null }) {
   const minWidth = LORRY_COL_PX + matrix.columns.length * SLOT_COL_MIN_PX;
 
   return (
@@ -64,7 +64,12 @@ export default function BoardGrid({ matrix, rows, verdicts, busy, onApprove }) {
               <th
                 key={col.windowId}
                 scope="col"
-                className={`border border-gray-200 bg-gray-100 px-2 py-1.5 text-left align-top font-semibold ${col.open ? 'text-gray-700' : 'text-gray-400'}`}
+                aria-current={col.windowId === highlightWindow ? 'true' : undefined}
+                className={[
+                  'border border-gray-200 px-2 py-1.5 text-left align-top font-semibold',
+                  col.windowId === highlightWindow ? 'bg-blue-100 text-blue-900' : 'bg-gray-100',
+                  col.open || col.windowId === highlightWindow ? (col.windowId === highlightWindow ? '' : 'text-gray-700') : 'text-gray-400',
+                ].join(' ')}
               >
                 {col.label}
                 <span className="ml-1.5 font-normal tabular-nums text-gray-500">{col.timeLabel}</span>
@@ -87,6 +92,7 @@ export default function BoardGrid({ matrix, rows, verdicts, busy, onApprove }) {
                   verdict={cell.slotId ? verdicts?.[cell.slotId] : null}
                   busy={busy}
                   onApprove={onApprove}
+                  highlighted={cell.windowId === highlightWindow}
                   label={`${row.truck.plate} ${matrix.columns[i]?.label ?? ''}`}
                 />
               ))}

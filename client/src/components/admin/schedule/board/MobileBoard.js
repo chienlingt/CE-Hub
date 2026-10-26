@@ -43,7 +43,7 @@ export default function MobileBoard({ matrix, rows, busy, onApprove }) {
                   {matrix.columns[i].label} <span className="font-normal tabular-nums text-gray-400">{matrix.columns[i].timeLabel}</span>
                   {cell.blocks.length === 0 && (
                     <span className="ml-2 font-normal italic text-gray-400">
-                      {cell.state === 'open' ? (cell.windowFull ? 'Slot full' : 'No DO scheduled') : (cell.reason ?? cellMeta(cell.state).label)}
+                      {cell.state === 'open' ? (cell.windowFull ? `${cell.windowName} window full (${cell.windowCap} DOs across all lorries)` : 'No DO scheduled') : (cell.reason ?? cellMeta(cell.state).label)}
                     </span>
                   )}
                 </p>

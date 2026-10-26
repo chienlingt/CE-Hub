@@ -11,6 +11,8 @@ const VARIANTS = {
   destructive: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300',
   secondary:   'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:text-gray-400',
   ghost:       'text-gray-600 hover:bg-gray-100 disabled:text-gray-400',
+  alert:       'border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:text-red-300',
+  tint:        'border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:text-indigo-300',
 };
 
 const SIZES = {
