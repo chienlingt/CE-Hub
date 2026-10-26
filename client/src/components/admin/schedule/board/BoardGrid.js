@@ -57,7 +57,7 @@ export default function BoardGrid({ matrix, rows, verdicts, busy, onApprove, hig
             <th scope="col" className="sticky left-0 z-30 border border-gray-200 bg-gray-100 px-2 py-1.5 text-left align-top font-semibold text-gray-700">
               Lorry
               <span className="block text-[11px] font-normal tabular-nums text-gray-500">
-                Day {matrix.dayTotal.doCount} / {matrix.dayTotal.doCap}
+                Total: {matrix.dayTotal.doCount} / {matrix.dayTotal.doCap} DOs
               </span>
             </th>
             {matrix.columns.map((col, i) => (

@@ -20,7 +20,7 @@ export default function MobileBoard({ matrix, rows, busy, onApprove }) {
             {t.label} {t.capped ? `${t.doCount}/${t.doCap}${t.full ? ' ▲' : ''}` : (t.doCount || '—')}
           </span>
         ))}
-        <span className="text-gray-500">Day {matrix.dayTotal.doCount}/{matrix.dayTotal.doCap}</span>
+        <span className="text-gray-500">Total: {matrix.dayTotal.doCount} / {matrix.dayTotal.doCap} DOs</span>
       </p>
 
       {rows.map(row => (
