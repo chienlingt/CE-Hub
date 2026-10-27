@@ -100,7 +100,7 @@ router.get('/jobs', async (req, res) => {
     }
 
     const orders = await prisma.orders.findMany({
-      where: { OR: whereConditions },
+      where: { AND: [{ OR: whereConditions }, { OR: [{ order_status: null }, { order_status: { not: 'Cancelled' } }] }] },
       include: {
         order_products: { include: { products: { select: { product_name: true } } } },
         customers:      { select: { full_name: true, phone: true } },

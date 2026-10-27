@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import { adminSessionHeaders } from '../../utils/adminSessionHeaders';
 
 const STATUS_STYLES = {
   unassigned:      { label: 'Unassigned',      color: 'bg-gray-100 text-gray-700'    },
@@ -251,6 +252,7 @@ export default function DoAssignment() {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/approve`, {
         method: 'POST',
+        headers: adminSessionHeaders(),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to approve');

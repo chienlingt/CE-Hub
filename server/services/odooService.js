@@ -131,6 +131,14 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
 // Odoo evaluates its automation. No guessed custom RPC method is called.
 async function triggerOdooFailureNotification(payload) {
   if (!process.env.ODOO_URL) throw new Error('Odoo is not configured; failure notification handoff remains pending.');
+  const snapshotField = process.env.ODOO_FAILURE_SNAPSHOT_FIELD;
+  if (!snapshotField || !/^x_[A-Za-z0-9_]+$/.test(snapshotField) || snapshotField === 'x_delivery_status') {
+    throw new Error('Failure synchronization blocked: GCA must confirm ODOO_FAILURE_SNAPSHOT_FIELD (Text field for full attempt JSON).');
+  }
+  assertOutboundLineIdentity(payload);
+  if (!payload.failure_event_id || !payload.attempt_time || Number.isNaN(Date.parse(payload.attempt_time))) {
+    throw new Error('Failure snapshot lacks immutable attempt identity/time. Reconcile this legacy event; do not rebuild it from current order data.');
+  }
   const reference = payload?.do_ref || payload?.odooRef;
   if (!reference) throw new Error('Missing DO reference for Odoo failure notification.');
   const pickings = await callModel('stock.picking', 'search_read', [[['name', '=', reference]]], { fields: ['id', 'x_delivery_status'], limit: 1 });
@@ -139,8 +147,12 @@ async function triggerOdooFailureNotification(payload) {
   if (picking.x_delivery_status === 'delivered') throw new Error('Cannot trigger a failure notification for an Odoo delivery already marked delivered.');
   // A timeout may happen after Odoo committed the first write. Do not rewrite
   // failed on retry and retrigger an on-update WhatsApp automation.
-  if (picking.x_delivery_status === 'failed') return { already_failed: true, notification_owner: 'odoo' };
-  const fields = { x_delivery_status: 'failed' };
+  if (picking.x_delivery_status === 'failed') {
+    const [saved] = await callModel('stock.picking', 'read', [[picking.id]], { fields: [snapshotField] });
+    if (saved?.[snapshotField] === JSON.stringify(payload)) return { already_failed: true, notification_owner: 'odoo' };
+    throw new Error('Odoo DO is already failed with a different or missing attempt snapshot. Reconciliation is required.');
+  }
+  const fields = { x_delivery_status: 'failed', [snapshotField]: JSON.stringify(payload) };
   for (const [setting, value] of [
     ['ODOO_FAILURE_REASON_FIELD', payload.failure_reason],
     ['ODOO_FAILURE_NOTES_FIELD', payload.remarks],
@@ -149,6 +161,7 @@ async function triggerOdooFailureNotification(payload) {
     const field = process.env[setting];
     if (!field) continue;
     if (!/^x_[A-Za-z0-9_]+$/.test(field) || field === 'x_delivery_status') throw new Error(`Invalid configured failure field: ${setting}`);
+    if (Object.hasOwn(fields, field)) throw new Error(`Failure destination fields must be distinct: ${setting}`);
     fields[field] = value || false;
   }
   const accepted = await callModel('stock.picking', 'write', [[picking.id], fields]);
@@ -418,12 +431,12 @@ async function postOdooLogNote(pickingId, lines) {
  * @param {object} payload      - odooPayloadBuilder.buildAppointmentPayload() output
  */
 async function writeOdooAppointmentResult(odooOrderRef, payload) {
-  if (!process.env.ODOO_URL || !odooOrderRef) return null;
-  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') return null;
+  if (!process.env.ODOO_URL || !odooOrderRef) throw new Error('Appointment synchronization blocked: Odoo URL or DO reference missing.');
+  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') throw new Error('Appointment synchronization blocked: GCA field mapping is not enabled.');
 
   const pickingId = await findPickingId(odooOrderRef);
   // TODO: every x_ field name below is a placeholder pending GCA confirmation.
-  await callModel('stock.picking', 'write', [[pickingId], {
+  const accepted = await callModel('stock.picking', 'write', [[pickingId], {
     x_cehub_order_id:       payload.cehub_order_id || false,
     x_appointment_status:   payload.confirmation_status,
     x_cehub_slot_ref:       payload.slot_ref || false,
@@ -434,6 +447,7 @@ async function writeOdooAppointmentResult(odooOrderRef, payload) {
     x_confirmed_qty_json:   payload.order_lines?.length ? JSON.stringify(payload.order_lines) : false,
     x_appointment_message:  payload.message || false,
   }]);
+  if (accepted !== true) throw new Error('Odoo did not acknowledge appointment confirmation fields.');
   await postOdooLogNote(pickingId, [
     `CE Hub appointment ${payload.confirmation_status}${payload.request_ref ? ` (request ${payload.request_ref})` : ''}.`,
     payload.confirmed_date && `Confirmed: ${payload.confirmed_date} ${payload.confirmed_session || ''} ${payload.scheduled_start || ''} – ${payload.scheduled_end || ''}`,
@@ -448,14 +462,20 @@ async function writeOdooAppointmentResult(odooOrderRef, payload) {
  * @param {object} payload      - odooPayloadBuilder.buildAppointmentDecisionPayload() output
  */
 async function writeOdooAppointmentDecision(odooOrderRef, payload) {
-  if (!process.env.ODOO_URL || !odooOrderRef) return null;
-  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') return null;
+  if (!process.env.ODOO_URL || !odooOrderRef) throw new Error('Appointment decision blocked: Odoo URL or DO reference missing.');
+  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') throw new Error('Appointment decision blocked: GCA field mapping is not enabled.');
+  const cancelledField = process.env.ODOO_ORDER_CANCELLED_FIELD;
+  if (payload.action === 'cancel_order' && (!cancelledField || !/^x_[A-Za-z0-9_]+$/.test(cancelledField)
+    || ['x_delivery_status', 'x_appointment_status', 'x_appointment_change_status', 'x_appointment_change_note', 'x_cehub_slot_ref', 'x_confirmed_date', 'x_confirmed_session', 'x_scheduled_date_start', 'x_scheduled_date_end', 'x_confirmed_qty_json'].includes(cancelledField))) {
+    throw new Error('DO cancellation decision blocked: GCA must confirm ODOO_ORDER_CANCELLED_FIELD (Boolean). Do not reopen booking for a cancelled DO.');
+  }
 
   const pickingId = await findPickingId(odooOrderRef);
   // TODO: every x_ field name below is a placeholder pending GCA confirmation.
-  await callModel('stock.picking', 'write', [[pickingId], {
+  const accepted = await callModel('stock.picking', 'write', [[pickingId], {
     x_appointment_change_status: payload.decision,
     x_appointment_change_note:   payload.note || false,
+    ...(payload.action === 'cancel_order' && payload.order_cancelled && { [cancelledField]: true }),
     ...(payload.clear_confirmed_appointment && {
       x_appointment_status:   'cancelled',
       x_cehub_slot_ref:       false,
@@ -463,11 +483,14 @@ async function writeOdooAppointmentDecision(odooOrderRef, payload) {
       x_confirmed_session:    false,
       x_scheduled_date_start: false,
       x_scheduled_date_end:   false,
+      x_confirmed_qty_json: false,
     }),
   }]);
+  if (accepted !== true) throw new Error('Odoo did not acknowledge appointment decision fields.');
   const previous = payload.previous_appointment || {};
   await postOdooLogNote(pickingId, [
     `CE Hub ${payload.decision} the appointment ${payload.action} request${payload.request_ref ? ` ${payload.request_ref}` : ''}.`,
+    `Previous status: ${previous.status || 'unknown'}; slot reference: ${previous.slot_ref || 'none'}; confirmation request: ${previous.request_ref || 'none'}.`,
     previous.date && `Previous appointment: ${previous.date} ${previous.session || ''} ${previous.scheduled_start || ''} – ${previous.scheduled_end || ''}`,
     payload.note && `Note: ${payload.note}`,
   ]);

@@ -18,7 +18,7 @@ const HEADER_FIELDS = {
 const CUSTOMER_FIELDS = { partner_name: ['full_name', 'Customer'], partner_email: ['email', 'Customer email'], partner_phone: ['phone', 'Customer phone'] };
 const FINAL_OR_MOVING = ['Loaded', 'Delivering', 'In Progress', 'Installing', 'Delivered', 'Failed', 'Cancelled', 'Completed'];
 const plain = value => JSON.parse(JSON.stringify(value));
-const isAppointmentKind = kind => kind === 'appointment_edit' || kind === 'appointment_cancel';
+const isAppointmentKind = kind => ['appointment_edit', 'appointment_cancel', 'order_cancel'].includes(kind);
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
@@ -120,11 +120,12 @@ async function requestDetail(id) {
   if (!request) throw preparationError('Change request not found.', 'REQUEST_NOT_FOUND', 404);
   const order = await readOrder(prisma, request.order_id);
   if (isAppointmentKind(request.request_kind)) {
-    // Appointment requests are judged on the current order, not a frozen snapshot:
-    // routine scheduler edits must not make them unapprovable.
+    // Show the same stale baseline check enforced by the approval transaction.
     const { appointmentBlockers } = require('./odooAppointmentService');
-    const blockers = order ? appointmentBlockers(order) : ['The order no longer exists.'];
-    return { ...request, current_order_status: order?.order_status || null, stale: false, approval_blockers: blockers, can_approve: request.status === 'pending' && !blockers.length };
+    const blockers = order ? appointmentBlockers(order, request.request_kind === 'order_cancel') : ['The order no longer exists.'];
+    const stale = !order || hash(snapshot(order)) !== request.baseline_hash;
+    if (stale) blockers.unshift('The appointment changed. Reject this request and ask Odoo for a fresh request.');
+    return { ...request, current_order_status: order?.order_status || null, stale, approval_blockers: blockers, can_approve: request.status === 'pending' && !blockers.length };
   }
   const stale = !order || hash(snapshot(order)) !== request.baseline_hash;
   const blockers = order ? approvalBlockers(order, request.payload, request.request_kind) : ['The order no longer exists.'];
@@ -160,11 +161,13 @@ async function decideRequest(id, decision, note, actor) {
       if (after.order_status !== order.order_status || after.time_slot_id !== order.time_slot_id) throw preparationError('Approval must not change delivery status or time slot.', 'UNSAFE_STATUS_CHANGE', 409);
       applied = snapshot(after);
     }
-    return tx.odoo_change_requests.update({ where: { id }, data: {
+    const result = await tx.odoo_change_requests.update({ where: { id }, data: {
       status: decision === 'approve' ? 'approved' : 'rejected', reviewed_by: actor.id,
       reviewed_by_name: actor.name, review_note: note.trim() || null, reviewed_at: new Date(),
       ...(applied ? { applied_snapshot: applied } : {}),
     } });
+    if (appointmentEffect) await require('./odooAppointmentOutbox').queueDecision(tx, result, appointmentEffect.order);
+    return result;
   }, { timeout: 20000 });
   if (appointmentEffect) await appointment.finishAppointmentDecision(reviewed, appointmentEffect);
   return reviewed;

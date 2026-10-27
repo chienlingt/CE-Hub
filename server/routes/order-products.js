@@ -83,8 +83,14 @@ router.patch('/:id/delivery-status', async (req, res) => {
     const item = await prisma.order_products.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ error: 'Order product not found' });
 
+    if (delivered_quantity != null && (!Number.isInteger(delivered_quantity) || delivered_quantity < 0
+      || delivered_quantity > item.quantity || (item_delivery_status === 'failed' && delivered_quantity !== 0)
+      || (item_delivery_status === 'pending' && delivered_quantity !== 0))) {
+      return res.status(400).json({ error: 'Delivered quantity must be a whole number within the ordered quantity; failed/pending lines cannot have delivered units.', code: 'INVALID_DELIVERED_QUANTITY' });
+    }
+
     const resolvedQty = delivered_quantity != null
-      ? parseInt(delivered_quantity)
+      ? delivered_quantity
       : item_delivery_status === 'delivered' ? item.quantity
       : item_delivery_status === 'failed'    ? 0
       : null;

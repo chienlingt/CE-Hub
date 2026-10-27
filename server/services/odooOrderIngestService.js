@@ -281,4 +281,4 @@ async function applyApprovedChange(payload, kind, tx) {
   return { success: true, order_id: order.id };
 }
 
-module.exports = { pushOrder, syncOrderPreparation, mergeOrderLines, resolveBuilding, applyApprovedChange };
+module.exports = { pushOrder, syncOrderPreparation, mergeOrderLines, resolveBuilding, applyApprovedChange, ingestOrder };

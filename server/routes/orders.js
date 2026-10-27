@@ -10,18 +10,8 @@ const { getCoordinatesFromAddress, calculateRoute } = require('../services/routi
 
 const { markOrderDelivering, markOrderDelivered, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
-const { buildOdooEventPayload, buildAppointmentPayload } = require('../services/odooPayloadBuilder');
+const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
 
-// FRD INT-04: send the appointment confirmation result to Odoo via the outbox.
-function enqueueAppointmentResult(order, confirmationStatus, keySuffix) {
-  if (!order.odoo_order_ref) return;
-  buildAppointmentPayload(order.id, confirmationStatus).then(payload => enqueue({
-    eventType:      'APPOINTMENT_CONFIRMATION',
-    target:         'odoo',
-    payload,
-    idempotencyKey: `order:${order.id}:odoo:appointment:${confirmationStatus}:${keySuffix}`,
-  })).catch(e => console.error(`[Appointment] APPOINTMENT_CONFIRMATION (${confirmationStatus}) outbox enqueue failed:`, e.message));
-}
 const upload = require('../middleware/upload');
 const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
 
@@ -1259,6 +1249,11 @@ router.patch('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    const existing = await prisma.orders.findUnique({ where: { id: req.params.id }, select: { odoo_picking_id: true, odoo_order_ref: true } });
+    if (!existing) return res.status(404).json({ error: 'Order not found' });
+    if (existing.odoo_picking_id != null || existing.odoo_order_ref) {
+      return res.status(409).json({ error: 'Odoo-managed orders must use approval-controlled cancellation; history cannot be permanently deleted.', code: 'ORDER_SOFT_CANCEL_REQUIRED' });
+    }
     await prisma.orders.delete({ where: { id: req.params.id } });
     res.json({ message: 'Order deleted successfully' });
   } catch (err) {
@@ -1623,7 +1618,7 @@ router.post('/:id/apply-parsed', async (req, res) => {
 });
 
 // POST /:id/approve — Admin approves DO assignment and writes back to Odoo (A1.5)
-router.post('/:id/approve', async (req, res) => {
+router.post('/:id/approve', require('../middleware/odooApprovalAuth').requireReviewAdmin, async (req, res) => {
   try {
     const order = await prisma.orders.findUnique({
       where:   { id: req.params.id },
@@ -1638,8 +1633,18 @@ router.post('/:id/approve', async (req, res) => {
       });
     }
 
+    if (!['Pending', 'Scheduled'].includes(order.order_status)) return res.status(409).json({ error: 'Cannot confirm after delivery has started.' });
+    if (order.assignment_status === 'approved') return res.json({ success: true, order });
+    if (!order.scheduled_start_date_time || !order.scheduled_end_date_time) return res.status(409).json({ error: 'The assigned slot must have confirmed start and end times.' });
     // Mark assignment as approved — this is the CE Hub appointment confirmation.
-    const updated = await prisma.orders.update({
+    const updated = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id}::uuid FOR UPDATE`;
+      const current = await tx.orders.findUnique({ where: { id: order.id } });
+      if (!require('node:util').isDeepStrictEqual(current, Object.fromEntries(Object.entries(order).filter(([k]) => !['employees', 'time_slots'].includes(k))))) {
+        throw Object.assign(new Error('Order changed; reload before deciding.'), { statusCode: 409 });
+      }
+      const changed = await tx.orders.update({
       where: { id: req.params.id },
       data:  {
         assignment_status: 'approved',
@@ -1647,22 +1652,24 @@ router.post('/:id/approve', async (req, res) => {
         ...(order.odoo_order_ref && { appointment_status: 'confirmed', appointment_confirmed_at: new Date(), appointment_message: null }),
         updated_at:        new Date(),
       },
+      });
+      await require('../services/odooAppointmentOutbox').queueResult(tx, changed, 'confirmed', new Date().toISOString());
+      return changed;
     });
 
     // Confirmed appointment back to the Odoo DO (FRD INT-04). Replaces the old
     // inline A1.5 sale.order write; the DO (stock.picking) is the integration record.
-    enqueueAppointmentResult(updated, 'confirmed', updated.scheduled_start_date_time?.toISOString?.() || Date.now());
 
     res.json({ success: true, order: updated });
   } catch (err) {
     console.error('POST /api/orders/:id/approve error', err);
-    res.status(500).json({ error: 'Failed to approve assignment', details: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to approve assignment' });
   }
 });
 
 // POST /:id/unapprove — Admin undoes an approval; the DO returns to awaiting approval
 // in its slot. Only while the order has not started delivery. Does not touch Odoo.
-router.post('/:id/unapprove', async (req, res) => {
+router.post('/:id/unapprove', require('../middleware/odooApprovalAuth').requireReviewAdmin, async (req, res) => {
   try {
     const order = await prisma.orders.findUnique({ where: { id: req.params.id } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -1674,28 +1681,37 @@ router.post('/:id/unapprove', async (req, res) => {
       return res.status(409).json({ error: `Cannot undo — order is already ${order.order_status}.` });
     }
 
-    const updated = await prisma.orders.update({
+    const updated = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id}::uuid FOR UPDATE`;
+      const current = await tx.orders.findUnique({ where: { id: order.id } });
+      if (!require('node:util').isDeepStrictEqual(current, Object.fromEntries(Object.entries(order).filter(([k]) => !['employees', 'time_slots'].includes(k))))) {
+        throw Object.assign(new Error('Order changed; reload before deciding.'), { statusCode: 409 });
+      }
+      const changed = await tx.orders.update({
       where: { id: req.params.id },
       data:  {
         assignment_status: 'assigned',
         ...(order.odoo_order_ref && { appointment_status: 'cancelled', appointment_confirmed_at: null, appointment_message: 'CE Hub undid the appointment approval.' }),
         updated_at: new Date(),
       },
+      });
+      await require('../services/odooAppointmentOutbox').queueResult(tx, changed, 'cancelled', new Date().toISOString());
+      return changed;
     });
     // Tell Odoo the confirmation is cancelled (FRD §05 confirmation status).
-    enqueueAppointmentResult(updated, 'cancelled', Date.now());
 
     res.json({ success: true, order: updated });
   } catch (err) {
     console.error('POST /api/orders/:id/unapprove error', err);
-    res.status(500).json({ error: 'Failed to undo approval', details: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to undo approval' });
   }
 });
 
 // POST /:id/reject-appointment — Admin rejects the requested appointment (FRD
 // INT-04 "rejected"). Only before approval; the DO leaves its slot and goes back
 // to Pending, and Odoo keeps the appointment unconfirmed for correction/retry.
-router.post('/:id/reject-appointment', async (req, res) => {
+router.post('/:id/reject-appointment', require('../middleware/odooApprovalAuth').requireReviewAdmin, async (req, res) => {
   try {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (reason.length < 3 || reason.length > 2000) {
@@ -1711,22 +1727,31 @@ router.post('/:id/reject-appointment', async (req, res) => {
       return res.status(409).json({ error: `Cannot reject — order is already ${order.order_status}.` });
     }
 
-    const updated = await prisma.orders.update({
+    const updated = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id}::uuid FOR UPDATE`;
+      const current = await tx.orders.findUnique({ where: { id: order.id } });
+      if (!require('node:util').isDeepStrictEqual(current, Object.fromEntries(Object.entries(order).filter(([k]) => !['employees', 'time_slots'].includes(k))))) {
+        throw Object.assign(new Error('Order changed; reload before deciding.'), { statusCode: 409 });
+      }
+      const changed = await tx.orders.update({
       where: { id: req.params.id },
       data:  {
         time_slot_id: null, scheduled_start_date_time: null, scheduled_end_date_time: null,
         assignment_status: 'unassigned', order_status: 'Pending',
-        ...(order.odoo_order_ref && { appointment_status: 'rejected', appointment_message: reason, appointment_request_ref: null }),
+        ...(order.odoo_order_ref && { appointment_status: 'rejected', appointment_message: reason }),
         updated_at: new Date(),
       },
+      });
+      await require('../services/odooAppointmentOutbox').queueResult(tx, changed, 'rejected', new Date().toISOString());
+      return changed;
     });
     if (order.time_slot_id) await updateTimeslotResources(order.time_slot_id);
-    enqueueAppointmentResult(updated, 'rejected', Date.now());
 
     res.json({ success: true, order: updated });
   } catch (err) {
     console.error('POST /api/orders/:id/reject-appointment error', err);
-    res.status(500).json({ error: 'Failed to reject appointment', details: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to reject appointment' });
   }
 });
 

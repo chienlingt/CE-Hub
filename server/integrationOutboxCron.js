@@ -164,37 +164,17 @@ async function handleOrderApprovalCancelled(row) {
 // confirmed (admin approval) / cancelled (approval undone) / rejected.
 
 async function handleAppointmentConfirmation(row) {
-  if (!process.env.ODOO_URL) {
-    console.log('[OutboxWorker] ODOO_URL not set — skipping APPOINTMENT_CONFIRMATION:', row.id);
-    return;
-  }
-
   const payload = row.payload || {};
-  if (!payload.do_ref) {
-    console.log('[OutboxWorker] APPOINTMENT_CONFIRMATION skipped (no do_ref) for order', payload.cehub_order_id);
-    return;
-  }
-
+  if (!process.env.ODOO_URL || !payload.do_ref) throw new Error('Appointment synchronization blocked: Odoo URL or DO reference missing.');
   const written = await writeOdooAppointmentResult(payload.do_ref, payload);
-  console.log(`[OutboxWorker] APPOINTMENT_CONFIRMATION: ${payload.confirmation_status} for ${payload.do_ref}${written ? '' : ' (appointment fields not enabled)'}`);
+  if (written !== true) throw new Error('Odoo did not acknowledge appointment confirmation.');
 }
 
-// ── APPOINTMENT_CHANGE_DECISION handler — FRD INT-11 decision to Odoo ─────
-
 async function handleAppointmentChangeDecision(row) {
-  if (!process.env.ODOO_URL) {
-    console.log('[OutboxWorker] ODOO_URL not set — skipping APPOINTMENT_CHANGE_DECISION:', row.id);
-    return;
-  }
-
   const payload = row.payload || {};
-  if (!payload.do_ref) {
-    console.log('[OutboxWorker] APPOINTMENT_CHANGE_DECISION skipped (no do_ref) for request', payload.request_id);
-    return;
-  }
-
+  if (!process.env.ODOO_URL || !payload.do_ref) throw new Error('Appointment decision blocked: Odoo URL or DO reference missing.');
   const written = await writeOdooAppointmentDecision(payload.do_ref, payload);
-  console.log(`[OutboxWorker] APPOINTMENT_CHANGE_DECISION: ${payload.action} ${payload.decision} for ${payload.do_ref}${written ? '' : ' (appointment fields not enabled)'}`);
+  if (written !== true) throw new Error('Odoo did not acknowledge appointment decision.');
 }
 
 // ── Customer notification handler ─────────────────────────────────────────────

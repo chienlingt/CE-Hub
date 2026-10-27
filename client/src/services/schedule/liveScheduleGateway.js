@@ -13,6 +13,7 @@
 //   - there is NO reject endpoint at all
 
 import { apiFetch } from '../informationService';
+import { adminSessionHeaders } from '../../utils/adminSessionHeaders';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
 import { assertGateway } from './scheduleGateway';
 import { normalizeSnapshot, normalizeSlot } from '../../utils/schedule/scheduleNormalize';
@@ -38,6 +39,7 @@ const LOCAL_ONLY_KEYS = [
 async function rawRequest(path, options = {}) {
   const url = `${API_BASE_URL.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
   const headers = {
+    ...adminSessionHeaders(),
     'Content-Type': 'application/json',
     'ngrok-skip-browser-warning': '1',
     ...(options.headers ?? {}),

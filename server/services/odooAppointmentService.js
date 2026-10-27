@@ -9,15 +9,14 @@
 
 const { Prisma } = require('@prisma/client');
 const prisma = require('../prismaClient');
-const { pushOrder } = require('./odooOrderIngestService');
-const { preparationError } = require('./odooPreparation');
+const { ingestOrder } = require('./odooOrderIngestService');
+const { preparationError, normalizePreparation } = require('./odooPreparation');
+const { assertIncomingLineIdentity } = require('./odooLineIdentity');
 const { unitsFor } = require('./orderProductUnits');
 const { snapshot, hash } = require('./odooChangeReviewService');
-const { enqueue } = require('./integrationOutboxService');
-const { buildAppointmentDecisionPayload } = require('./odooPayloadBuilder');
 const { APPOINTMENT_SESSIONS } = require('./odooAppointmentSessions');
 
-const EDITABLE_STATUSES = ['Pending', 'Scheduled'];
+const EDITABLE_STATUSES = ['Pending', 'Scheduled', 'Failed'];
 const ACTIVE_APPOINTMENT = ['requested', 'confirmed'];
 
 const invalid = message => preparationError(message, 'INVALID_APPOINTMENT');
@@ -50,17 +49,23 @@ function normalizeAppointment(appointment) {
 
 // Approve-time and request-time guard: an appointment can only change before
 // loading/delivery starts (FRD §10 cancellation and delivery boundary).
-function appointmentBlockers(order) {
+function appointmentBlockers(order, cancelOrder = false) {
   const blockers = [];
-  if (!ACTIVE_APPOINTMENT.includes(order.appointment_status)) blockers.push('This DOO has no active CE Hub appointment to change.');
+  if (!cancelOrder && !ACTIVE_APPOINTMENT.includes(order.appointment_status)) blockers.push('This DOO has no active CE Hub appointment to change.');
+  const configuredLead = process.env.ODOO_APPOINTMENT_EDIT_MIN_LEAD_HOURS;
+  if (configuredLead !== undefined && configuredLead !== '') {
+    const hours = Number(configuredLead), start = order.scheduled_start_date_time && new Date(order.scheduled_start_date_time).getTime();
+    if (!Number.isFinite(hours) || hours < 0) blockers.push('Appointment edit cutoff configuration is invalid.');
+    else if (start && Date.now() > start - hours * 3600000) blockers.push('The configured appointment edit cutoff has passed.');
+  }
   const scanned = (order.order_products || []).some(item => unitsFor(item).some(unit => unit.handling_status !== 'pending'));
+  if ((order.order_products || []).some(item => (item.delivered_quantity || 0) > 0 || item.item_delivery_status === 'delivered')) blockers.push('A full or partial delivered result cannot be rescheduled through appointment editing.');
   if (!EDITABLE_STATUSES.includes(order.order_status) || scanned) blockers.push(`The appointment cannot change once loading or delivery has started (order is ${order.order_status}).`);
   return blockers;
 }
 
 /**
- * POST /api/webhooks/odoo/appointment-confirm — the DO snapshot (same shape as
- * /odoo/order) plus an `appointment` block. Creates/updates the DO through
+ * POST /api/webhooks/odoo/order with an `appointment` block. Creates/updates the DO through
  * pushOrder and records the requested date/session. The same request_ref is an
  * INT-05 retry and never re-applies anything.
  */
@@ -69,23 +74,49 @@ async function requestAppointment(payload) {
     const appointment = normalizeAppointment(payload?.appointment);
     if (!payload?.name) throw invalid('Payload must include name (DO reference).');
 
-    const existing = await prisma.orders.findFirst({ where: { odoo_order_ref: payload.name } });
+    assertIncomingLineIdentity(payload);
+    normalizePreparation(payload.order_lines, payload.doo_ready === true);
+    return await prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
+    const existing = await tx.orders.findFirst({ where: { odoo_order_ref: payload.name }, include: { order_products: true, customers: true } });
     if (existing && existing.appointment_request_ref === appointment.request_ref) {
+      const incoming = normalizePreparation(payload.order_lines, payload.doo_ready ?? existing.doo_ready);
+      const unchanged = existing.odoo_picking_id === payload.id
+        && existing.requested_appointment_date === appointment.requested_date
+        && existing.requested_appointment_session === appointment.requested_session
+        && hash(existing.appointment_requirements ?? null) === hash(appointment.requirements ?? null)
+        && (existing.delivery_document_requirement || null) === appointment.delivery_document
+        && incoming.length === existing.order_products.length
+        && incoming.every(line => {
+          const old = existing.order_products.find(item => item.odoo_line_id === line.odoo_line_id);
+          return old && old.quantity === line.quantity && old.prepared_quantity === line.prepared_quantity
+            && old.odoo_product_name === line.odoo_product_name && old.serial_tracking === line.serial_tracking
+            && hash(unitsFor(old).map(unit => unit.assigned_serial).filter(Boolean)) === hash(line.assigned_serials);
+        });
+      if (!unchanged) throw preparationError('request_ref was already used with different appointment or item data. Use a new reference after the controlled edit workflow.', 'REQUEST_REFERENCE_CONFLICT', 409);
+      if (payload.doo_ready !== undefined && payload.doo_ready !== existing.doo_ready) throw preparationError('DOO readiness changed; send the controlled readiness update separately.', 'REQUEST_REFERENCE_CONFLICT', 409);
+      const headerFields = { delivery_address: 'delivery_address', delivery_city: 'delivery_city', delivery_state_name: 'delivery_state', delivery_zip: 'delivery_postcode', delivery_remarks: 'delivery_remarks', salesperson_name: 'salesperson_name', salesperson_phone: 'salesperson_phone', sales_order_name: 'odoo_sales_ref' };
+      const contactFields = { partner_name: 'full_name', partner_email: 'email', partner_phone: 'phone' };
+      if (Object.entries(headerFields).some(([key, column]) => payload[key] != null && payload[key] !== (existing[column] ?? ''))
+        || Object.entries(contactFields).some(([key, column]) => payload[key] != null && payload[key] !== (existing.customers?.[column] ?? ''))) throw preparationError('request_ref cannot be reused to change the DO snapshot.', 'REQUEST_REFERENCE_CONFLICT', 409);
       return {
         success: true, action: 'previously_received', order_id: existing.id, request_ref: appointment.request_ref,
         confirmation_status: existing.appointment_status === 'requested' ? 'pending' : existing.appointment_status,
+        ...(existing.appointment_status !== 'requested' && { result: await require('./odooPayloadBuilder').buildAppointmentPayload(existing.id, existing.appointment_status, tx) }),
       };
     }
     if (existing?.appointment_status === 'confirmed') {
       throw preparationError('This DOO already has a confirmed appointment. Use Request Edit Appointment to change it.', 'APPOINTMENT_ALREADY_CONFIRMED', 409);
     }
+    if (existing?.appointment_status === 'requested') throw preparationError('An appointment request is already pending. Retry its original request_ref or wait for its decision.', 'APPOINTMENT_REQUEST_PENDING', 409);
 
     const { appointment: _appointment, ...doPayload } = payload;
-    const result = await pushOrder(doPayload);
+    if (existing?.order_status === 'Failed') throw preparationError('Approve an appointment edit and complete physical return/reconciliation before requesting another appointment.', 'RETURN_RECONCILIATION_REQUIRED', 409);
+    const result = await ingestOrder(doPayload, tx);
     if (!result.success) return result;
 
     const [sessionStart] = APPOINTMENT_SESSIONS[appointment.requested_session];
-    await prisma.orders.update({
+    await tx.orders.update({
       where: { id: result.order_id },
       data: {
         appointment_request_ref:       appointment.request_ref,
@@ -100,6 +131,7 @@ async function requestAppointment(payload) {
       },
     });
 
+    await require('./odooProgressService').recordPickedMilestone(tx, result.order_id);
     return {
       success: true,
       action: result.action === 'pending_approval' ? 'pending_approval' : 'appointment_requested',
@@ -108,6 +140,7 @@ async function requestAppointment(payload) {
       confirmation_status: 'pending',
       ...(result.request_id && { request_id: result.request_id, review_status: result.review_status }),
     };
+    }, { timeout: 20000 });
   } catch (error) {
     return asResult(error);
   }
@@ -124,7 +157,7 @@ function reviewResult(request, order) {
  * POST /api/webhooks/odoo/appointment-change — Odoo's Request Edit / Cancel
  * Appointment. Stored for CE Hub admin review; nothing changes until approval.
  */
-async function requestAppointmentChange(payload) {
+async function requestAppointmentChange(payload, { cancelOrder = false } = {}) {
   try {
     const { id, name, request_ref, action, reason, requested_by } = payload || {};
     if (!name || !Number.isInteger(id) || id <= 0) throw preparationError('id (stock.picking.id) and name (DO reference) are required.', 'INVALID_APPOINTMENT_CHANGE');
@@ -138,14 +171,16 @@ async function requestAppointmentChange(payload) {
       if (!order) throw preparationError(`Order not found for ref: ${name}`, 'ORDER_NOT_FOUND', 404);
       if (order.odoo_picking_id != null && order.odoo_picking_id !== id) throw preparationError('DO reference does not match its Odoo picking id.', 'ODOO_REFERENCE_MISMATCH', 409);
 
-      const kind = `appointment_${action}`;
+      const kind = cancelOrder ? 'order_cancel' : `appointment_${action}`;
       const key = hash({ orderId: order.id, kind, request_ref: request_ref.trim() });
       const prior = await tx.odoo_change_requests.findUnique({ where: { request_key: key } });
       if (prior) return reviewResult(prior, order);
 
-      if (!ACTIVE_APPOINTMENT.includes(order.appointment_status)) throw preparationError('This DOO has no active CE Hub appointment to change.', 'NO_ACTIVE_APPOINTMENT', 409);
-      const blockers = appointmentBlockers(order);
+      if (!cancelOrder && !ACTIVE_APPOINTMENT.includes(order.appointment_status)) throw preparationError('This DOO has no active CE Hub appointment to change.', 'NO_ACTIVE_APPOINTMENT', 409);
+      const blockers = appointmentBlockers(order, cancelOrder);
       if (blockers.length) throw preparationError(blockers.join(' '), 'APPOINTMENT_LOCKED', 409);
+      const pending = await tx.odoo_change_requests.findFirst({ where: { order_id: order.id, status: 'pending', request_kind: { in: ['appointment_edit', 'appointment_cancel', 'order_cancel'] } } });
+      if (pending) throw preparationError('An appointment change is already awaiting approval. Reuse its request_ref.', 'APPOINTMENT_CHANGE_PENDING', 409);
 
       const before = snapshot(order);
       const request = await tx.odoo_change_requests.create({ data: {
@@ -154,7 +189,7 @@ async function requestAppointmentChange(payload) {
         before_snapshot: before, baseline_hash: hash(before),
         changes: [{
           field: 'appointment',
-          label: action === 'edit' ? 'Request edit appointment' : 'Request cancel appointment',
+          label: cancelOrder ? 'Cancel DO — remove from active work, retain history' : action === 'edit' ? 'Request edit appointment' : 'Request cancel appointment',
           before: {
             status: order.appointment_status,
             date: order.requested_appointment_date, session: order.requested_appointment_session,
@@ -178,18 +213,23 @@ async function requestAppointmentChange(payload) {
  * nothing locally. Returns what finishAppointmentDecision needs after commit.
  */
 async function applyAppointmentDecision(tx, request, decision) {
-  const order = await tx.orders.findUnique({ where: { id: request.order_id }, include: { order_products: true, time_slots: true } });
+  let order = await tx.orders.findUnique({ where: { id: request.order_id }, include: { order_products: true, time_slots: true } });
   if (decision !== 'approve') return { order, previousSlotId: null };
   if (!order) throw preparationError('The order no longer exists.', 'ORDER_NOT_FOUND', 404);
 
   await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id}::uuid FOR UPDATE`;
-  const blockers = appointmentBlockers(order);
+  const comparable = await tx.orders.findUnique({ where: { id: order.id }, include: { order_products: true, customers: true, time_slots: true } });
+  if (hash(snapshot(comparable)) !== request.baseline_hash) throw preparationError('The appointment changed since this request. Reject it and submit a fresh request.', 'STALE_CHANGE_REQUEST', 409);
+  order = comparable;
+  const cancelOrder = request.request_kind === 'order_cancel';
+  const blockers = appointmentBlockers(order, cancelOrder);
   if (blockers.length) throw preparationError(blockers.join(' '), 'APPOINTMENT_LOCKED', 409);
 
   await tx.orders.update({ where: { id: order.id }, data: {
     time_slot_id: null, scheduled_start_date_time: null, scheduled_end_date_time: null,
-    assignment_status: 'unassigned', order_status: 'Pending',
-    appointment_status: 'cancelled', appointment_request_ref: null,
+    assignment_status: 'unassigned', order_status: cancelOrder ? 'Cancelled' : 'Pending',
+    ...(cancelOrder && { employee_id: null }),
+    appointment_status: 'cancelled',
     appointment_message: request.payload?.reason || null, appointment_confirmed_at: null,
     updated_at: new Date(),
   } });
@@ -202,16 +242,11 @@ async function finishAppointmentDecision(reviewed, effect) {
     await updateTimeslotResources(effect.previousSlotId)
       .catch(e => console.error('[OdooAppointment] Slot resources not refreshed:', e.message));
   }
-  if (!reviewed.do_ref) return;
-  await enqueue({
-    eventType:      'APPOINTMENT_CHANGE_DECISION',
-    target:         'odoo',
-    payload:        buildAppointmentDecisionPayload(reviewed, effect.order),
-    idempotencyKey: `odoo-change:${reviewed.id}:decision`,
-  });
+  // Decision was durably queued inside the approval transaction.
 }
 
 module.exports = {
+  requestOrderCancellation: payload => requestAppointmentChange({ ...payload, action: 'cancel' }, { cancelOrder: true }),
   requestAppointment,
   requestAppointmentChange,
   appointmentBlockers,

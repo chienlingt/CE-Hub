@@ -25,11 +25,6 @@ function toMytIso(date) {
   return myt.toISOString().replace('Z', '+08:00');
 }
 
-// Serial number for a line: prefer the latest lifecycle stage that recorded one.
-function resolveSerial(item) {
-  return item.unloaded_serial || item.assigned_serial || item.loaded_serial || null;
-}
-
 function employeeDisplayName(emp) {
   return emp?.name || emp?.display_name || null;
 }
@@ -95,6 +90,7 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
           },
           lorry_trip: {
             select: {
+              id: true, driver_id: true, truck_id: true,
               employees_lorry_trips_driver_idToemployees:    { select: { name: true, display_name: true } },
               employees_lorry_trips_assistant_idToemployees: { select: { name: true, display_name: true } },
             },
@@ -114,7 +110,6 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     order_line_id:         item.odoo_line_id,
     quantity:               item.quantity,
     actual_delivered_qty:  resolveDeliveredQty(item),
-    serial_number:          resolveSerial(item),
     serial_numbers:         unitsFor(item).map(unit => unit.unloaded_serial || unit.loaded_serial || unit.assigned_serial).filter(Boolean),
     assigned_serial_numbers: unitsFor(item).map(unit => unit.assigned_serial).filter(Boolean),
     loaded_serial_numbers:   unitsFor(item).map(unit => unit.loaded_serial).filter(Boolean),
@@ -139,6 +134,13 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     ...(ceHubStatus === 'Failed' && {
       failure_reason: latestFailure?.failure_reason || order.issue_reason || null,
       remarks:        latestFailure?.failure_desc   || order.issue_desc   || null,
+      attempt_time: toMytIso(latestFailure?.created_at),
+      failure_event_id: latestFailure?.id || null,
+      trip_ref: order.time_slots?.lorry_trip?.id || null,
+      slot_ref: order.time_slot_id || null,
+      driver_ref: order.time_slots?.lorry_trip?.driver_id || order.employee_id || null,
+      vehicle_ref: order.time_slots?.lorry_trip?.truck_id || order.time_slots?.truck_id || null,
+      delivery_notes: order.delivery_notes || null,
     }),
     driver_name:            crew.driver_name,
     assistant_name:         crew.assistant_name,
@@ -230,11 +232,16 @@ function buildAppointmentDecisionPayload(request, order) {
     cehub_order_id:  request.order_id,
     request_ref:     request.payload?.request_ref || null,
     request_id:      request.id,
-    action:          request.request_kind === 'appointment_cancel' ? 'cancel' : 'edit',
+    action:          request.request_kind === 'order_cancel' ? 'cancel_order' : request.request_kind === 'appointment_cancel' ? 'cancel' : 'edit',
+    order_cancelled: approved && request.request_kind === 'order_cancel',
+    allow_reconfirmation: approved && request.request_kind !== 'order_cancel',
     decision:        approved ? 'approved' : 'rejected',
     note:            request.review_note || null,
     reviewed_at:     toMytIso(request.reviewed_at),
     previous_appointment: {
+      status: order?.appointment_status || null,
+      slot_ref: order?.time_slot_id || null,
+      request_ref: order?.appointment_request_ref || null,
       date:            slot?.date || order?.requested_appointment_date || null,
       session:         sessionForWindow(slot?.time_window_start) || order?.requested_appointment_session || null,
       scheduled_start: toMytIso(order?.scheduled_start_date_time),
