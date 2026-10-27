@@ -3,6 +3,12 @@ import { createPortal } from 'react-dom';
 import { ShieldCheck, X, ChevronRight, Loader2 } from 'lucide-react';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
 
+const KIND_LABELS = {
+  preparation: 'Preparation change',
+  appointment_edit: 'Appointment edit request',
+  appointment_cancel: 'Appointment cancellation request',
+};
+const kindLabel = kind => KIND_LABELS[kind] || 'Order change';
 const display = value => {
   if (value == null || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Ready' : 'Not ready';
@@ -20,11 +26,13 @@ function ReviewDialog({ request, busy, error, onClose, onDecision }) {
   return createPortal(
     <dialog ref={dialog} aria-labelledby="odoo-review-title" onCancel={e => { e.preventDefault(); if (!busy) onClose(); }} className="m-auto w-[calc(100%-1.5rem)] max-w-3xl max-h-[90dvh] rounded-2xl border border-gray-200 p-0 shadow-2xl backdrop:bg-black/40">
       <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b bg-white px-5 py-4">
-        <div><h2 id="odoo-review-title" className="font-semibold text-gray-900">{request.do_ref}</h2><p className="text-xs text-gray-500">{request.request_kind === 'preparation' ? 'Preparation change' : 'Order change'} · {request.current_order_status || 'Order removed'}</p></div>
+        <div><h2 id="odoo-review-title" className="font-semibold text-gray-900">{request.do_ref}</h2><p className="text-xs text-gray-500">{kindLabel(request.request_kind)} · {request.current_order_status || 'Order removed'}</p></div>
         <button type="button" onClick={onClose} disabled={busy} aria-label="Close review" className="rounded-lg p-2 hover:bg-gray-100 disabled:opacity-40"><X size={20} /></button>
       </div>
       <div className="space-y-4 p-5">
-        <p className="text-xs leading-relaxed text-gray-500">Approval keeps the delivery status, time slot and scan history. An address change may need a separate route review.</p>
+        {request.request_kind?.startsWith('appointment_')
+          ? <p className="text-xs leading-relaxed text-gray-500">Approval releases the time slot and returns the DO to Pending. Odoo clears its confirmed appointment so the salesperson can confirm a new one.{request.payload?.requested_by ? ` Requested by ${request.payload.requested_by}.` : ''}</p>
+          : <p className="text-xs leading-relaxed text-gray-500">Approval keeps the delivery status, time slot and scan history. An address change may need a separate route review.</p>}
         {request.approval_blockers?.length > 0 && request.status === 'pending' && <div role="status" className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{request.approval_blockers.map((message, i) => <p key={i}>{message}</p>)}</div>}
         <div className="divide-y rounded-xl border border-gray-200">
           {(request.changes || []).map(change => <div key={change.field} className="p-3">
@@ -86,7 +94,7 @@ export default function OdooChangeReview({ token, refreshVersion = 0, onChanged 
     </div>
     {error && <p role="alert" className="p-4 text-sm text-red-700">{error}</p>}
     <div className="divide-y">{rows.map(request => <button key={request.id} type="button" onClick={() => review(request.id)} className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left hover:bg-gray-50">
-      <div><p className="text-sm font-semibold text-gray-900">{request.do_ref}<span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-normal text-amber-800">{request.status}</span></p><p className="mt-1 text-xs text-gray-500">{request.changes?.length || 0} changes · {new Date(request.created_at).toLocaleString('en-MY')}{request.reviewed_by_name ? ` · ${request.reviewed_by_name}` : ''}</p></div><ChevronRight size={17} />
+      <div><p className="text-sm font-semibold text-gray-900">{request.do_ref}<span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-normal text-amber-800">{request.status}</span></p><p className="mt-1 text-xs text-gray-500">{kindLabel(request.request_kind)} · {request.changes?.length || 0} changes ·{new Date(request.created_at).toLocaleString('en-MY')}{request.reviewed_by_name ? ` · ${request.reviewed_by_name}` : ''}</p></div><ChevronRight size={17} />
     </button>)}</div>
     {!rows.length && !error && <p className="px-4 py-10 text-center text-sm text-gray-500">{loading ? 'Loading…' : 'No requests to review.'}</p>}
     {total > 50 && <div className="flex justify-between border-t px-4 py-2 text-xs"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button><span>{offset + 1}–{Math.min(offset + 50, total)} of {total}</span><button type="button" disabled={offset + 50 >= total} onClick={() => setOffset(offset + 50)}>Next</button></div>}

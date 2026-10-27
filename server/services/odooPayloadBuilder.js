@@ -8,6 +8,7 @@
 const prisma = require('../prismaClient');
 const { unitsFor } = require('./orderProductUnits');
 const { ODOO_LINE_MODEL, assertStoredLineIdentity } = require('./odooLineIdentity');
+const { sessionForWindow } = require('./odooAppointmentSessions');
 
 // Every timestamp sent to Odoo uses Malaysia time (UTC+8) — matches the
 // contract documented in Section 1 of the reference doc ("ISO 8601 in
@@ -149,4 +150,99 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
   };
 }
 
-module.exports = { buildOdooEventPayload };
+/**
+ * FRD INT-04 confirmation result for one order, sent when a CE Hub admin
+ * approves (confirmed), undoes the approval (cancelled) or rejects the requested
+ * appointment (rejected). Appointment fields are only filled for confirmed.
+ *
+ * @param {string} orderId
+ * @param {'confirmed'|'rejected'|'cancelled'} confirmationStatus
+ * @returns {Promise<object|null>} null if the order can't be found
+ */
+async function buildAppointmentPayload(orderId, confirmationStatus, db = prisma) {
+  const order = await db.orders.findUnique({
+    where: { id: orderId },
+    include: {
+      order_products: true,
+      time_slots: {
+        include: {
+          truck: {
+            select: {
+              plate_no: true,
+              employees_trucks_driver_idToemployees:    { select: { name: true, display_name: true } },
+              employees_trucks_assistant_idToemployees: { select: { name: true, display_name: true } },
+            },
+          },
+          lorry_trip: {
+            select: {
+              employees_lorry_trips_driver_idToemployees:    { select: { name: true, display_name: true } },
+              employees_lorry_trips_assistant_idToemployees: { select: { name: true, display_name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!order) return null;
+
+  const confirmed = confirmationStatus === 'confirmed';
+  const slot = order.time_slots;
+  const crew = confirmed ? resolveCrew(slot) : {};
+  const orderLines = confirmed
+    ? order.order_products.map(item => ({ order_line_id: item.odoo_line_id, confirmed_quantity: item.quantity }))
+    : [];
+
+  return {
+    do_ref:                   order.odoo_order_ref || null,
+    so_ref:                   order.odoo_sales_ref || null,
+    cehub_order_id:           order.id,
+    request_ref:              order.appointment_request_ref || null,
+    confirmation_status:      confirmationStatus,
+    slot_ref:                 confirmed ? order.time_slot_id : null,
+    confirmed_date:           confirmed ? slot?.date || null : null,
+    confirmed_session:        confirmed ? sessionForWindow(slot?.time_window_start) : null,
+    scheduled_start:          confirmed ? toMytIso(order.scheduled_start_date_time) : null,
+    scheduled_end:            confirmed ? toMytIso(order.scheduled_end_date_time) : null,
+    order_line_model:         ODOO_LINE_MODEL,
+    order_lines:              orderLines,
+    confirmed_quantity_total: confirmed ? orderLines.reduce((sum, line) => sum + (line.confirmed_quantity || 0), 0) : null,
+    driver_name:              crew.driver_name    || null,
+    assistant_name:           crew.assistant_name || null,
+    vehicle_plate:            crew.vehicle_plate  || null,
+    message:                  confirmed ? null : order.appointment_message || null,
+    timestamp:                toMytIso(new Date()),
+  };
+}
+
+/**
+ * FRD INT-11 decision on an Odoo Request Edit / Cancel Appointment.
+ *
+ * @param {object} request - the reviewed odoo_change_requests row
+ * @param {object} order   - the order as it was BEFORE the decision was applied
+ *                           (with time_slots), so the previous appointment is kept
+ */
+function buildAppointmentDecisionPayload(request, order) {
+  const approved = request.status === 'approved';
+  const slot = order?.time_slots;
+  return {
+    do_ref:          request.do_ref,
+    cehub_order_id:  request.order_id,
+    request_ref:     request.payload?.request_ref || null,
+    request_id:      request.id,
+    action:          request.request_kind === 'appointment_cancel' ? 'cancel' : 'edit',
+    decision:        approved ? 'approved' : 'rejected',
+    note:            request.review_note || null,
+    reviewed_at:     toMytIso(request.reviewed_at),
+    previous_appointment: {
+      date:            slot?.date || order?.requested_appointment_date || null,
+      session:         sessionForWindow(slot?.time_window_start) || order?.requested_appointment_session || null,
+      scheduled_start: toMytIso(order?.scheduled_start_date_time),
+      scheduled_end:   toMytIso(order?.scheduled_end_date_time),
+    },
+    clear_confirmed_appointment: approved,
+    timestamp:       toMytIso(new Date()),
+  };
+}
+
+module.exports = { buildOdooEventPayload, buildAppointmentPayload, buildAppointmentDecisionPayload };

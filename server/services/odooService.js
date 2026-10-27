@@ -392,8 +392,92 @@ async function writeOdooOrderLines(odooOrderRef, orderLines, orderLineModel) {
   });
 }
 
+// ── FRD INT-04 / INT-11 appointment write-back ────────────────────────────────
+//
+// Gated behind ODOO_SEND_APPOINTMENT_FIELDS, separate from the extended fields.
+// Unlike writeOdooExtendedFields these THROW on failure so the outbox retries:
+// a lost confirmation leaves Odoo's Confirm Appointment button in the wrong state.
+
+async function findPickingId(odooOrderRef) {
+  const pickings = await callModel('stock.picking', 'search_read',
+    [[['name', '=', odooOrderRef]]],
+    { fields: ['id'], limit: 1 }
+  );
+  if (!pickings?.length) throw new Error(`Odoo Delivery Order ${odooOrderRef} not found.`);
+  return pickings[0].id;
+}
+
+// Log Note on the DO (FRD §8/§10 history). Uses Odoo's standard mail.thread API.
+async function postOdooLogNote(pickingId, lines) {
+  const body = lines.filter(Boolean).map(line => `<p>${String(line).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</p>`).join('');
+  return callModel('stock.picking', 'message_post', [[pickingId]], { body, message_type: 'comment', subtype_xmlid: 'mail.mt_note' });
+}
+
+/**
+ * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
+ * @param {object} payload      - odooPayloadBuilder.buildAppointmentPayload() output
+ */
+async function writeOdooAppointmentResult(odooOrderRef, payload) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') return null;
+
+  const pickingId = await findPickingId(odooOrderRef);
+  // TODO: every x_ field name below is a placeholder pending GCA confirmation.
+  await callModel('stock.picking', 'write', [[pickingId], {
+    x_cehub_order_id:       payload.cehub_order_id || false,
+    x_appointment_status:   payload.confirmation_status,
+    x_cehub_slot_ref:       payload.slot_ref || false,
+    x_confirmed_date:       payload.confirmed_date || false,
+    x_confirmed_session:    payload.confirmed_session || false,
+    x_scheduled_date_start: payload.scheduled_start || false,
+    x_scheduled_date_end:   payload.scheduled_end || false,
+    x_confirmed_qty_json:   payload.order_lines?.length ? JSON.stringify(payload.order_lines) : false,
+    x_appointment_message:  payload.message || false,
+  }]);
+  await postOdooLogNote(pickingId, [
+    `CE Hub appointment ${payload.confirmation_status}${payload.request_ref ? ` (request ${payload.request_ref})` : ''}.`,
+    payload.confirmed_date && `Confirmed: ${payload.confirmed_date} ${payload.confirmed_session || ''} ${payload.scheduled_start || ''} – ${payload.scheduled_end || ''}`,
+    payload.confirmed_quantity_total != null && `Confirmed quantity: ${payload.confirmed_quantity_total}`,
+    payload.message && `Reason: ${payload.message}`,
+  ]);
+  return true;
+}
+
+/**
+ * @param {string} odooOrderRef - DO number (orders.odoo_order_ref)
+ * @param {object} payload      - odooPayloadBuilder.buildAppointmentDecisionPayload() output
+ */
+async function writeOdooAppointmentDecision(odooOrderRef, payload) {
+  if (!process.env.ODOO_URL || !odooOrderRef) return null;
+  if (process.env.ODOO_SEND_APPOINTMENT_FIELDS !== 'true') return null;
+
+  const pickingId = await findPickingId(odooOrderRef);
+  // TODO: every x_ field name below is a placeholder pending GCA confirmation.
+  await callModel('stock.picking', 'write', [[pickingId], {
+    x_appointment_change_status: payload.decision,
+    x_appointment_change_note:   payload.note || false,
+    ...(payload.clear_confirmed_appointment && {
+      x_appointment_status:   'cancelled',
+      x_cehub_slot_ref:       false,
+      x_confirmed_date:       false,
+      x_confirmed_session:    false,
+      x_scheduled_date_start: false,
+      x_scheduled_date_end:   false,
+    }),
+  }]);
+  const previous = payload.previous_appointment || {};
+  await postOdooLogNote(pickingId, [
+    `CE Hub ${payload.decision} the appointment ${payload.action} request${payload.request_ref ? ` ${payload.request_ref}` : ''}.`,
+    previous.date && `Previous appointment: ${previous.date} ${previous.session || ''} ${previous.scheduled_start || ''} – ${previous.scheduled_end || ''}`,
+    payload.note && `Note: ${payload.note}`,
+  ]);
+  return true;
+}
+
 module.exports = {
   authenticate,
+  writeOdooAppointmentResult,
+  writeOdooAppointmentDecision,
   callModel,
   pushDeliveryStatus,
   writeOdooDeliveryStatus,

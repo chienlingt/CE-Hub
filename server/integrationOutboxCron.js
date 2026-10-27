@@ -14,10 +14,16 @@
 //                             ORDER_FAILED (A5.3)     → writeOdooDeliveryStatus('Failed') + extended fields
 //                             ORDER_SCHEDULED         → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
 //                             ORDER_APPROVAL_CANCELLED → clears the confirmed appointment (extended fields)
+//                             (both legacy — no longer enqueued; kept so queued rows drain)
+//                             APPOINTMENT_CONFIRMATION    → writeOdooAppointmentResult (FRD INT-04)
+//                             APPOINTMENT_CHANGE_DECISION → writeOdooAppointmentDecision (FRD INT-11)
 //   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
-const { writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification } = require('./services/odooService');
+const {
+  writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification,
+  writeOdooAppointmentResult, writeOdooAppointmentDecision,
+} = require('./services/odooService');
 const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
 const { assertOutboundLineIdentity } = require('./services/odooLineIdentity');
 const {
@@ -152,6 +158,43 @@ async function handleOrderApprovalCancelled(row) {
     scheduled_start: null, scheduled_end: null, driver_name: null, assistant_name: null,
   });
   console.log(`[OutboxWorker] ORDER_APPROVAL_CANCELLED: cleared confirmed appointment for ${odooRef}`);
+}
+
+// ── APPOINTMENT_CONFIRMATION handler — FRD INT-04 result to Odoo ──────────
+// confirmed (admin approval) / cancelled (approval undone) / rejected.
+
+async function handleAppointmentConfirmation(row) {
+  if (!process.env.ODOO_URL) {
+    console.log('[OutboxWorker] ODOO_URL not set — skipping APPOINTMENT_CONFIRMATION:', row.id);
+    return;
+  }
+
+  const payload = row.payload || {};
+  if (!payload.do_ref) {
+    console.log('[OutboxWorker] APPOINTMENT_CONFIRMATION skipped (no do_ref) for order', payload.cehub_order_id);
+    return;
+  }
+
+  const written = await writeOdooAppointmentResult(payload.do_ref, payload);
+  console.log(`[OutboxWorker] APPOINTMENT_CONFIRMATION: ${payload.confirmation_status} for ${payload.do_ref}${written ? '' : ' (appointment fields not enabled)'}`);
+}
+
+// ── APPOINTMENT_CHANGE_DECISION handler — FRD INT-11 decision to Odoo ─────
+
+async function handleAppointmentChangeDecision(row) {
+  if (!process.env.ODOO_URL) {
+    console.log('[OutboxWorker] ODOO_URL not set — skipping APPOINTMENT_CHANGE_DECISION:', row.id);
+    return;
+  }
+
+  const payload = row.payload || {};
+  if (!payload.do_ref) {
+    console.log('[OutboxWorker] APPOINTMENT_CHANGE_DECISION skipped (no do_ref) for request', payload.request_id);
+    return;
+  }
+
+  const written = await writeOdooAppointmentDecision(payload.do_ref, payload);
+  console.log(`[OutboxWorker] APPOINTMENT_CHANGE_DECISION: ${payload.action} ${payload.decision} for ${payload.do_ref}${written ? '' : ' (appointment fields not enabled)'}`);
 }
 
 // ── Customer notification handler ─────────────────────────────────────────────
@@ -306,6 +349,10 @@ async function dispatchRow(row) {
       return handleOrderScheduled(row);
     case 'ORDER_APPROVAL_CANCELLED':
       return handleOrderApprovalCancelled(row);
+    case 'APPOINTMENT_CONFIRMATION':
+      return handleAppointmentConfirmation(row);
+    case 'APPOINTMENT_CHANGE_DECISION':
+      return handleAppointmentChangeDecision(row);
     case 'CUSTOMER_ON_THE_WAY':
       return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':

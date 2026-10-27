@@ -6,8 +6,6 @@ const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 const prisma = require('../prismaClient');
 const { planRoutes } = require('./googleRoutingService');
 const { optimizeScheduledSlots } = require('./intelligentRouteOptimizationService');
-const { enqueue } = require('./integrationOutboxService');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
 dayjs.extend(weekday);
 dayjs.extend(isSameOrAfter);
@@ -807,7 +805,7 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
         }
 
         // Update order in database
-        const schedulerUpdatedOrder = await prisma.orders.update({
+        await prisma.orders.update({
           where: { id: order.id },
           data: {
             scheduled_start_date_time: orderStart.toDate(),
@@ -819,15 +817,8 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
           }
         });
 
-        // Notify Odoo of the assigned delivery window — extended fields only
-        if (schedulerUpdatedOrder.odoo_order_ref) {
-          buildOdooEventPayload(schedulerUpdatedOrder.id, 'Scheduled').then(payload => enqueue({
-            eventType:      'ORDER_SCHEDULED',
-            target:         'odoo',
-            payload,
-            idempotencyKey: `order:${schedulerUpdatedOrder.id}:odoo:scheduled:${orderStart.toISOString()}`,
-          })).catch(e => console.error('[Scheduler] ORDER_SCHEDULED outbox enqueue failed:', e.message));
-        }
+        // Odoo is not told about the proposed window here: the appointment is only
+        // confirmed to Odoo on admin approval (FRD INT-04, POST /api/orders/:id/approve).
 
         console.log(`   [Scheduler] Scheduled Order ${order.id}: ${orderStart.format('HH:mm')}-${orderEnd.format('HH:mm')} (Load Seq: ${order.truck_loading_sequence})`);
 

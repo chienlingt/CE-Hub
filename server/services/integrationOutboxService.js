@@ -12,6 +12,8 @@
 //   order:{orderId}:odoo:{status}    — per-order Odoo status write-back
 //   order:{orderId}:on_the_way       — customer on-the-way WhatsApp/email
 //   order:{orderId}:d1_reminder      — customer D-1 reminder
+//   order:{orderId}:odoo:appointment:{status}:{suffix} — FRD INT-04 confirmation result
+//   odoo-change:{requestId}:decision — FRD INT-11 edit/cancel decision
 //
 // Retry policy: exponential backoff with jitter, max OUTBOX_MAX_ATTEMPTS attempts,
 //   then status → 'dead' for manual review.

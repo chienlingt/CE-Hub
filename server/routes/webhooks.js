@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
 const { pushOrder, syncOrderPreparation } = require('../services/odooOrderIngestService');
+const { requestAppointment, requestAppointmentChange } = require('../services/odooAppointmentService');
 
 const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET;
 const { recordWebhook } = require('../services/odooSyncRunService');
@@ -161,6 +162,51 @@ router.post('/odoo/order-cancel', verifySecret, async (req, res) => {
   } catch (err) {
     console.error('[Odoo Webhook] /odoo/order-cancel error:', err);
     return res.status(500).json({ error: 'Failed to cancel order(s)', details: err.message });
+  }
+});
+
+const failureStatus = result => (result.action === 'blocked' ? 409 : result.action === 'not_found' ? 404 : 400);
+
+/**
+ * POST /api/webhooks/odoo/appointment-confirm
+ *
+ * FRD INT-03 Confirm Appointment from the DOO (and INT-05 retry). Body is the
+ * same DO snapshot as /odoo/order plus an `appointment` block:
+ *   { request_ref, requested_date: 'YYYY-MM-DD', requested_session: morning|afternoon|evening,
+ *     requirements?: {...}, delivery_document?: 'SIN' }
+ * 202 = request stored, confirmation pending CE Hub admin approval. The result is
+ * written back to Odoo later (APPOINTMENT_CONFIRMATION outbox event).
+ * 200 = same request_ref already received (retry); nothing re-applied.
+ */
+router.post('/odoo/appointment-confirm', verifySecret, async (req, res) => {
+  try {
+    const result = await requestAppointment(req.body);
+    if (!result.success) return res.status(failureStatus(result)).json(result);
+    console.log(`[Odoo appointment] ${result.action} ${req.body.name} (${result.request_ref})`);
+    return res.status(result.action === 'previously_received' ? 200 : 202).json(result);
+  } catch (err) {
+    console.error('[Odoo Webhook] /odoo/appointment-confirm error:', err);
+    return res.status(500).json({ error: 'Unable to process the appointment request. Please retry.' });
+  }
+});
+
+/**
+ * POST /api/webhooks/odoo/appointment-change
+ *
+ * FRD INT-11 Request Edit / Cancel Appointment:
+ *   { id, name, request_ref, action: 'edit'|'cancel', reason?, requested_by? }
+ * 202 = stored for CE Hub admin approval; the current appointment is unchanged
+ * until then. The decision is written back to Odoo (APPOINTMENT_CHANGE_DECISION).
+ */
+router.post('/odoo/appointment-change', verifySecret, async (req, res) => {
+  try {
+    const result = await requestAppointmentChange(req.body);
+    if (!result.success) return res.status(failureStatus(result)).json(result);
+    console.log(`[Odoo appointment] ${req.body.action} request ${result.action} for ${req.body.name}`);
+    return res.status(result.action === 'pending_approval' ? 202 : 200).json(result);
+  } catch (err) {
+    console.error('[Odoo Webhook] /odoo/appointment-change error:', err);
+    return res.status(500).json({ error: 'Unable to process the appointment change request. Please retry.' });
   }
 });
 

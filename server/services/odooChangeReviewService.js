@@ -18,6 +18,7 @@ const HEADER_FIELDS = {
 const CUSTOMER_FIELDS = { partner_name: ['full_name', 'Customer'], partner_email: ['email', 'Customer email'], partner_phone: ['phone', 'Customer phone'] };
 const FINAL_OR_MOVING = ['Loaded', 'Delivering', 'In Progress', 'Installing', 'Delivered', 'Failed', 'Cancelled', 'Completed'];
 const plain = value => JSON.parse(JSON.stringify(value));
+const isAppointmentKind = kind => kind === 'appointment_edit' || kind === 'appointment_cancel';
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
@@ -118,6 +119,13 @@ async function requestDetail(id) {
   const request = await prisma.odoo_change_requests.findUnique({ where: { id } });
   if (!request) throw preparationError('Change request not found.', 'REQUEST_NOT_FOUND', 404);
   const order = await readOrder(prisma, request.order_id);
+  if (isAppointmentKind(request.request_kind)) {
+    // Appointment requests are judged on the current order, not a frozen snapshot:
+    // routine scheduler edits must not make them unapprovable.
+    const { appointmentBlockers } = require('./odooAppointmentService');
+    const blockers = order ? appointmentBlockers(order) : ['The order no longer exists.'];
+    return { ...request, current_order_status: order?.order_status || null, stale: false, approval_blockers: blockers, can_approve: request.status === 'pending' && !blockers.length };
+  }
   const stale = !order || hash(snapshot(order)) !== request.baseline_hash;
   const blockers = order ? approvalBlockers(order, request.payload, request.request_kind) : ['The order no longer exists.'];
   if (stale) blockers.unshift('The order changed after this request arrived. Reject this request and ask Odoo to send a fresh snapshot.');
@@ -126,13 +134,17 @@ async function requestDetail(id) {
 async function decideRequest(id, decision, note, actor) {
   if (!['approve', 'reject'].includes(decision)) throw preparationError('decision must be approve or reject.');
   if (typeof note !== 'string' || note.length > 2000 || (decision === 'reject' && note.trim().length < 3)) throw preparationError('Enter a rejection reason (3–2000 characters), or an optional approval note.');
-  return prisma.$transaction(async tx => {
+  const appointment = require('./odooAppointmentService');
+  let appointmentEffect = null;
+  const reviewed = await prisma.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(19761019)`;
     const request = await tx.odoo_change_requests.findUnique({ where: { id } });
     if (!request) throw preparationError('Change request not found.', 'REQUEST_NOT_FOUND', 404);
     if (request.status !== 'pending') throw preparationError('This request was already reviewed.', 'ALREADY_REVIEWED', 409);
     let applied;
-    if (decision === 'approve') {
+    if (isAppointmentKind(request.request_kind)) {
+      appointmentEffect = await appointment.applyAppointmentDecision(tx, request, decision);
+    } else if (decision === 'approve') {
       // Legacy operational handlers do not all use the advisory lock. Row locks
       // keep their updates from racing the snapshot check and this application.
       await tx.$queryRaw`SELECT id FROM orders WHERE id = ${request.order_id}::uuid FOR UPDATE`;
@@ -154,5 +166,7 @@ async function decideRequest(id, decision, note, actor) {
       ...(applied ? { applied_snapshot: applied } : {}),
     } });
   }, { timeout: 20000 });
+  if (appointmentEffect) await appointment.finishAppointmentDecision(reviewed, appointmentEffect);
+  return reviewed;
 }
-module.exports = { saveChangeRequest, requestDetail, decideRequest, approvalBlockers, snapshot, changesFor };
+module.exports = { saveChangeRequest, requestDetail, decideRequest, approvalBlockers, snapshot, changesFor, hash };

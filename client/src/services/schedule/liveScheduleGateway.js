@@ -311,19 +311,29 @@ export const liveScheduleGateway = {
     return { applied, rejected };
   },
 
-  async rejectOrders(orderIds = []) {
-    // There is no reject endpoint on the server. Failing loudly and specifically
-    // is right: silently pretending to reject would leave Mr Lee believing a
-    // trip was turned down when nothing changed.
-    return {
-      applied: [],
-      rejected: orderIds.map(orderId => ({
-        orderId,
-        code: 'NOT_IMPLEMENTED',
-        message: 'Rejection is not available on live data yet — POST /api/orders/:id/reject '
-          + 'does not exist on the server. Only approval is wired.',
-      })),
-    };
+  // Rejecting takes the order off its slot and back to Pending; for an Odoo DO
+  // it also tells Odoo the requested appointment was rejected (FRD INT-04).
+  async rejectOrders(orderIds = [], reason = '') {
+    const applied = [];
+    const rejected = [];
+
+    for (const orderId of orderIds) {
+      const { ok, data } = await rawRequest(`orders/${encodeURIComponent(orderId)}/reject-appointment`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      });
+      if (ok) {
+        applied.push(orderId);
+      } else {
+        rejected.push({
+          orderId,
+          code: data?.code ?? 'REJECT_FAILED',
+          message: data?.error || 'Rejection failed.',
+        });
+      }
+    }
+
+    return { applied, rejected };
   },
 };
 

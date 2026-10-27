@@ -273,6 +273,16 @@ model orders {
   resolved_by                String?                   @db.Uuid
   issue_reported_at          DateTime?                 @db.Timestamp(6)
   odoo_sales_ref             String?                   @db.VarChar(100)
+  // FRD INT-03/04/11 appointment confirmation, requested from the Odoo DOO.
+  // See odooAppointmentService.js.
+  appointment_request_ref       String?                @db.VarChar(100)
+  requested_appointment_date    String?                @db.VarChar(10)
+  requested_appointment_session String?                @db.VarChar(20)
+  appointment_requirements      Json?
+  delivery_document_requirement String?                @db.VarChar(30)
+  appointment_status            String?                @db.VarChar(20)
+  appointment_message           String?
+  appointment_confirmed_at      DateTime?              @db.Timestamp(6)
   complaint                  complaint[]
   delivery_failure_events    delivery_failure_events[]
   installation_schedules     installation_schedules?
