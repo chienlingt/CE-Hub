@@ -35,7 +35,7 @@ const isDemoAuth = () => process.env.REACT_APP_DEMO_AUTH === '1';
 // actually unlocks the nav; this list keeps hasPermission() honest too.
 const DEMO_PERMISSIONS = [
   'dashboard', 'driver', 'schedule', 'schedule_edit', 'info', 'cases',
-  'access', 'delivery', 'customer', 'scanning', 'settings',
+  'access', 'delivery', 'customer', 'scanning', 'order',
 ];
 
 const DEMO_EMPLOYEE = {

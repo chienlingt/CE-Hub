@@ -2,19 +2,16 @@ import React, { useState, useEffect } from 'react';
 import {
   Shield,
   Users,
-  Settings,
   Check,
   X,
   Save,
   RotateCcw,
   AlertTriangle,
-  Eye,
-  EyeOff,
   Plus,
   Trash2,
-  Edit3,
 } from 'lucide-react';
 
+import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
 
 /**
@@ -23,14 +20,17 @@ import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUr
  * - Saves role permissions back to PostgreSQL roles table
  */
 
+const isAdminRole = role => role?.name?.trim().toLowerCase() === 'admin';
+const permissionSignature = values => JSON.stringify([...new Set(values || [])].sort());
 const mockNavItems = [
+  { key: 'order', name: 'Orders', description: 'Delivery order management', icon: '📋' },
   { key: 'dashboard', name: 'Dashboard', description: 'Main dashboard overview', icon: '📊' },
   { key: 'schedule', name: 'Schedule', description: 'Schedule management and delivery planning', icon: '📅' },
   // Not a page: without it the Schedule board is view-only (e.g. salespeople).
   { key: 'schedule_edit', name: 'Schedule — edit', description: 'Drag, approve, reject and move DOs on the Schedule board', icon: '✏️' },
   { key: 'info', name: 'Information', description: 'Employee, team, and building data', icon: '📦' },
   { key: 'cases', name: 'Exceptions', description: 'Failed deliveries, driver escalations, system reports, and sync health', icon: '📈' },
-  { key: 'access', name: 'Access Control', description: 'Role and permission management', icon: '🛡️' },
+  { key: 'access', name: 'Access Control', description: 'Role changes require an Admin login', icon: '🛡️' },
   // Hidden from sidebar — kept for easy re-enable.
   // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
   { key: 'scanning',  name: 'Scan Station',  description: 'Item loading and unloading scan confirmation', icon: '📷' },
@@ -39,7 +39,7 @@ const mockNavItems = [
 
 export default function RoleAccessControl() {
   const [roles, setRoles] = useState([]); // [{ id, name, permissions }]
-  const [navItems, setNavItems] = useState(mockNavItems);
+  const navItems = mockNavItems;
   const [accessControl, setAccessControl] = useState({}); // { roleId: [perm,...] }
   const [originalAccessControl, setOriginalAccessControl] = useState({});
   const [selectedRole, setSelectedRole] = useState(null);
@@ -49,6 +49,7 @@ export default function RoleAccessControl() {
   const [showAddRole, setShowAddRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState('');
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState('');
 
   // Load roles from PostgreSQL API
   useEffect(() => {
@@ -59,16 +60,16 @@ export default function RoleAccessControl() {
       setError(null);
       try {
         // Load roles from API
-        const rolesUrl = `${REACT_APP_API_BASE_URL}/api/roles`;
-        const response = await fetch(rolesUrl);
-        if (!response.ok) throw new Error('Failed to load roles');
+        const rolesUrl = `${REACT_APP_API_BASE_URL}/api/roles?counts=1`;
+        const response = await fetch(rolesUrl, { headers: adminSessionHeaders() });
+        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to load roles');
 
         const data = await response.json();
         const loadedRoles = (data.data || data).map(role => ({
           id: role.id,
           name: role.name || role.id,
           permissions: Array.isArray(role.permissions) ? role.permissions : [],
-          userCount: 0 // TODO: Could fetch from employees endpoint
+          userCount: role._count?.employees
         }));
 
         if (!mounted) return;
@@ -89,7 +90,7 @@ export default function RoleAccessControl() {
         setSelectedRole(hasAdmin ? (hasAdmin.id) : (loadedRoles[0] ? loadedRoles[0].id : null));
       } catch (err) {
         console.error('Failed to load roles:', err);
-        setError('Failed to load role data. See console for details.');
+        if (mounted) setError(err.message);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -100,75 +101,90 @@ export default function RoleAccessControl() {
   }, []);
 
   useEffect(() => {
-    const changed = JSON.stringify(accessControl) !== JSON.stringify(originalAccessControl);
+    const changed = Object.keys(accessControl).some(id => permissionSignature(accessControl[id]) !== permissionSignature(originalAccessControl[id]));
     setHasChanges(changed);
   }, [accessControl, originalAccessControl, selectedRole]);
 
+  useEffect(() => {
+    const warn = event => {
+      if (hasChanges) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [hasChanges]);
+
   const toggleAccess = (roleId, navKey) => {
-    setAccessControl(prev => ({
-      ...prev,
-      [roleId]: prev[roleId]?.includes(navKey)
+    if (isSaving || isAdminRole(roles.find(role => role.id === roleId))) return;
+    setNotice('');
+    setAccessControl(prev => {
+      let next = prev[roleId]?.includes(navKey)
         ? prev[roleId].filter(k => k !== navKey)
-        : [...(prev[roleId] || []), navKey]
-    }));
+        : [...(prev[roleId] || []), navKey];
+      if (navKey === 'schedule' && !next.includes('schedule')) next = next.filter(key => key !== 'schedule_edit');
+      if (navKey === 'schedule_edit' && next.includes('schedule_edit') && !next.includes('schedule')) next.push('schedule');
+      return { ...prev, [roleId]: next };
+    });
   };
 
   const saveChanges = async () => {
+    if (isSaving) return;
     setIsSaving(true);
     setError(null);
+    setNotice('');
     try {
       // Update all changed role permissions via API
       const updates = Object.keys(accessControl).filter(roleId => {
         const prev = originalAccessControl[roleId] || [];
         const curr = accessControl[roleId] || [];
-        return JSON.stringify(prev) !== JSON.stringify(curr);
+        return permissionSignature(prev) !== permissionSignature(curr);
       });
 
       // Update each role's permissions
       for (const roleId of updates) {
         const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles/${roleId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
           body: JSON.stringify({ permissions: accessControl[roleId] })
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Failed to update role ${roleId}: ${errorText}`);
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to save role permissions.');
         }
+        setOriginalAccessControl(previous => ({ ...previous, [roleId]: [...accessControl[roleId]] }));
       }
 
-      // Update local state to reflect saved changes
-      setOriginalAccessControl(JSON.parse(JSON.stringify(accessControl)));
-      setHasChanges(false);
+      // Each completed role is retained if a later update fails.
 
-      alert('Access control settings saved successfully! Users can refresh the page or log in again to load the updated permissions.');
+      setNotice('Saved. Users can refresh or sign in again to load their updated access.');
     } catch (err) {
       console.error('Failed to save access control:', err);
-      setError('Failed to save changes. See console for details.');
+      setError(err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
   const resetChanges = () => {
+    if (isSaving) return;
+    setNotice('');
     setAccessControl(JSON.parse(JSON.stringify(originalAccessControl)));
     setHasChanges(false);
   };
 
   const addNewRole = async () => {
     const name = (newRoleName || '').trim();
-    if (!name) return;
+    if (!name || isSaving) return;
     setIsSaving(true);
     setError(null);
     try {
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ name, permissions: [] })
       });
 
-      if (!response.ok) throw new Error('Failed to create role');
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to create role');
 
       const data = await response.json();
       const newRole = data.data || data;
@@ -181,14 +197,14 @@ export default function RoleAccessControl() {
       setShowAddRole(false);
     } catch (err) {
       console.error('Failed to add role:', err);
-      setError('Failed to add role. See console for details.');
+      setError(err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
   const deleteRole = async (roleId) => {
-    if (!roleId) return;
+    if (!roleId || isSaving) return;
     // prevent deleting admin
     const roleObj = roles.find(r => r.id === roleId);
     const roleNameLower = (roleObj?.name || roleId).toString().toLowerCase();
@@ -203,10 +219,10 @@ export default function RoleAccessControl() {
     setError(null);
     try {
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/roles/${roleId}`, {
-        method: 'DELETE'
+        method: 'DELETE', headers: adminSessionHeaders()
       });
 
-      if (!response.ok) throw new Error('Failed to delete role');
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to delete role');
 
       // update local state
       setRoles(prev => prev.filter(r => r.id !== roleId));
@@ -226,7 +242,7 @@ export default function RoleAccessControl() {
       }
     } catch (err) {
       console.error('Failed to delete role:', err);
-      setError('Failed to delete role. See console for details.');
+      setError(err.message);
     } finally {
       setIsSaving(false);
     }
@@ -237,7 +253,7 @@ export default function RoleAccessControl() {
   };
 
   const getAccessCount = (roleId) => {
-    return accessControl[roleId]?.length || 0;
+    return isAdminRole(getRoleInfo(roleId)) ? navItems.length : navItems.filter(item => accessControl[roleId]?.includes(item.key)).length;
   };
 
   const selectedRoleInfo = selectedRole ? getRoleInfo(selectedRole) : null;
@@ -257,14 +273,15 @@ export default function RoleAccessControl() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-          <div className="flex items-center justify-between">
+        {/* Only show the action area when there is something to save or report. */}
+        {(hasChanges || notice || error) && <div className="mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center space-x-3">
               {hasChanges && (
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={resetChanges}
+                    disabled={isSaving}
                     className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                   >
                     <RotateCcw className="h-4 w-4 mr-2" />
@@ -288,18 +305,20 @@ export default function RoleAccessControl() {
               <div className="flex items-center">
                 <AlertTriangle className="h-5 w-5 text-yellow-600 mr-2" />
                 <p className="text-yellow-800 text-sm">
-                  You have unsaved changes. Don't forget to save your access control modifications.
+                  Unsaved changes
                 </p>
               </div>
             </div>
           )}
 
+          {notice && <p role="status" className="mt-3 text-sm text-green-700">{notice}</p>}
           {error && (
-            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            <div role="alert" className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
               {error}
+              {!roles.length && <button className="ml-3 underline" onClick={() => window.location.reload()}>Retry</button>}
             </div>
           )}
-        </div>
+        </div>}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Role Selection Sidebar */}
@@ -309,6 +328,8 @@ export default function RoleAccessControl() {
                 <h3 className="text-lg font-semibold text-gray-900">Roles</h3>
                 <button
                   onClick={() => setShowAddRole(true)}
+                  disabled={isSaving}
+                  aria-label="Add role"
                   className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                   title="Add New Role"
                 >
@@ -324,11 +345,12 @@ export default function RoleAccessControl() {
                     value={newRoleName}
                     onChange={(e) => setNewRoleName(e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded mb-2 text-sm"
-                    onKeyPress={(e) => e.key === 'Enter' && addNewRole()}
+                    disabled={isSaving} maxLength={80}
+                    onKeyDown={(e) => e.key === 'Enter' && addNewRole()}
                   />
                   <div className="flex space-x-2">
                     <button
-                      onClick={addNewRole}
+                      disabled={isSaving} onClick={addNewRole}
                       className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
                     >
                       Add
@@ -353,6 +375,14 @@ export default function RoleAccessControl() {
                   return (
                     <div
                       key={roleId}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSelected}
+                      onKeyDown={event => {
+                        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                          event.preventDefault(); setSelectedRole(roleId);
+                        }
+                      }}
                       onClick={() => setSelectedRole(roleId)}
                       className={`p-3 rounded-lg cursor-pointer transition-colors relative group ${
                         isSelected
@@ -365,21 +395,23 @@ export default function RoleAccessControl() {
                           <div className="flex items-center justify-between">
                             <h4 className="font-medium text-gray-900 text-sm">{roleInfo.name}</h4>
                             <div className="flex items-center space-x-2">
-                              {roleId !== 'admin' && (
+                              {!isAdminRole(roleInfo) && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     deleteRole(roleId);
                                   }}
-                                  className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 rounded transition-all"
+                                  disabled={isSaving || roleInfo.userCount > 0}
+                                  className="p-2 text-red-500 hover:bg-red-50 rounded disabled:opacity-30"
                                   title="Delete role"
+                                  aria-label={`Delete ${roleInfo.name} role`}
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               )}
                             </div>
                           </div>
-                          <p className="text-xs text-gray-500 mt-1">{roleInfo.userCount || 0} users</p>
+                          <p className="text-xs text-gray-500 mt-1">{roleInfo.userCount ?? '—'} users</p>
                           <p className="text-xs text-blue-600 mt-1">{accessCount} permissions</p>
                         </div>
                       </div>
@@ -403,7 +435,7 @@ export default function RoleAccessControl() {
                 <div className="flex items-center space-x-4 text-sm text-gray-500">
                   <div className="flex items-center">
                     <Users className="h-4 w-4 mr-1" />
-                    {selectedRoleInfo ? (selectedRoleInfo.userCount || 0) : 0} users
+                    {selectedRoleInfo ? (selectedRoleInfo.userCount ?? '—') : 0} users
                   </div>
                   <div className="flex items-center">
                     <Shield className="h-4 w-4 mr-1" />
@@ -412,15 +444,19 @@ export default function RoleAccessControl() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {isAdminRole(selectedRoleInfo) && <p className="mb-4 text-sm text-gray-500">Admin always has full access.</p>}
+              <fieldset disabled={isSaving} className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {navItems.map(navItem => {
                   const key = navItem.key;
-                  const hasAccess = selectedRole ? (accessControl[selectedRole] || []).includes(key) : false;
+                  const hasAccess = isAdminRole(selectedRoleInfo) || (selectedRole ? (accessControl[selectedRole] || []).includes(key) : false);
 
                   return (
-                    <div
+                    <button
+                      type="button"
+                      disabled={isSaving || !selectedRole || isAdminRole(selectedRoleInfo)}
+                      aria-pressed={hasAccess}
                       key={key}
-                      className={`p-4 rounded-lg border-2 transition-all cursor-pointer ${
+                      className={`text-left p-3 rounded-lg border transition-all disabled:cursor-default ${
                         hasAccess
                           ? 'border-green-200 bg-green-50'
                           : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
@@ -443,10 +479,10 @@ export default function RoleAccessControl() {
                           {hasAccess ? <Check className="h-5 w-5" /> : <X className="h-5 w-5" />}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
-              </div>
+              </fieldset>
             </div>
           </div>
         </div>
