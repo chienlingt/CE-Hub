@@ -64,6 +64,52 @@ function resolveLineStatus(item) {
   return 'pending';
 }
 
+// A unit's serial for the stage-priority list (unloaded -> loaded -> assigned).
+function stageSerial(unit) {
+  return unit.unloaded_serial || unit.loaded_serial || unit.assigned_serial;
+}
+
+// Delivered/undelivered split for one line. A unit with an explicit
+// `delivery_outcome` (partial delivery) uses it; otherwise the line's
+// delivered_quantity decides, so full deliveries and older rows still work.
+function splitUnits(item) {
+  const units = unitsFor(item);
+  const delivered = resolveDeliveredQty(item);
+  return units.map((unit, index) => ({
+    unit,
+    delivered: unit.delivery_outcome
+      ? unit.delivery_outcome === 'delivered'
+      : delivered != null && index < delivered,
+  }));
+}
+
+function buildOrderLines(orderProducts, ceHubStatus) {
+  return orderProducts.map(item => {
+    const line = {
+      order_line_id:         item.odoo_line_id,
+      quantity:               item.quantity,
+      actual_delivered_qty:  resolveDeliveredQty(item),
+      serial_numbers:         unitsFor(item).map(stageSerial).filter(Boolean),
+      assigned_serial_numbers: unitsFor(item).map(unit => unit.assigned_serial).filter(Boolean),
+      loaded_serial_numbers:   unitsFor(item).map(unit => unit.loaded_serial).filter(Boolean),
+      unloaded_serial_numbers: unitsFor(item).map(unit => unit.unloaded_serial).filter(Boolean),
+      prepared_quantity:      item.prepared_quantity,
+      status:                 resolveLineStatus(item),
+    };
+    if (ceHubStatus !== 'Delivered') return line;
+
+    const split = splitUnits(item);
+    const serialsOf = flag => split.filter(entry => entry.delivered === flag)
+      .map(entry => entry.unit.assigned_serial || stageSerial(entry.unit)).filter(Boolean);
+    return {
+      ...line,
+      undelivered_qty:            line.actual_delivered_qty == null ? null : Math.max(0, (item.quantity || 0) - line.actual_delivered_qty),
+      delivered_serial_numbers:   serialsOf(true),
+      undelivered_serial_numbers: serialsOf(false),
+    };
+  });
+}
+
 /**
  * Assemble the full outbound Odoo event payload for one order, from current DB
  * state — the single builder every outbox call site should use instead of a
@@ -106,22 +152,8 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
   const latestFailure = order.delivery_failure_events?.[0] || null;
   const crew = resolveCrew(order.time_slots);
 
-  const orderLines = order.order_products.map(item => ({
-    order_line_id:         item.odoo_line_id,
-    quantity:               item.quantity,
-    actual_delivered_qty:  resolveDeliveredQty(item),
-    serial_numbers:         unitsFor(item).map(unit => unit.unloaded_serial || unit.loaded_serial || unit.assigned_serial).filter(Boolean),
-    assigned_serial_numbers: unitsFor(item).map(unit => unit.assigned_serial).filter(Boolean),
-    loaded_serial_numbers:   unitsFor(item).map(unit => unit.loaded_serial).filter(Boolean),
-    unloaded_serial_numbers: unitsFor(item).map(unit => unit.unloaded_serial).filter(Boolean),
-    prepared_quantity:      item.prepared_quantity,
-    status:                 resolveLineStatus(item),
-  }));
-
-  const deliveredCount = order.order_products.filter(i => i.item_delivery_status === 'delivered').length;
-  const isPartial = ceHubStatus === 'Delivered'
-    && deliveredCount > 0
-    && deliveredCount < order.order_products.length;
+  const orderLines = buildOrderLines(order.order_products, ceHubStatus);
+  const isPartial = ceHubStatus === 'Delivered' && orderLines.some(line => line.undelivered_qty > 0);
 
   return {
     do_ref:                 order.odoo_order_ref || null,
@@ -130,7 +162,10 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     order_line_model:       ODOO_LINE_MODEL,
     status:                 ceHubStatus,
     order_lines:            orderLines,
-    ...(ceHubStatus === 'Delivered' && { is_partial: isPartial }),
+    ...(ceHubStatus === 'Delivered' && {
+      is_partial: isPartial,
+      ...(isPartial && order.delivery_notes && { remarks: order.delivery_notes }),
+    }),
     ...(ceHubStatus === 'Failed' && {
       failure_reason: latestFailure?.failure_reason || order.issue_reason || null,
       remarks:        latestFailure?.failure_desc   || order.issue_desc   || null,
@@ -252,4 +287,4 @@ function buildAppointmentDecisionPayload(request, order) {
   };
 }
 
-module.exports = { buildOdooEventPayload, buildAppointmentPayload, buildAppointmentDecisionPayload };
+module.exports = { buildOdooEventPayload, buildAppointmentPayload, buildAppointmentDecisionPayload, buildOrderLines };

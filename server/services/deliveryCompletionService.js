@@ -265,6 +265,24 @@ async function processDeliveryCompletion(orderId, {
     odooEnqueued = true;
   }
 
+  const { autoEnded, autoDeparted } = await runPostDeliverySteps(order, updatedOrder, { employeeId, latitude, longitude });
+
+  console.log(`[A4] Order ${orderId} completed by ${employeeId || 'unknown'} → ${finalStatus}. Slot auto-closed: ${autoEnded}`);
+
+  return {
+    order:          updatedOrder,
+    finalStatus,
+    slotAutoClosed: autoEnded,
+    autoDeparted,
+    odooEnqueued,
+  };
+}
+
+/**
+ * Steps shared by full and partial delivery once the order is marked Delivered:
+ * auto trip close, remaining-route traffic refresh and the customer in-app notification.
+ */
+async function runPostDeliverySteps(order, updatedOrder, { employeeId, latitude, longitude } = {}) {
   // ── Step 7: Auto trip close (A.4.2 + A.4.3) ──────────────────────────────
   let autoEnded    = false;
   let autoDeparted = false;
@@ -306,15 +324,7 @@ async function processDeliveryCompletion(orderId, {
     }).catch(e => console.error('[A4] Notification create failed:', e.message));
   }
 
-  console.log(`[A4] Order ${orderId} completed by ${employeeId || 'unknown'} → ${finalStatus}. Slot auto-closed: ${autoEnded}`);
-
-  return {
-    order:          updatedOrder,
-    finalStatus,
-    slotAutoClosed: autoEnded,
-    autoDeparted,
-    odooEnqueued,
-  };
+  return { autoEnded, autoDeparted };
 }
 
-module.exports = { processDeliveryCompletion };
+module.exports = { processDeliveryCompletion, runPostDeliverySteps };

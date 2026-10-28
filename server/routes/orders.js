@@ -11,6 +11,7 @@ const { getCoordinatesFromAddress, calculateRoute } = require('../services/routi
 const { markOrderDelivering, markOrderDelivered, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const { enqueue } = require('../services/integrationOutboxService');
 const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
+const { completePartialDelivery } = require('../services/partialDeliveryService');
 
 const upload = require('../middleware/upload');
 const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
@@ -1539,6 +1540,35 @@ router.post('/:id/deliver', upload.fields([
     if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, code: err.code });
     console.error('POST /api/orders/:id/deliver error', err);
     res.status(500).json({ error: 'Failed to mark as delivered', details: err.message });
+  }
+});
+
+// POST /:id/partial-delivery — driver completes an order with only some units delivered (FRD INT-09).
+// Body: { employee_id, remarks?, latitude?, longitude?, lines: [{ order_product_id,
+//         delivered_serial_numbers?, undelivered_serial_numbers?, delivered_quantity? }] }
+// Order becomes Delivered and a Delivered event with is_partial: true is queued for Odoo.
+router.post('/:id/partial-delivery', async (req, res) => {
+  try {
+    const { employee_id, lines, remarks, latitude, longitude } = req.body || {};
+    const lat = latitude  != null ? parseFloat(latitude)  : null;
+    const lng = longitude != null ? parseFloat(longitude) : null;
+    const result = await completePartialDelivery(req.params.id, {
+      employee_id, lines, remarks,
+      latitude:  Number.isFinite(lat) ? lat : null,
+      longitude: Number.isFinite(lng) ? lng : null,
+    });
+    res.json({
+      success:      true,
+      replayed:     result.replayed,
+      is_partial:   true,
+      final_status: 'Delivered',
+      order:        result.order,
+      delivered_at: result.order.delivery_end_date_time,
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, code: err.code });
+    console.error('POST /api/orders/:id/partial-delivery error', err);
+    res.status(500).json({ error: 'Failed to record partial delivery', details: err.message });
   }
 });
 
