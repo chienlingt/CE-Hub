@@ -1,6 +1,7 @@
 // server/routes/orders.js
 const express = require('express');
 const router = express.Router();
+const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 const prisma = require('../prismaClient');
 const { expandUnits } = require('../services/orderProductUnits');
 const { extractBuildingName, normalizeBuildingName } = require('../utils/addressParser');
@@ -443,6 +444,7 @@ router.patch('/:id/escalation-ack', async (req, res) => {
   }
 });
 
+router.get('/', (req, res, next) => req.query.include_sync === 'true' ? requireReviewAdmin(req, res, next) : next());
 router.get('/', async (req, res) => {
   try {
     const { status, search, date_from, date_to, sort = 'created_desc' } = req.query;
@@ -542,7 +544,7 @@ router.get('/', async (req, res) => {
       customers: true,
       employees: true,
       buildings: true,
-      time_slots: { include: { truck: { select: { plate_no: true } } } },
+      time_slots: { include: { truck: { select: { plate_no: true } }, delivery_team: { select: { id: true, team_type: true } } } },
       // Replacement order(s) created via the Reschedule flow, if any
       rescheduled_to: { select: { id: true, odoo_order_ref: true, order_status: true, created_at: true } },
     };
@@ -586,8 +588,21 @@ router.get('/', async (req, res) => {
       });
       resolvers.forEach(e => resolvedByMap.set(e.id, e.display_name || e.name || null));
     }
+    const syncByOrder = new Map();
+    if (req.query.include_sync === 'true' && orders.length) {
+      const jobs = await prisma.integration_outbox.findMany({
+        where: { target: 'odoo', OR: orders.map(order => ({ idempotency_key: { startsWith: `order:${order.id}:` } })) },
+        select: { idempotency_key: true, status: true },
+      });
+      const priority = { processed: 1, pending: 2, dead: 3 };
+      jobs.forEach(job => {
+        const id = /^order:([^:]+):/.exec(job.idempotency_key)?.[1];
+        if (id && (priority[job.status] || 0) > (priority[syncByOrder.get(id)] || 0)) syncByOrder.set(id, job.status);
+      });
+    }
     const result = orders.map(o => ({
       ...o,
+      ...(req.query.include_sync === 'true' ? { odoo_sync: { status: syncByOrder.get(o.id) || 'none' } } : {}),
       resolved_by_name: o.resolved_by ? (resolvedByMap.get(o.resolved_by) || null) : null,
     }));
 

@@ -11,6 +11,7 @@ import BottomNav from './layout/BottomNav';
 import MobileNavDrawer from './layout/MobileNavDrawer';
 import useIsMobile from '../hooks/useIsMobile';
 import { isFieldMobileUser, partitionNavItems } from '../utils/navigationMode';
+import { orderAdminNavigation } from '../utils/adminNavigation';
 import FailureNotificationLog from './admin/FailureNotificationLog';
 import DoAssignment from './admin/DoAssignment';
 import SyncMonitor from './admin/SyncMonitor';
@@ -95,7 +96,7 @@ const Layout = () => {
       ],
     },
     driver: {
-      title: 'Driver Dashboard',
+      title: 'Deliveries',
       icon: Truck,
       route: '/driver',
       topNavItems: [
@@ -156,7 +157,7 @@ const Layout = () => {
     //   ],
     // },
     order: {
-      title: 'Order Management',
+      title: 'Orders',
       icon: Boxes,
       route: '/order',
       topNavItems: [
@@ -204,7 +205,7 @@ const Layout = () => {
       : employeeData?.role || '';
     const role = normalize(rawRole);
     if (role === 'admin' || effectivePermissions.includes('admin')) {
-      return Object.entries(navigationData);
+      return orderAdminNavigation(navigationData);
     }
     if (loadingPermissions) return [];
     if (effectivePermissions.length === 0) return [];

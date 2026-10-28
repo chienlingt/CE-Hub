@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
+import { ADMIN_NAVIGATION } from '../../../utils/adminNavigation';
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
 
 /**
@@ -34,12 +35,20 @@ const mockNavItems = [
   // Hidden from sidebar — kept for easy re-enable.
   // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
   { key: 'scanning',  name: 'Scan Station',  description: 'Item loading and unloading scan confirmation', icon: '📷' },
-  { key: 'driver',    name: 'Driver Dashboard', description: 'Mobile driver task dashboard (delivery staff only)', icon: '🚛' },
+  { key: 'driver',    name: 'Deliveries', description: 'Delivery teams, orders, and routes', icon: '🚛' },
 ];
+
+// Keep the additional edit capability beside Schedule, not as a separate page.
+const orderedNavItems = ADMIN_NAVIGATION.flatMap(item => {
+  const permission = { ...mockNavItems.find(nav => nav.key === item.key), name: item.title };
+  return item.key === 'schedule'
+    ? [permission, mockNavItems.find(nav => nav.key === 'schedule_edit')]
+    : [permission];
+});
 
 export default function RoleAccessControl() {
   const [roles, setRoles] = useState([]); // [{ id, name, permissions }]
-  const navItems = mockNavItems;
+  const navItems = orderedNavItems;
   const [accessControl, setAccessControl] = useState({}); // { roleId: [perm,...] }
   const [originalAccessControl, setOriginalAccessControl] = useState({});
   const [selectedRole, setSelectedRole] = useState(null);

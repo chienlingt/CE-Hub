@@ -12,8 +12,6 @@ import {
   MapPin,
   Package,
   Phone,
-  Plus,
-  Search,
   Sparkles,
   User,
   X
@@ -21,17 +19,17 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  filterOrdersByDateRange,
   formatDate,
   formatDateTime,
   getOrderStatusBadge,
   getRemainingEditTime,
-  getServiceTypeLabel,
   getTotalProductCount,
   isOrderEditable,
-  searchOrders
 } from '../../utils/orderHelpers';
 
+import OrderFilters from './OrderFilters';
+import { adminSessionHeaders } from '../../utils/adminSessionHeaders';
+import { ORDER_FILTER_DEFAULTS, ORDER_FILTER_STORAGE, filterAdminOrders, attentionReasons, needsScheduling, orderTeam, orderArea } from '../../utils/adminOrderFilters';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 
@@ -45,16 +43,36 @@ export default function ManageOrders() {
   const [error, setError] = useState(null);
   const [editDeadlineHours, setEditDeadlineHours] = useState(24);
 
-  // Filter states
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [dateRangeFilter, setDateRangeFilter] = useState('all');
-  const [customDateStart, setCustomDateStart] = useState('');
-  const [customDateEnd, setCustomDateEnd] = useState('');
-  const [sortBy, setSortBy] = useState('created_desc');
+  const [filters, setFilters] = useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(ORDER_FILTER_STORAGE));
+      return { ...ORDER_FILTER_DEFAULTS, ...saved, ...(searchParams.get('expand') ? { date: 'all', view: 'all', status: 'all', team: 'all', readiness: 'all', area: 'all', sync: 'all', search: '' } : {}) };
+    } catch { return { ...ORDER_FILTER_DEFAULTS, ...(searchParams.get('expand') ? { date: 'all' } : {}) }; }
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem(ORDER_FILTER_STORAGE, JSON.stringify(filters)); } catch { /* Storage may be unavailable. */ }
+  }, [filters]);
 
   // UI states
-  const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [expandedOrderId, setExpandedOrderId] = useState(() => {
+    try { return sessionStorage.getItem(`${ORDER_FILTER_STORAGE}.expanded`) || null; } catch { return null; }
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem(`${ORDER_FILTER_STORAGE}.expanded`, expandedOrderId || ''); } catch { /* Optional view memory. */ }
+  }, [expandedOrderId]);
+  useEffect(() => {
+    if (loading) return;
+    const container = document.querySelector('[data-page-scroll]');
+    if (!container) return;
+    const remember = () => {
+      try { sessionStorage.setItem(`${ORDER_FILTER_STORAGE}.scroll`, String(container.scrollTop)); } catch { /* Optional view memory. */ }
+    };
+    if (!searchParams.get('expand')) {
+      try { container.scrollTop = Number(sessionStorage.getItem(`${ORDER_FILTER_STORAGE}.scroll`)) || 0; } catch { /* Optional view memory. */ }
+    }
+    container.addEventListener('scroll', remember, { passive: true });
+    return () => container.removeEventListener('scroll', remember);
+  }, [loading, searchParams]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
 
@@ -74,7 +92,7 @@ export default function ManageOrders() {
   // Fetch orders
   useEffect(() => {
     fetchOrders();
-  }, [statusFilter, sortBy]);
+  }, []);
 
   // Auto-expand + scroll when ?expand=<id> is in the URL
   useEffect(() => {
@@ -104,11 +122,12 @@ export default function ManageOrders() {
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (statusFilter !== 'all') params.append('status', statusFilter);
-      params.append('sort', sortBy);
+      params.append('sort', 'created_desc');
+      const headers = adminSessionHeaders();
+      if (headers.Authorization) params.append('include_sync', 'true');
 
-      const res = await fetch(`${API_BASE}/api/orders?${params.toString()}`);
-      if (!res.ok) throw new Error('Failed to fetch orders');
+      const res = await fetch(`${API_BASE}/api/orders?${params.toString()}`, { headers });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to fetch orders');
 
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
@@ -121,43 +140,33 @@ export default function ManageOrders() {
     }
   };
 
-  // Apply filters and search
+  // Counts use the same search/date/team filters, before the quick-view selection.
+  const scopedOrders = useMemo(() => filterAdminOrders(orders, { ...filters, view: 'all' }), [orders, filters]);
+  const counts = useMemo(() => ({ all: scopedOrders.length, scheduling: scopedOrders.filter(needsScheduling).length, attention: scopedOrders.filter(order => attentionReasons(order).length).length }), [scopedOrders]);
   const filteredOrders = useMemo(() => {
-    let result = [...orders];
-
-    // Search filter
-    result = searchOrders(result, searchKeyword);
-
-    // Date range filter
-    if (dateRangeFilter !== 'all') {
-      result = filterOrdersByDateRange(
-        result,
-        dateRangeFilter,
-        customDateStart ? new Date(customDateStart) : null,
-        customDateEnd ? new Date(customDateEnd) : null
-      );
-    }
-
-    return result;
-  }, [orders, searchKeyword, dateRangeFilter, customDateStart, customDateEnd]);
-
-  // Calculate stats
-  const stats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    return {
-      pending: orders.filter(o => o.order_status === 'Pending').length,
-      scheduled: orders.filter(o => o.order_status === 'Scheduled').length,
-      delivered: orders.filter(o => o.order_status === 'Delivered').length,
-      today: orders.filter(o => {
-        const created = new Date(o.created_at);
-        return created >= today && created < tomorrow;
-      }).length
-    };
+    const result = filterAdminOrders(orders, filters);
+    return result.sort((a, b) => {
+      if (filters.sort === 'customer') return (a.customers?.full_name || '').localeCompare(b.customers?.full_name || '');
+      const key = filters.sort.startsWith('scheduled') ? 'scheduled_start_date_time' : 'created_at';
+      const av = a[key] ? new Date(a[key]).getTime() : null, bv = b[key] ? new Date(b[key]).getTime() : null;
+      if (av === null) return bv === null ? 0 : 1;
+      if (bv === null) return -1;
+      return filters.sort.endsWith('asc') ? av - bv : bv - av;
+    });
+  }, [orders, filters]);
+  const teams = useMemo(() => {
+    const entries = new Map();
+    orders.forEach(order => {
+      const id = orderTeam(order);
+      if (id === 'unassigned') return;
+      const team = order.time_slots?.delivery_team;
+      const plate = order.time_slots?.truck?.plate_no;
+      entries.set(id, { id, label: [team?.team_type || 'Delivery team', plate || id.slice(0, 8)].join(' · ') });
+    });
+    return [...entries.values()].sort((a, b) => a.label.localeCompare(b.label));
   }, [orders]);
+  const areas = useMemo(() => [...new Set(orders.map(orderArea).filter(Boolean))].sort(), [orders]);
+  const statuses = useMemo(() => [...new Set(['Pending', 'Scheduled', 'Loaded', 'Delivering', 'Arrived', 'Delivered', 'Failed', 'Cancelled', ...orders.map(order => order.order_status).filter(Boolean)])], [orders]);
 
   const handleEdit = (order) => {
     const editCheck = isOrderEditable(order, editDeadlineHours);
@@ -287,118 +296,8 @@ export default function ManageOrders() {
   }
 
   return (
-    <div className="p-6 w-full">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Manage Orders</h1>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          title="Pending Orders"
-          value={stats.pending}
-          color="yellow"
-          icon={<Clock className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Scheduled Orders"
-          value={stats.scheduled}
-          color="blue"
-          icon={<Calendar className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Delivered Orders"
-          value={stats.delivered}
-          color="green"
-          icon={<Package className="w-5 h-5" />}
-        />
-        <StatCard
-          title="Orders Today"
-          value={stats.today}
-          color="purple"
-          icon={<Plus className="w-5 h-5" />}
-        />
-      </div>
-
-      {/* Filters & Search */}
-      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="Search orders..."
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="all">All Status</option>
-            <option value="Pending">Pending</option>
-            <option value="Scheduled">Scheduled</option>
-            <option value="Delivered">Delivered</option>
-            <option value="Cancelled">Cancelled</option>
-          </select>
-
-          {/* Date Range */}
-          <select
-            value={dateRangeFilter}
-            onChange={(e) => setDateRangeFilter(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="all">All Time</option>
-            <option value="today">Today</option>
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-            <option value="custom">Custom Range</option>
-          </select>
-
-          {/* Sort By */}
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="created_desc">Latest First</option>
-            <option value="created_asc">Oldest First</option>
-            <option value="scheduled_desc">Scheduled (Latest)</option>
-            <option value="scheduled_asc">Scheduled (Earliest)</option>
-            <option value="customer">Customer Name</option>
-          </select>
-        </div>
-
-        {/* Custom Date Range */}
-        {dateRangeFilter === 'custom' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-              <input
-                type="date"
-                value={customDateStart}
-                onChange={(e) => setCustomDateStart(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-              <input
-                type="date"
-                value={customDateEnd}
-                onChange={(e) => setCustomDateEnd(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-        )}
-      </div>
+    <div className="p-3 sm:p-6 w-full">
+      <OrderFilters filters={filters} onChange={setFilters} teams={teams} areas={areas} statuses={statuses} counts={counts} total={filteredOrders.length} syncAvailable={orders.some(order => order.odoo_sync)} />
 
       {/* Error Message */}
       {error && (
@@ -409,8 +308,8 @@ export default function ManageOrders() {
       )}
 
       {/* Orders Table */}
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        <table className="w-full table-fixed">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+        <table className="w-full min-w-[960px] table-fixed">
           <colgroup>
             <col className="w-36" />
             <col />
@@ -503,28 +402,6 @@ export default function ManageOrders() {
   );
 }
 
-// Stat Card Component
-function StatCard({ title, value, color, icon }) {
-  const colorClasses = {
-    yellow: 'bg-yellow-50 text-yellow-600 border-yellow-200',
-    blue: 'bg-blue-50 text-blue-600 border-blue-200',
-    green: 'bg-green-50 text-green-600 border-green-200',
-    purple: 'bg-purple-50 text-purple-600 border-purple-200'
-  };
-
-  return (
-    <div className={`rounded-lg border p-4 ${colorClasses[color]}`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium opacity-80">{title}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
-        </div>
-        <div className="opacity-60">{icon}</div>
-      </div>
-    </div>
-  );
-}
-
 // Order Row Component (with expandable details)
 function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssignTimeslot, onOrderParsed, editDeadlineHours }) {
   const statusBadge = getOrderStatusBadge(order.order_status);
@@ -542,6 +419,7 @@ function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssi
       <tr ref={rowRef} className="hover:bg-gray-50 transition-colors">
         <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || 'Not Synced'}>
           <div className="truncate">{order.odoo_order_ref || 'Not Synced'}</div>
+          {attentionReasons(order).map(reason => <span key={reason} className="mt-1 block text-xs font-normal text-amber-700 whitespace-normal">{reason}</span>)}
           {siblingDOs.length > 0 && (
             <div className="flex items-center gap-1 mt-0.5 text-xs text-indigo-500">
               <GitBranch className="w-3 h-3" />
