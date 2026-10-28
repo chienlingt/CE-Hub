@@ -32,7 +32,8 @@ const BASE = `WITH events AS (
       WHEN latest.outcome = 'updated' THEN 'updated'
       WHEN latest.outcome IS NULL THEN 'not_recorded'
       ELSE latest.outcome END AS sync_status,
-    CASE WHEN latest.run_status = 'needs_correction' AND latest.outcome = 'failed' THEN 'Correct the data in Odoo and resend the full snapshot.'
+    CASE WHEN latest.source = 'fallback_5pm' AND latest.outcome = 'failed' AND latest.run_status IN ('needs_correction', 'retry_exhausted') THEN 'Correct Odoo data/configuration, then use Run history → Retry failed. The original date and recovery deadline are retained.'
+      WHEN latest.run_status = 'needs_correction' AND latest.outcome = 'failed' THEN 'Correct the data in Odoo and resend the full snapshot.'
       WHEN latest.outcome = 'failed' AND latest.retryable AND latest.run_status = 'retry_wait' THEN 'Automatic retry scheduled for the original date.'
       WHEN latest.outcome = 'failed' THEN 'Investigate the error, then ask GCA to resend the appropriate webhook.'
       WHEN cr.status = 'rejected' THEN 'Review the rejection reason and correct the Odoo snapshot.'

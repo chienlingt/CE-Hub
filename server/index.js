@@ -215,6 +215,8 @@ app.listen(port, async () => {
     const cron = require('node-cron');
     const { retryDueSyncRuns } = require('./services/odooSyncService');
     cron.schedule('* * * * *', () => { retryDueSyncRuns().catch(() => console.error('[OdooSync] Retry worker failed; durable jobs remain for recovery.')); }, { timezone: 'Asia/Kuala_Lumpur' });
+    // Startup recovery creates a missed logical run only once, using its original date.
+    retryDueSyncRuns().catch(() => console.error('[OdooSync] Startup recovery will be retried by the minute worker.'));
   }
   // A.3.2a: Integration outbox worker — flushes pending outbox rows every minute
   {

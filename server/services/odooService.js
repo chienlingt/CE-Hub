@@ -219,12 +219,13 @@ async function isOrderEligibleForDeliveryDate(id, dateStr, policy = loadFallback
  *
  * @param {number} odooPickingId - stock.picking integer id
  */
-async function getOrderDetail(odooPickingId) {
+async function getOrderDetail(odooPickingId, { fallbackPolicy = null } = {}) {
   const readyField = process.env.ODOO_READY_FIELD;
   const preparedField = process.env.ODOO_PREPARED_QUANTITY_FIELD;
   // 1. Read stock.picking
   const [picking] = await callModel('stock.picking', 'read', [[odooPickingId]], {
-    fields: ['id', 'name', 'sale_id', 'partner_id', 'scheduled_date', 'move_ids', ...(readyField ? [readyField] : [])],
+    fields: [...new Set(['id', 'name', 'sale_id', 'partner_id', 'scheduled_date', 'move_ids', ...(readyField ? [readyField] : []),
+      ...(fallbackPolicy ? [fallbackPolicy.dateField, fallbackPolicy.sessionField, fallbackPolicy.referenceField] : [])])],
   });
   if (!picking) return null;
 
@@ -306,6 +307,7 @@ async function getOrderDetail(odooPickingId) {
 
   return {
     id:                      picking.id,
+    ...(fallbackPolicy && { fallback_appointment: { date: picking[fallbackPolicy.dateField], session: picking[fallbackPolicy.sessionField], reference: picking[fallbackPolicy.referenceField] } }),
     order_line_model:        ODOO_LINE_MODEL,
     doo_ready:               readyField ? picking[readyField] : false,
     name:                    picking.name,

@@ -12,7 +12,6 @@ import MobileNavDrawer from './layout/MobileNavDrawer';
 import useIsMobile from '../hooks/useIsMobile';
 import { isFieldMobileUser, partitionNavItems } from '../utils/navigationMode';
 import FailureNotificationLog from './admin/FailureNotificationLog';
-import NotificationSettings from './admin/NotificationSettings';
 import DoAssignment from './admin/DoAssignment';
 import SyncMonitor from './admin/SyncMonitor';
 import ScanStation from './common/ScanStation';
@@ -142,6 +141,7 @@ const Layout = () => {
         // First tab has an explicit path (not '') so ?orderId= deep links survive the base-route redirect.
         { id: 'failed-deliveries',    label: 'Failed Deliveries',     path: 'failed-deliveries',   component: IssueManagement     },
         { id: 'driver-escalations',   label: 'Driver Escalations',    path: 'driver-escalations',  component: DeliveryIssues      },
+        { id: 'system-reports',       label: 'System Reports',        path: 'system-reports',      component: Cases               },
         { id: 'sync-monitor',         label: 'Sync Monitor',          path: 'sync-monitor',        component: SyncMonitor         },
         { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
@@ -179,15 +179,6 @@ const Layout = () => {
       route: '/access',
       topNavItems: [
         { id: 'access', label: 'Access Control', path: '', component: RoleAccessControl },
-      ],
-    },
-    settings: {
-      title: 'Settings',
-      icon: AlertCircle,
-      route: '/settings',
-      topNavItems: [
-        { id: 'notifications',  label: 'Notifications',  path: '',               component: NotificationSettings },
-        { id: 'system-reports', label: 'System Reports', path: 'system-reports', component: Cases },
       ],
     },
   }
@@ -255,6 +246,12 @@ const Layout = () => {
 
     const currentRoot = getPathRoot(location.pathname);
 
+    // Preserve old report bookmarks without granting Exceptions access to new roles.
+    if (location.pathname.replace(/\/$/, '') === '/settings/system-reports' && allowedRoutes.includes('/exceptions')) {
+      navigate('/exceptions/system-reports' + location.search + location.hash, { replace: true });
+      return;
+    }
+
     // Allow access to /reports for all users (no permission check)
     if (currentRoot === '/reports') {
       setActiveSection('');
@@ -295,7 +292,7 @@ const Layout = () => {
       const topItem = matched[1].topNavItems?.find(t => t.path === last || t.id === last);
       setTopNavActive(topItem?.id || matched[1].topNavItems?.[0]?.id || '');
     }
-  }, [loadingPermissions, filteredNavigation, location.pathname, navigate, allowedRoutes]);
+  }, [loadingPermissions, filteredNavigation, location.pathname, location.search, location.hash, navigate, allowedRoutes]);
 
   const handleSideNavClick = (sectionKey) => {
     const section = navigationData[sectionKey];

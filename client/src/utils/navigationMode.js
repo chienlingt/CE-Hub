@@ -1,6 +1,6 @@
 export const FIELD_KEYS = ['driver', 'delivery', 'installation', 'scanning'];
 
-export const OFFICE_KEYS = ['dashboard', 'access', 'info', 'cases', 'schedule', 'settings'];
+export const OFFICE_KEYS = ['dashboard', 'access', 'info', 'cases', 'schedule'];
 
 function normalizePermissions(permissions) {
   if (!Array.isArray(permissions)) return [];
