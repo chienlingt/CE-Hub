@@ -1,6 +1,7 @@
 // client/src/components/admin/CompletedDeliveries.js
 // FR-04-004: Admin view of completed delivery records.
 import { useState, useEffect, useCallback } from 'react';
+import { DeliveryStatusBadge, DeliveryItemList } from './DeliverySummary';
 import {
   CheckCircle,
   AlertTriangle,
@@ -204,7 +205,9 @@ export default function CompletedDeliveries() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">{fmt(r.completed_at)}</td>
                       <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>
+                        {r.delivery_summary?.is_partial
+                          ? <DeliveryStatusBadge summary={r.delivery_summary} />
+                          : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>}
                       </td>
                       <td className="px-4 py-3">
                         <PodThumbnails evidence={r.delivery_evidence} signatureUrl={r.proof_of_delivery_url} />
@@ -240,7 +243,9 @@ export default function CompletedDeliveries() {
                     <p className="text-xs font-mono text-blue-700 truncate">{r.odoo_order_ref || 'Not Synced'}</p>
                     <p className="font-semibold text-gray-800">{r.customer_name || '—'}</p>
                   </div>
-                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>
+                  {r.delivery_summary?.is_partial
+                          ? <DeliveryStatusBadge summary={r.delivery_summary} />
+                          : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{r.order_status}</span>}
                 </div>
                 <div className="text-sm text-gray-500 space-y-1">
                   <div>
@@ -313,6 +318,12 @@ function ExpandedRow({ record }) {
 
   return (
     <div className="space-y-3">
+      {record.delivery_summary?.items?.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</p>
+          <DeliveryItemList summary={record.delivery_summary} />
+        </div>
+      )}
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Proof of Delivery</p>
       {allEvidence.length === 0 && !hasSignature ? (
         <p className="text-sm text-gray-400">No POD captured.</p>

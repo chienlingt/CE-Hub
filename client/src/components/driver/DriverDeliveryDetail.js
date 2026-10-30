@@ -158,8 +158,11 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
             return <article key={item.id} className="p-4">
               <div className="flex items-start justify-between gap-3">
                 <p className="min-w-0 text-sm font-semibold text-gray-800">{name} <span className="font-normal text-gray-400">×{item.quantity || 1}</span></p>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-medium capitalize ${itemColors[status] || itemColors.pending}`}>{status}</span>
+                {item.delivery_outcome === 'undelivered'
+                  ? <span className="shrink-0 rounded-full bg-red-100 px-2 py-1 text-[11px] font-medium text-red-700">Not delivered</span>
+                  : <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-medium capitalize ${itemColors[status] || itemColors.pending}`}>{status}</span>}
               </div>
+              {item.delivery_outcome === 'undelivered' && item.undelivered_reason && <p className="mt-1 text-xs text-red-600">{item.undelivered_reason}</p>}
               <div className="mt-3 flex items-center justify-between gap-3">
                 <p className="min-w-0 break-all font-mono text-xs text-gray-500">{serial || 'No serial assigned'}</p>
                 {status === 'loaded' && <button type="button" onClick={() => setScanItem({ ...item, handling_status: status })} disabled={scanning || isTerminal(job.status)} aria-label={`Scan ${name}`} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white disabled:bg-gray-100 disabled:text-gray-400">{scanning ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />} Unload</button>}

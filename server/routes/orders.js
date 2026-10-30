@@ -1,5 +1,6 @@
 // server/routes/orders.js
 const express = require('express');
+const { summarizeDelivery } = require('../services/deliverySummary');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const { expandUnits } = require('../services/orderProductUnits');
@@ -279,6 +280,7 @@ router.get('/completed-deliveries', async (req, res) => {
       where,
       include: {
         customers:  { select: { full_name: true, phone: true } },
+        order_products: { select: { id: true, quantity: true, delivered_quantity: true, item_delivery_status: true, unit_scans: true, odoo_product_name: true, products: { select: { product_name: true } } } },
         employees:  { select: { name: true, display_name: true } },
         time_slots: {
           select: {
@@ -333,6 +335,7 @@ router.get('/completed-deliveries', async (req, res) => {
       odoo_order_ref:         o.odoo_order_ref || null,
       delivery_address:       o.delivery_address || '',
       slot_id:                o.time_slot_id || null,
+      delivery_summary:       summarizeDelivery(o),
       odoo_sync: outboxByOrder[o.id]
         ? {
             status:      outboxByOrder[o.id].status,
@@ -1544,18 +1547,27 @@ router.post('/:id/deliver', upload.fields([
 });
 
 // POST /:id/partial-delivery — driver completes an order with only some units delivered (FRD INT-09).
-// Body: { employee_id, remarks?, latitude?, longitude?, lines: [{ order_product_id,
-//         delivered_serial_numbers?, undelivered_serial_numbers?, delivered_quantity? }] }
+// Multipart: photos[] and/or signature_data_url (POD, required), employee_id, remarks?, latitude?,
+// longitude?, lines (JSON string): [{ order_product_id, delivered_serial_numbers?,
+//   undelivered_serial_numbers?, delivered_quantity?, undelivered_reasons?: [{ serial_number? | unit_number?, reason }] }]
 // Order becomes Delivered and a Delivered event with is_partial: true is queued for Odoo.
-router.post('/:id/partial-delivery', async (req, res) => {
+router.post('/:id/partial-delivery', upload.fields([
+  { name: 'photos', maxCount: 10 },
+]), async (req, res) => {
   try {
-    const { employee_id, lines, remarks, latitude, longitude } = req.body || {};
+    const { employee_id, remarks, latitude, longitude, signature_data_url } = req.body || {};
+    let { lines } = req.body || {};
+    if (typeof lines === 'string') {
+      try { lines = JSON.parse(lines); } catch { return res.status(400).json({ error: 'lines must be valid JSON.', code: 'INVALID_LINES' }); }
+    }
     const lat = latitude  != null ? parseFloat(latitude)  : null;
     const lng = longitude != null ? parseFloat(longitude) : null;
     const result = await completePartialDelivery(req.params.id, {
       employee_id, lines, remarks,
-      latitude:  Number.isFinite(lat) ? lat : null,
-      longitude: Number.isFinite(lng) ? lng : null,
+      latitude:         Number.isFinite(lat) ? lat : null,
+      longitude:        Number.isFinite(lng) ? lng : null,
+      photoFiles:       req.files?.photos || [],
+      signatureDataUrl: signature_data_url || null,
     });
     res.json({
       success:      true,

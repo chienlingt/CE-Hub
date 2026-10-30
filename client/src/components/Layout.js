@@ -143,7 +143,6 @@ const Layout = () => {
         { id: 'failed-deliveries',    label: 'Failed Deliveries',     path: 'failed-deliveries',   component: IssueManagement     },
         { id: 'driver-escalations',   label: 'Driver Escalations',    path: 'driver-escalations',  component: DeliveryIssues      },
         { id: 'sync-monitor',         label: 'Sync Monitor',          path: 'sync-monitor',        component: SyncMonitor         },
-        { id: 'completed-deliveries', label: 'Completed Deliveries',  path: 'completed-deliveries', component: CompletedDeliveries },
       ],
     },
     // Hidden from sidebar — kept for easy re-enable.
@@ -161,6 +160,7 @@ const Layout = () => {
       route: '/order',
       topNavItems: [
         { id: 'manage-orders', label: 'Manage Orders',  path: 'manage-orders',  component: ManageOrders },
+        { id: 'completed-deliveries', label: 'Completed Deliveries', path: 'completed-deliveries', component: CompletedDeliveries },
       ],
     },
     scanning: {
@@ -506,6 +506,8 @@ const Layout = () => {
         <div data-page-scroll className={`min-h-0 flex-1 ${activeSection === 'scanning' && !location.pathname.startsWith('/scanning/delivery/') ? 'flex flex-col overflow-hidden' : 'overflow-auto'} p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
           <Routes>
             <Route path="/driver/route" element={<Navigate to="/driver" replace />} />
+            {/* Completed Deliveries moved from Exceptions to Order Management. */}
+            <Route path="/exceptions/completed-deliveries" element={<Navigate to="/order/completed-deliveries" replace />} />
             <Route path="/driver/delivery/:orderId" element={<DriverDeliveryDetail />} />
             <Route path="/scanning/delivery/:orderId" element={<DriverDeliveryDetail scanStation />} />
             {/* Standalone route for Report Issue (accessible to all employees) */}

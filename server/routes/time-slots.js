@@ -1,5 +1,6 @@
 // server/routes/time-slots.js
 const express = require('express');
+const { summarizeDelivery } = require('../services/deliverySummary');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
 const { departTimeSlot, endTimeSlotTrip, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
@@ -215,6 +216,7 @@ router.get('/:id/status', async (req, res) => {
             odoo_order_ref: true,
             overdue_reminder_sent_at: true,
             customers: { select: { full_name: true, phone: true } },
+            order_products: { select: { id: true, quantity: true, delivered_quantity: true, item_delivery_status: true, unit_scans: true, odoo_product_name: true, products: { select: { product_name: true } } } },
           },
           orderBy: { truck_loading_sequence: 'asc' },
         },
@@ -291,6 +293,7 @@ router.get('/:id/status', async (req, res) => {
           overdue_reminder_sent_at:  o.overdue_reminder_sent_at || null,
           customer_name:             o.customers?.full_name || null,
           customer_phone:            o.customers?.phone || null,
+          delivery_summary:          summarizeDelivery(o),
         })),
       },
     });

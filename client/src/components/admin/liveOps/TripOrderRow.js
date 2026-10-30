@@ -5,6 +5,7 @@ import { callCustomer, openWhatsApp } from '../../../utils/phoneHelpers';
 import { onTheWayTemplate } from '../../../utils/templateMessages';
 import { isOrderOverdue } from '../../../utils/liveOpsFilters';
 import { API_BASE_URL } from '../../../utils/apiBaseUrl';
+import { DeliveryStatusBadge, DeliveryItemList } from '../DeliverySummary';
 
 function fmtTime(isoString) {
   if (!isoString) return '';
@@ -16,6 +17,8 @@ export default function TripOrderRow({ order, index, trip, onOrderUpdate }) {
   const hasPhone = !!order.customer_phone;
   const overdue  = isOrderOverdue(order, trip?.date);
 
+  const summary = order.delivery_summary;
+  const [showItems,    setShowItems]    = useState(false);
   const [reminding,    setReminding]    = useState(false);
   const [remindError,  setRemindError]  = useState(null);
   const [remindedAt,   setRemindedAt]   = useState(order.overdue_reminder_sent_at || null);
@@ -109,10 +112,25 @@ export default function TripOrderRow({ order, index, trip, onOrderUpdate }) {
                 Overdue
               </span>
             )}
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${badge.bgColor} ${badge.color}`}>
-              {badge.label}
-            </span>
+            {summary?.is_partial
+              ? <DeliveryStatusBadge summary={summary} />
+              : (
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${badge.bgColor} ${badge.color}`}>
+                  {badge.label}
+                </span>
+              )}
           </div>
+          {summary?.is_partial && (
+            <div className="w-full text-left">
+              <button
+                onClick={() => setShowItems(v => !v)}
+                className="text-[10px] font-semibold text-amber-700 underline"
+              >
+                {showItems ? 'Hide items' : 'View items'}
+              </button>
+              {showItems && <div className="mt-1.5"><DeliveryItemList summary={summary} /></div>}
+            </div>
+          )}
           {overdue && (
             remindedAt ? (
               <span className="text-[10px] text-gray-500 italic">Reminded {fmtTime(remindedAt)}</span>

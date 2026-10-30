@@ -2,11 +2,14 @@
 // A.4.1 / FR-04-001: Driver status update + POD gate for completion.
 // Issue reporting is now via the Report button (ContactReportModal).
 // Mark as Failed is now via the Failed button (FailDeliveryModal).
-import { useEffect, useRef, useState } from 'react';
-import { X, Camera, PenLine, CheckCircle } from 'lucide-react';
+// INT-09: Delivered with some units not delivered submits a partial delivery instead.
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Camera, PenLine, CheckCircle, AlertTriangle } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import PhotoPicker from './PhotoPicker';
+import PartialDeliveryItems from './PartialDeliveryItems';
 import { allowedTransitions, isTerminal } from '../../utils/driverStatusMap';
+import { classifyUnits, deliveryMode, missingReasons, buildPartialLines } from '../../utils/partialDelivery';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function apiUrl(path) {
@@ -51,10 +54,38 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
   const isCompletion = selectedStatus === 'Delivered';
   const noUpdates    = transitions.length === 0;
 
+  // Per-unit outcomes (INT-09) — loaded once the driver picks Delivered
+  const [loadingItems, setLoadingItems] = useState(null);
+  const [itemsError,   setItemsError]   = useState(null);
+  const [overrides,    setOverrides]    = useState({});
+  useEffect(() => {
+    if (!isCompletion || loadingItems) return;
+    let cancelled = false;
+    fetch(apiUrl(`orders/${order.id}/loading-status`), { headers: { 'ngrok-skip-browser-warning': '1' } })
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unable to load items.');
+        if (!cancelled) { setLoadingItems(data.items || []); setItemsError(null); }
+      })
+      .catch(err => { if (!cancelled) setItemsError(err.message); });
+    return () => { cancelled = true; };
+  }, [isCompletion, loadingItems, order.id]);
+
+  const units       = useMemo(() => classifyUnits(loadingItems, overrides), [loadingItems, overrides]);
+  const mode        = units.length ? deliveryMode(units) : 'full';
+  const isPartial   = isCompletion && mode === 'partial';
+  const undelivered = units.filter(unit => !unit.delivered).length;
+  const reasonsOk   = !isPartial || missingReasons(units).length === 0;
+  const itemsOk     = !isCompletion || (loadingItems !== null && mode !== 'none' && reasonsOk);
+
+  function changeUnit(key, patch) {
+    setOverrides(prev => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  }
+
   const podOk    = !isCompletion || (
     podMode === 'photo' ? photoFiles.length > 0 : signatureDataUrl !== null
   );
-  const canSubmit = !noUpdates && !!selectedStatus && podOk && !submitting;
+  const canSubmit = !noUpdates && !!selectedStatus && podOk && itemsOk && !submitting;
 
   // ── Photo handlers ──────────────────────────────────────────────────────────
   function addPodPhotos(files) {
@@ -77,7 +108,31 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
     setError(null);
     try {
       const loc = locationRef.current;
-      if (isCompletion) {
+      if (isPartial) {
+        const form = new FormData();
+        form.append('employee_id', employeeId || '');
+        form.append('lines', JSON.stringify(buildPartialLines(units)));
+        if (notes) form.append('remarks', notes);
+        for (const f of photoFiles) form.append('photos', f);
+        if (podMode === 'signature' && signatureDataUrl) {
+          form.append('signature_data_url', signatureDataUrl);
+        }
+        if (loc) {
+          form.append('latitude',  String(loc.latitude));
+          form.append('longitude', String(loc.longitude));
+        }
+
+        const res = await fetch(apiUrl(`orders/${order.id}/partial-delivery`), {
+          method: 'POST',
+          headers: { 'ngrok-skip-browser-warning': '1' },
+          body: form,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setSuccessResult({ ...data, undelivered_count: undelivered });
+        onSuccess(data);
+
+      } else if (isCompletion) {
         const form = new FormData();
         form.append('employee_id', employeeId || '');
         if (notes) form.append('delivery_notes', notes);
@@ -143,10 +198,17 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
         <div className="flex flex-col items-center gap-4 py-6 text-center">
           <CheckCircle className="w-12 h-12 text-green-500" />
           <p className="text-lg font-semibold text-gray-800">
-            {isComp
-              ? `Order marked as ${successResult.final_status}`
-              : `Status updated to ${selectedStatus}`}
+            {successResult.is_partial
+              ? 'Delivered (partial)'
+              : isComp
+                ? `Order marked as ${successResult.final_status}`
+                : `Status updated to ${selectedStatus}`}
           </p>
+          {successResult.is_partial && (
+            <p className="text-sm text-gray-500">
+              {successResult.undelivered_count} unit{successResult.undelivered_count === 1 ? '' : 's'} returned to van
+            </p>
+          )}
           {isComp && (
             <div className="text-sm text-gray-500 space-y-1">
               {successResult.slot_auto_closed && <p>Trip auto-closed ✓</p>}
@@ -192,6 +254,36 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ── Item outcomes — only for Completed (INT-09) ─────────────────── */}
+        {isCompletion && (
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-gray-700">Items</p>
+            {itemsError ? (
+              <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                {itemsError}{' '}
+                <button type="button" onClick={() => { setItemsError(null); setLoadingItems(null); }} className="underline">Retry</button>
+              </div>
+            ) : loadingItems === null ? (
+              <p className="text-xs text-gray-400">Loading items…</p>
+            ) : (
+              <>
+                {units.length > 0 && <PartialDeliveryItems units={units} onChange={changeUnit} disabled={submitting} />}
+                {mode === 'partial' && (
+                  <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{undelivered} of {units.length} units will stay on the van. This completes the order as a partial delivery.</span>
+                  </div>
+                )}
+                {mode === 'none' && (
+                  <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    Nothing delivered — use Failed instead.
+                  </p>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -276,9 +368,11 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
           >
             {submitting
               ? 'Saving…'
-              : isCompletion
-                ? 'Mark as Delivered'
-                : `Update to ${selectedStatus}`}
+              : isPartial
+                ? 'Complete as partial delivery'
+                : isCompletion
+                  ? 'Mark as Delivered'
+                  : `Update to ${selectedStatus}`}
           </button>
         )}
       </div>
@@ -288,9 +382,11 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl space-y-4">
             <p className="font-semibold text-gray-800 text-center">Confirm update?</p>
             <p className="text-sm text-gray-500 text-center">
-              {isCompletion
-                ? 'This will mark the order as delivered and cannot be undone.'
-                : `Order will be moved to "${selectedStatus}".`}
+              {isPartial
+                ? `The order will be marked delivered with ${undelivered} unit${undelivered === 1 ? '' : 's'} not delivered, and Odoo will be told it was a partial delivery. This cannot be undone.`
+                : isCompletion
+                  ? 'This will mark the order as delivered and cannot be undone.'
+                  : `Order will be moved to "${selectedStatus}".`}
             </p>
             <div className="flex gap-3">
               <button

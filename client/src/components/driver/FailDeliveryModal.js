@@ -2,6 +2,8 @@
 // A.5.1 — Driver failure confirmation modal.
 // Separate from UpdateOrderModal (Issue path). Calls PATCH /api/orders/:id/issue
 // with confirm_failure: true per partner A6 documentation.
+// Every item is failed; if some units reached the customer, the driver completes the
+// order as a partial delivery via Update → Delivered instead (INT-09).
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import PhotoPicker from './PhotoPicker';
@@ -11,11 +13,6 @@ import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
 }
-
-const ITEM_STATUS_OPTIONS = [
-  { value: 'delivered', label: 'Delivered', color: 'bg-green-100 text-green-700 border-green-200' },
-  { value: 'failed',    label: 'Failed',    color: 'bg-red-100 text-red-700 border-red-200'     },
-];
 
 /**
  * @param {{
@@ -55,7 +52,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
         const filtered = Array.isArray(data)
           ? data.filter(p => p.order_id === order.id)
           : [];
-        setItems(filtered.map(p => ({ ...p, outcome: 'failed' })));
+        setItems(filtered);
       })
       .catch(() => setItems([]))
       .finally(() => setLoadingItems(false));
@@ -72,14 +69,6 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
     setPhotoUrls(prev => prev.filter((_, i) => i !== idx));
   }
 
-  function setItemOutcome(itemId, outcome) {
-    setItems(prev => prev.map(i => i.id === itemId ? { ...i, outcome } : i));
-  }
-
-  const allItemsClassified = items.length > 0 && items.every(i =>
-    i.outcome === 'delivered' || i.outcome === 'failed'
-  );
-
   const descRequired = reason === 'Other';
 
   async function handleSubmit() {
@@ -95,7 +84,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
       if (employeeId) formData.append('employee_id', employeeId);
       formData.append(
         'order_products_status',
-        JSON.stringify(items.map(i => ({ id: i.id, item_delivery_status: i.outcome })))
+        JSON.stringify(items.map(i => ({ id: i.id, item_delivery_status: 'failed' })))
       );
       photoFiles.forEach(f => formData.append('files', f));
       if (loc) {
@@ -124,7 +113,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
     }
   }
 
-  const canSubmit = reason && (!descRequired || desc.trim().length > 0) && allItemsClassified;
+  const canSubmit = reason && (!descRequired || desc.trim().length > 0) && items.length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto">
@@ -214,11 +203,10 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
             )}
           </div>
 
-          {/* Item outcomes */}
+          {/* Items — all marked failed */}
           <div>
             <p className="text-xs font-semibold text-gray-700 mb-2">
-              Item outcomes <span className="text-red-500">*</span>
-              <span className="text-gray-400 font-normal ml-1">(all items required)</span>
+              Items <span className="text-gray-400 font-normal ml-1">(all will be marked failed)</span>
             </p>
             {loadingItems ? (
               <p className="text-xs text-gray-400">Loading items…</p>
@@ -230,27 +218,16 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
                   <div key={item.id} className="flex items-center justify-between gap-2 bg-gray-50 rounded-lg px-3 py-2">
                     <p className="text-xs text-gray-800 font-medium truncate flex-1">
                       {item.products?.product_name || item.product_name || `Item ${item.id}`}
+                      {item.quantity > 1 && <span className="font-normal text-gray-400"> ×{item.quantity}</span>}
                     </p>
-                    <div className="flex gap-1 shrink-0">
-                      {ITEM_STATUS_OPTIONS.map(opt => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => setItemOutcome(item.id, opt.value)}
-                          className={`text-xs px-2 py-1 rounded border font-medium transition-all ${
-                            item.outcome === opt.value
-                              ? opt.color + ' ring-1 ring-current'
-                              : 'border-gray-200 text-gray-500 hover:bg-gray-100'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                    <span className="shrink-0 text-xs px-2 py-1 rounded border font-medium bg-red-100 text-red-700 border-red-200">Failed</span>
                   </div>
                 ))}
               </div>
             )}
+            <p className="mt-2 text-xs text-gray-500">
+              Delivered some units? Close this and use Update → Delivered to record a partial delivery.
+            </p>
           </div>
 
           {/* Submit */}

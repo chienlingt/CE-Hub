@@ -5,15 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "seed": "node seed.js",
+    "test": "node --test tests/*.test.js",
     "seed:driver": "node seedDriverTestData.js",
-    "seed:driver:delete": "node deleteDriverTestData.js",
-    "seed:picking": "node seedPickingDemo.js",
-    "seed:viva": "node seedDemoViva.js",
-    "seed:a6": "node seedA6FailureDemo.js",
-    "seed:loading": "node seedLoadingDemo.js",
     "seed:demo": "node seedDemo.js",
-    "seed:sync-monitor": "node seedSyncMonitor.js",
     "seed:scheduler": "node seedSchedulerDemo.js"
   },
   "keywords": [],

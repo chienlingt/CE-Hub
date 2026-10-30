@@ -9,7 +9,7 @@
 // Decisions (architect review, June 2026):
 //   - Auth:            employee_id present → must match assigned driver; absent → admin desk entry
 //   - Eligible:        order_status must be Delivering or In Progress
-//   - Item outcomes:   every line item must be delivered or failed (no pending left)
+//   - Item outcomes:   every line item must be failed; mixed outcomes use partial delivery (INT-09)
 //   - Cases routing:   never set is_complaint_submitted (→ Order Issues, not Delivery Issues)
 //   - Idempotency:     409 if order already Failed with a delivery_failure_events row
 //   - A6 trigger:      fires once via sendDeliveryFailureNotifications; Odoo via outbox only
@@ -30,6 +30,30 @@ const FAILURE_REASONS = [
 
 // Statuses from which a driver may confirm failure (on-site delivery outcomes only)
 const ELIGIBLE_STATUSES = ['Delivering', 'In Progress'];
+
+/**
+ * A failed delivery fails every line: each order line must appear exactly once as
+ * 'failed'. Delivering some units is a partial delivery (POST /:id/partial-delivery),
+ * which finalizes the order as Delivered instead. Pure — no database access.
+ */
+function assertAllItemsFailed(orderProducts, items) {
+  const ownedLines = new Map(orderProducts.map(item => [String(item.id), item]));
+  const seenIds = new Set();
+  if (!Array.isArray(items)) throw Object.assign(new Error('Order item outcomes must be a list.'), { statusCode: 400, code: 'INVALID_ITEMS' });
+  for (const item of items) {
+    const id = String(item.id), owned = ownedLines.get(id);
+    if (!owned || seenIds.has(id)) throw Object.assign(new Error('Each submitted item must belong to this DO and appear only once.'), { statusCode: 400, code: 'INVALID_ITEMS' });
+    seenIds.add(id);
+    if (item.item_delivery_status === 'delivered' || item.delivered_quantity > 0) throw Object.assign(
+      new Error('Some items were delivered — complete the order as a partial delivery (Update → Delivered) instead of failing it.'),
+      { statusCode: 400, code: 'PARTIAL_USE_DELIVERED' });
+    if (item.delivered_quantity != null && item.delivered_quantity !== 0) throw Object.assign(new Error('Invalid delivered quantity for an order item.'), { statusCode: 400, code: 'INVALID_DELIVERED_QUANTITY' });
+  }
+  const statusMap = Object.fromEntries(items.map(i => [String(i.id), i.item_delivery_status]));
+  if (orderProducts.some(item => statusMap[String(item.id)] !== 'failed')) {
+    throw Object.assign(new Error('Every line item must be marked failed before confirming failure.'), { statusCode: 400, code: 'ITEMS_INCOMPLETE' });
+  }
+}
 
 /**
  * Confirm a failed delivery.
@@ -126,34 +150,8 @@ async function confirmFailure(orderId, {
     throw err;
   }
 
-  // ── 7. Item outcome completeness ───────────────────────────────────────────
-  const allowedItemStatuses = ['delivered', 'failed'];
-  const ownedLines = new Map(order.order_products.map(item => [String(item.id), item]));
-  const seenIds = new Set();
-  if (!Array.isArray(order_products_status)) throw Object.assign(new Error('Order item outcomes must be a list.'), { statusCode: 400, code: 'INVALID_ITEMS' });
-  for (const item of order_products_status) {
-    const id = String(item.id), owned = ownedLines.get(id);
-    if (!owned || seenIds.has(id)) throw Object.assign(new Error('Each submitted item must belong to this DO and appear only once.'), { statusCode: 400, code: 'INVALID_ITEMS' });
-    seenIds.add(id);
-    if (item.delivered_quantity != null && (!Number.isInteger(item.delivered_quantity) || item.delivered_quantity < 0 || item.delivered_quantity > owned.quantity
-      || (item.item_delivery_status === 'failed' && item.delivered_quantity !== 0))) throw Object.assign(new Error('Invalid delivered quantity for an order item.'), { statusCode: 400, code: 'INVALID_DELIVERED_QUANTITY' });
-  }
-  const statusMap = Object.fromEntries(
-    (order_products_status || []).map(i => [String(i.id), i.item_delivery_status])
-  );
-
-  const hasPending = order.order_products.some(item => {
-    const submitted = statusMap[String(item.id)];
-    if (!submitted) return true; // not present in payload → still pending
-    return !allowedItemStatuses.includes(submitted);
-  });
-
-  if (hasPending) {
-    const err = new Error('All line items must be classified as delivered or failed before confirming failure.');
-    err.statusCode = 400;
-    err.code = 'ITEMS_INCOMPLETE';
-    throw err;
-  }
+  // ── 7. Item outcomes — every line failed ─────────────────────────────────
+  assertAllItemsFailed(order.order_products, order_products_status);
 
   // ── 8. Persist (all writes in one logical block) ───────────────────────────
   const now = new Date();
@@ -182,11 +180,9 @@ async function confirmFailure(orderId, {
     });
     for (const item of order_products_status) {
       const owned = currentLines.get(String(item.id));
-      const quantity = item.delivered_quantity != null ? item.delivered_quantity
-        : item.item_delivery_status === 'delivered' ? owned.quantity : 0;
       await tx.order_products.update({
         where: { id: owned.id },
-        data: { item_delivery_status: item.item_delivery_status, delivered_quantity: quantity },
+        data: { item_delivery_status: 'failed', delivered_quantity: 0 },
       });
     }
     const failure = await tx.delivery_failure_events.create({
@@ -218,6 +214,7 @@ async function confirmFailure(orderId, {
 
 module.exports = {
   confirmFailure,
+  assertAllItemsFailed,
   FAILURE_REASONS,
   ELIGIBLE_STATUSES,
 };
