@@ -23,6 +23,15 @@ router.get('/sync-runs', async (req, res) => {
     res.json({ rows, total });
   } catch { res.status(503).json({ error: 'Unable to load sync run history. Check database migration and connection.' }); }
 });
+router.post('/sync-runs/:id/retry', async (req, res) => {
+  if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid run ID.' });
+  try {
+    const row = await require('../services/odooFallbackRunner').retryFailedRun(req.params.id, req.reviewAdmin, req.body?.note);
+    return res.status(202).json({ success: true, run: row });
+  } catch (error) {
+    return res.status(error.statusCode || 503).json({ error: error.statusCode ? error.message : 'Unable to queue recovery. Please retry.', code: error.code });
+  }
+});
 router.get('/', async (req, res) => {
   const status = req.query.status || 'pending';
   if (!['pending', 'approved', 'rejected', 'all'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });

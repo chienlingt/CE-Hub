@@ -9,6 +9,7 @@ export default function SyncRunHistory({ token, refreshVersion = 0 }) {
   const [rows, setRows] = useState([]), [total, setTotal] = useState(0);
   const [source, setSource] = useState(''), [status, setStatus] = useState(''), [offset, setOffset] = useState(0);
   const [error, setError] = useState(''), [loading, setLoading] = useState(false), [open, setOpen] = useState(null);
+  const [retryId, setRetryId] = useState(null), [retryNote, setRetryNote] = useState(''), [retrying, setRetrying] = useState(false);
   const generation = useRef(0);
   const invalidate = useCallback(() => { generation.current++; }, []);
   const load = useCallback(async () => {
@@ -24,6 +25,18 @@ export default function SyncRunHistory({ token, refreshVersion = 0 }) {
     } catch (err) { if (current === generation.current) setError(err.message); }
     finally { if (current === generation.current) setLoading(false); }
   }, [token, offset, source, status]);
+  const retryFailed = async id => {
+    setRetrying(true); setError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/odoo-change-requests/sync-runs/${id}/retry`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ note: retryNote.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to queue retry.');
+      setRetryId(null); setRetryNote(''); await load();
+    } catch (err) { setError(err.message); }
+    finally { setRetrying(false); }
+  };
   useEffect(() => { load(); const timer = setInterval(load, 30000); return () => { clearInterval(timer); invalidate(); }; }, [load, refreshVersion, invalidate]);
   return <section aria-label="Integration sync runs" className="border-t border-gray-200">
     <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 px-4 py-3">
@@ -44,15 +57,24 @@ export default function SyncRunHistory({ token, refreshVersion = 0 }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-semibold text-gray-900">{row.source === 'fallback_5pm' ? '5 PM fallback · Odoo API' : 'Odoo webhook'}</span><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color(row.status)}`}>{LABELS[row.status] || row.status}</span></div>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500"><span>Recorded {time(row.created_at)}</span><span>Delivery date {row.target_date || 'Not supplied'}</span><span>{counts.synced || 0} synced · {counts.skipped || 0} skipped · {counts.failed || 0} failed{counts.pending ? ` · ${counts.pending} awaiting approval` : ''}</span></div>
-            {row.next_retry_at && <p className="mt-1 text-xs text-amber-700">Next retry {time(row.next_retry_at)} · attempt {row.attempts}/4</p>}
+            {row.next_retry_at && <p className="mt-1 text-xs text-amber-700">Next retry {time(row.next_retry_at)} · cycle attempt {row.attempts - (report.cycle_start_attempt || 0)}/4</p>}
           </div>
         </button>
         {expanded && <div className="space-y-3 bg-gray-50 px-4 pb-4 pt-1 sm:pl-10">
           <p className="text-xs text-gray-500">{report.endpoint || report.mechanism} · {counts.candidates || 0} checked · {row.attempts} attempt(s) · updated {time(row.updated_at)}</p>
           {report.error && <p role="status" className="rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-red-700">{report.error}</p>}
+          {row.source === 'fallback_5pm' && !report.preview_only && !row.run_key?.startsWith('sync_preview:') && ['needs_correction', 'retry_exhausted'].includes(row.status) && <div className="space-y-2 rounded-lg border bg-white p-3">
+            <p className="text-xs text-gray-600">Retry failed records after correcting data/configuration. Original delivery date and deadline stay unchanged; started or expired appointments require review.</p>
+            {retryId !== row.id ? <button type="button" onClick={() => { setRetryId(row.id); setRetryNote(''); }} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Retry failed</button> : <div className="flex flex-wrap gap-2">
+              <input aria-label="Correction and retry reason" maxLength={2000} value={retryNote} onChange={event => setRetryNote(event.target.value)} placeholder="What was corrected?" className="min-w-[180px] flex-1 rounded-lg border px-3 py-2 text-xs" />
+              <button type="button" disabled={retrying || retryNote.trim().length < 3} onClick={() => retryFailed(row.id)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">{retrying ? 'Queuing…' : 'Confirm retry'}</button>
+              <button type="button" disabled={retrying} onClick={() => setRetryId(null)} className="rounded-lg border px-3 py-2 text-xs">Cancel</button>
+            </div>}
+          </div>}
+          {report.manual_retries?.length > 0 && <div className="space-y-1 text-xs text-gray-600">{report.manual_retries.map((item, index) => <p key={index}>Admin retry: {item.employee_name || item.employee_id} · {time(item.at)} · {item.reason}</p>)}</div>}
           <div className="overflow-x-auto rounded-lg border bg-white"><table className="w-full text-left text-xs"><thead className="bg-gray-100 text-gray-500"><tr><th className="p-2">DO</th><th className="p-2">Result</th><th className="p-2">Reason</th></tr></thead><tbody className="divide-y">{(report.outcomes || []).map((item, i) => <tr key={`${item.picking_id || item.do_ref}-${i}`}><td className="whitespace-nowrap p-2 font-mono">{item.do_ref || `Picking ${item.picking_id || '—'}`}</td><td className="p-2">{item.outcome?.replaceAll('_', ' ')}</td><td className="min-w-[180px] p-2 text-gray-600">{item.message || item.reason?.replaceAll('_', ' ') || '—'}{item.code && <span className="ml-1 font-mono text-gray-400">({item.code})</span>}{item.outcome === 'failed' && <span className="mt-1 block text-[11px]">{item.retryable ? row.status === 'retry_wait' ? 'Automatic retry scheduled' : 'Temporary failure; retry budget exhausted or run stopped' : 'Waiting for correction; no automatic retry'}</span>}</td></tr>)}</tbody></table></div>
           {report.history?.length > 0 && <div className="space-y-1 text-xs text-gray-500">{report.history.map(h => <p key={h.attempt}>Attempt {h.attempt} · {time(h.at)} · {LABELS[h.status] || h.status}{h.result ? ` · ${h.result.synced || 0} synced / ${h.result.skipped || 0} skipped / ${h.result.failed || 0} failed` : ''}</p>)}</div>}
-          <p className="text-xs text-gray-500">{report.retry_note || 'Temporary errors: up to 3 retries (5, 15, 30 min). Invalid data/configuration waits for correction. A retry never rolls the target date forward.'}</p>
+          <p className="text-xs text-gray-500">{report.retry_note || 'Automatic retry delays after failures: 5, then 15, then 30 minutes (about 0/5/20/50 minutes if failures are immediate). Four attempts per cycle; original 24-hour deadline is never extended. Invalid data/configuration requires correction.'}</p>
         </div>}
       </div>;
     })}</div>

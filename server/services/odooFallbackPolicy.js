@@ -17,6 +17,10 @@ function loadFallbackPolicy(env = process.env) {
   const dateField = env.ODOO_FALLBACK_DATE_FIELD;
   const dateType = env.ODOO_FALLBACK_DATE_TYPE;
   const statusField = env.ODOO_FALLBACK_APPOINTMENT_STATUS_FIELD;
+  const sessionField = env.ODOO_FALLBACK_SESSION_FIELD;
+  const referenceField = env.ODOO_FALLBACK_APPOINTMENT_REFERENCE_FIELD;
+  const directField = value => typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value);
+  if (![dateField, sessionField, referenceField].every(directField)) throw policyError('GCA must confirm direct appointment date, session and reference fields for complete fallback imports.');
   if (!fieldName(dateField) || !fieldName(statusField) || !['date', 'datetime'].includes(dateType)) throw policyError('Configure the approved fallback date field, date type and appointment-status field.');
   let confirmedValues, extraDomain;
   try {
@@ -27,7 +31,12 @@ function loadFallbackPolicy(env = process.env) {
   if (!Array.isArray(extraDomain) || extraDomain.some(term => !['|', '&', '!'].includes(term) && !(Array.isArray(term) && term.length === 3 && fieldName(term[0]) && typeof term[1] === 'string'))) throw policyError('Invalid extra fallback eligibility domain.');
   const pageSize = Number(env.ODOO_FALLBACK_PAGE_SIZE || 200);
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000) throw policyError('Fallback page size must be between 1 and 1000.');
-  return { dateField, dateType, statusField, confirmedValues, extraDomain, pageSize };
+  let sessionValues;
+  try { sessionValues = JSON.parse(env.ODOO_FALLBACK_SESSION_VALUES || '{"morning":"morning","afternoon":"afternoon","evening":"evening"}'); }
+  catch { throw policyError('Fallback session mapping must be valid JSON.'); }
+  if (!sessionValues || typeof sessionValues !== 'object' || Array.isArray(sessionValues) || !Object.keys(sessionValues).length
+    || Object.values(sessionValues).some(value => !['morning', 'afternoon', 'evening'].includes(value))) throw policyError('Invalid fallback session mapping.');
+  return { dateField, dateType, statusField, confirmedValues, extraDomain, pageSize, sessionField, referenceField, sessionValues };
 }
 
 function fallbackDomain(date, policy) {
