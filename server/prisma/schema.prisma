@@ -323,6 +323,9 @@ model reports {
   employee    employees? @relation("EmployeeReports", fields: [employee_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
+// Also has a partial unique index that Prisma cannot express, created by hand in
+// migration 20261103000000_time_slots_unassigned_unique:
+//   (date, time_window_start) WHERE truck_id IS NULL
 model time_slots {
   id                      String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   date                    String?

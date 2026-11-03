@@ -39,8 +39,6 @@ export const CELL_STATES = {
   full:   { label: 'Lorry full',      className: 'bg-white' },
   locked: { label: 'Out for delivery', className: 'bg-white' },
   noteam: { label: 'No team',         className: 'bg-gray-100' },
-  // NIGHT before anyone asked for it: grey, yet droppable — the drop is the request.
-  nightclosed: { label: 'No night delivery', className: 'bg-gray-100' },
   off:    { label: 'Off',             className: 'bg-gray-100' },
   past:   { label: 'Past',            className: 'bg-gray-50' },
 };

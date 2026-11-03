@@ -10,6 +10,25 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
+// ── Guard rail: this script writes test rows, so it only runs against a local database ──
+function assertLocalDatabase() {
+  let host = '';
+  try {
+    host = new URL(process.env.DATABASE_URL).hostname;
+  } catch {
+    // Reported below.
+  }
+  if (host !== 'localhost' && host !== '127.0.0.1') {
+    console.error(
+      '[seedDriverTestData] Refusing to run — DATABASE_URL is not a local database ' +
+        `(host: ${host || 'not set'}).\n` +
+        '  Set DATABASE_URL to a localhost database first; it takes priority over server/.env.\n'
+    );
+    process.exit(1);
+  }
+}
+assertLocalDatabase();
+
 const bcrypt = require('bcryptjs');
 const dayjs  = require('dayjs');
 const prisma = require('./prismaClient');
@@ -394,23 +413,28 @@ async function createSlot({
   slotStatus = 'scheduled',
   truckId    = null,
   startedBy  = null,
-  timeStart  = '09:00',
-  timeEnd    = '12:00',
+  timeStart  = '10:00',
+  timeEnd    = '13:00',
 }) {
-  return prisma.time_slots.create({
-    data: {
-      date,
-      time_window_start: timeStart,
-      time_window_end:   timeEnd,
-      delivery_team_id:  deliveryTeamId,
-      truck_id:          truckId,
-      slot_status:       slotStatus,
-      available_flag:    true,
-      created_at:        new Date(),
-      ...(slotStatus === 'out_for_delivery' ? { departed_at: new Date() } : {}),
-      ...(startedBy ? { started_by: startedBy }                          : {}),
-    },
+  const data = {
+    date,
+    time_window_start: timeStart,
+    time_window_end:   timeEnd,
+    delivery_team_id:  deliveryTeamId,
+    truck_id:          truckId,
+    slot_status:       slotStatus,
+    available_flag:    true,
+    created_at:        new Date(),
+    ...(slotStatus === 'out_for_delivery' ? { departed_at: new Date() } : {}),
+    ...(startedBy ? { started_by: startedBy }                          : {}),
+  };
+  // The scheduler may already have generated this window's one truckless row.
+  const existing = truckId ? null : await prisma.time_slots.findFirst({
+    where: { date, time_window_start: timeStart, truck_id: null },
   });
+  return existing
+    ? prisma.time_slots.update({ where: { id: existing.id }, data })
+    : prisma.time_slots.create({ data });
 }
 
 // ── Orders ────────────────────────────────────────────────────────────────────
@@ -589,8 +613,8 @@ async function main() {
     date,
     deliveryTeamId:  deliveryTeam.id,
     slotStatus:      'out_for_delivery',
-    timeStart:       '13:00',
-    timeEnd:         '18:00',
+    timeStart:       '14:00',
+    timeEnd:         '17:00',
   });
   await prisma.lorry_trips.create({
     data: {
@@ -601,13 +625,13 @@ async function main() {
     },
   });
 
-  // Slot D — Awaiting loading: scheduled tomorrow morning, items not yet loaded
+  // Slot D — Awaiting loading: this evening's run, items not yet loaded
   const slotPending = await createSlot({
     date,
     deliveryTeamId:  deliveryTeam.id,
     slotStatus:      'scheduled',
-    timeStart:       '08:00',
-    timeEnd:         '11:00',
+    timeStart:       '17:00',
+    timeEnd:         '19:00',
   });
 
   // Slot C — Live Deliveries demo: truck + started_by + full team contacts
@@ -848,7 +872,7 @@ async function main() {
       driverId:      driver.id,
       customerKey:   'ben',
       slotId:        slotPending.id,
-      hour:          8,
+      hour:          17,
       catalogKeys:   ['fridge'],
       handlingStatus: 'pending',
     },
@@ -859,7 +883,7 @@ async function main() {
       driverId:      driver.id,
       customerKey:   'siti',
       slotId:        slotPending.id,
-      hour:          8,
+      hour:          17,
       catalogKeys:   ['washer', 'dryer'],
       handlingStatus: 'pending',
     },
@@ -870,7 +894,7 @@ async function main() {
       driverId:      driver.id,
       customerKey:   'lee',
       slotId:        slotPending.id,
-      hour:          9,
+      hour:          18,
       catalogKeys:   ['oven'],
       handlingStatus: 'pending',
     },
@@ -881,7 +905,7 @@ async function main() {
       driverId:      driver.id,
       customerKey:   'raj',
       slotId:        slotPending.id,
-      hour:          9,
+      hour:          18,
       catalogKeys:   [
         { key: 'tv',       handlingStatus: 'pending' },
         { key: 'soundbar', handlingStatus: 'pending' },
@@ -895,7 +919,7 @@ async function main() {
       driverId:      driver.id,
       customerKey:   'hassan',
       slotId:        slotPending.id,
-      hour:          10,
+      hour:          18,
       catalogKeys:   ['sofa', 'riceCooker'],
       handlingStatus: 'pending',
     },

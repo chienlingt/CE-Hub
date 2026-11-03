@@ -7,6 +7,7 @@ const prisma = require('../prismaClient');
 const { expandUnits } = require('../services/orderProductUnits');
 const { extractBuildingName, normalizeBuildingName } = require('../utils/addressParser');
 const { scheduleOrders, updateTimeslotResources } = require('../services/scheduler');
+const { releaseSlotAssignment } = require('../services/slotRelease');
 const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
 
@@ -128,10 +129,7 @@ async function ensureTimeslotAssignments(timeslotId, totalVolumeCm3) {
   });
 
   if (orderCount === 0) {
-    await prisma.time_slots.update({
-      where: { id: timeslotId },
-      data: { delivery_team_id: null, truck_id: null }
-    });
+    await releaseSlotAssignment(prisma, timeslotId);
     return;
   }
 
@@ -176,10 +174,7 @@ async function clearTimeslotIfEmpty(timeslotId) {
     where: { time_slot_id: timeslotId, order_status: 'Scheduled' }
   });
   if (remaining === 0) {
-    await prisma.time_slots.update({
-      where: { id: timeslotId },
-      data: { delivery_team_id: null, truck_id: null }
-    });
+    await releaseSlotAssignment(prisma, timeslotId);
   }
 }
 

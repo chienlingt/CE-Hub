@@ -245,9 +245,7 @@ export function evaluateSlotFeasibility({
     },
     {
       id: 'do-cap', label: 'Maximum DOs per slot', ok: !windowCap.over,
-      detail: !windowCap.capped
-        ? `${windowCap.doCount} DOs — night delivery has no cap`
-        : windowOrders
+      detail: windowOrders
         ? `${windowCap.doCount} of ${windowCap.doCap} across all lorries in this window`
         : `${windowCap.doCount} of ${windowCap.doCap} on this lorry`,
     },

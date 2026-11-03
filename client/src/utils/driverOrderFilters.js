@@ -6,9 +6,9 @@ import { driverTab } from './driverStatusMap';
 
 /** Fixed appointment-time windows for driver dashboard filtering. */
 export const DRIVER_APPOINTMENT_WINDOWS = [
-  { id: '09-12', label: '09:00–12:00', start: '09:00', end: '12:00' },
-  { id: '13-17', label: '13:00–17:00', start: '13:00', end: '17:00' },
-  { id: '19-21', label: '19:00–21:00', start: '19:00', end: '21:00' },
+  { id: '10-13', label: '10:00–13:00', start: '10:00', end: '13:00' },
+  { id: '14-17', label: '14:00–17:00', start: '14:00', end: '17:00' },
+  { id: '17-19', label: '17:00–19:00', start: '17:00', end: '19:00' },
 ];
 
 /** Normalize slot date to yyyy-mm-dd for comparison (Leave warehouse banner). */
@@ -30,13 +30,15 @@ function appointmentMinutes(job) {
 
 /**
  * Bucket an order by scheduled_start_date_time (inclusive window boundaries).
- * @returns {'09-12'|'13-17'|'19-21'|'other'}
+ * @returns {'10-13'|'14-17'|'17-19'|'other'}
  */
 export function getAppointmentBucket(job) {
   const mins = appointmentMinutes(job);
   if (mins === null) return 'other';
 
-  for (const w of DRIVER_APPOINTMENT_WINDOWS) {
+  // Reverse order: 17:00 closes the afternoon window and opens the evening one,
+  // and it belongs to the evening.
+  for (const w of [...DRIVER_APPOINTMENT_WINDOWS].reverse()) {
     const start = parseClockToMinutes(w.start);
     const end   = parseClockToMinutes(w.end);
     if (mins >= start && mins <= end) return w.id;
@@ -102,7 +104,7 @@ export function filterByDate(jobs, dateStr) {
 
 /**
  * Filter jobs by appointment-time window bucket.
- * @param {string} windowFilter - 'all' | '09-12' | '13-17' | '19-21' | 'other'
+ * @param {string} windowFilter - 'all' | '10-13' | '14-17' | '17-19' | 'other'
  */
 export function filterByAppointmentWindow(jobs, windowFilter) {
   if (!windowFilter || windowFilter === 'all') return jobs;
@@ -205,12 +207,14 @@ export function groupJobsBySlot(jobs, slots) {
 /**
  * Map a slot's time_window_start to an appointment bucket id.
  * @param {object|null} slot
- * @returns {'09-12'|'13-17'|'19-21'|'other'}
+ * @returns {'10-13'|'14-17'|'17-19'|'other'}
  */
 export function getSlotBucket(slot) {
   if (!slot?.time_window_start) return 'other';
   const mins = parseClockToMinutes(slot.time_window_start);
-  for (const w of DRIVER_APPOINTMENT_WINDOWS) {
+  // Reverse order: 17:00 closes the afternoon window and opens the evening one,
+  // and it belongs to the evening.
+  for (const w of [...DRIVER_APPOINTMENT_WINDOWS].reverse()) {
     const start = parseClockToMinutes(w.start);
     const end   = parseClockToMinutes(w.end);
     if (mins >= start && mins <= end) return w.id;

@@ -4,6 +4,8 @@ const weekday = require('dayjs/plugin/weekday');
 const isSameOrAfter = require('dayjs/plugin/isSameOrAfter');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
 const prisma = require('../prismaClient');
+const { SLOT_HORIZON_DAYS, horizonDates, buildMissingSlots } = require('./slotGeneration');
+const { releaseSlotAssignment } = require('./slotRelease');
 const { planRoutes } = require('./googleRoutingService');
 const { optimizeScheduledSlots } = require('./intelligentRouteOptimizationService');
 
@@ -287,80 +289,43 @@ async function getUsedTruckIdsForDate(date) {
     return timeslots.map(ts => ts.truck_id);
 }
 
+// How far ahead fetchAvailableTimeslots() lets the auto-scheduler look.
+const AUTO_SCHEDULE_WINDOW_DAYS = 7;
+
 /**
- * Generate timeslots for next 7 days in KL timezone (skip weekends & Thursday for normal delivery)
+ * Generate timeslots for the next 90 calendar days in KL timezone.
+ * Rows are matched on (date, time_window_start); existing rows are left alone.
  */
 async function generateTimeSlots() {
-  console.log('Generating default timeslots for the next 7 weekdays (KL Time)...');
-  
+  console.log(`Generating default timeslots for the next ${SLOT_HORIZON_DAYS} days (KL Time)...`);
+
   // Get current date in Kuala Lumpur timezone
-  const formatter = new Intl.DateTimeFormat('en-CA', { 
-    timeZone: 'Asia/Kuala_Lumpur', 
-    year: 'numeric', 
-    month: '2-digit', 
-    day: '2-digit' 
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
   });
   const klDateStr = formatter.format(new Date()); // Returns "YYYY-MM-DD"
-  
-  // Initialize start date from KL time
-  const today = dayjs(klDateStr).startOf('day');
 
-  const timeslotTemplates = {
-    normal: [
-      { start: '08:00', end: '12:00' },
-      { start: '13:00', end: '19:00' },
-      { start: '19:00', end: '21:00' }
-    ],
-    farArea: [
-      { start: '07:00', end: '13:00' },  // Earlier start for far areas like Genting
-      { start: '13:00', end: '19:00' }
-    ]
-  };
+  // TODO: weekends are generated now, but teams, trucks and the auto-scheduler
+  // still assume weekdays. The scheduler needs proper weekend handling.
+  const dates = horizonDates(klDateStr);
 
-  let createdCount = 0;
-  let daysChecked = 0;
-  let date = today;
+  const existing = await prisma.time_slots.findMany({
+    where: { date: { gte: dates[0], lte: dates[dates.length - 1] } },
+    select: { date: true, time_window_start: true }
+  });
+  const missing = buildMissingSlots(dates, existing);
 
-  while (daysChecked < 7) {
-    date = date.add(1, 'day');
-    const dayOfWeek = date.day(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+  // skipDuplicates relies on the partial unique index on truckless rows, so an
+  // overlapping run (cron + manual) inserts nothing twice.
+  const created = missing.length > 0
+    ? (await prisma.time_slots.createMany({ data: missing, skipDuplicates: true })).count
+    : 0;
 
-    // Skip weekends (Friday & Saturday as per user request)
-    if (dayOfWeek === 6 || dayOfWeek === 0) {
-      // console.log(`Skipping weekend: ${date.format('YYYY-MM-DD')} (${dayOfWeek === 5 ? 'Friday' : 'Saturday'})`);
-      continue;
-    }
-    daysChecked++;
-
-    // Thursday = far area deliveries only (e.g., Genting)
-    const slotType = dayOfWeek === 4 ? 'far-area' : 'normal';
-
-    for (const t of timeslotTemplates.normal) {
-      const existingSlots = await prisma.time_slots.findMany({
-        where: {
-          date: date.format('YYYY-MM-DD'),
-          time_window_start: t.start
-        }
-      });
-
-      if (existingSlots.length === 0) {
-        await prisma.time_slots.create({
-          data: {
-            date: date.format('YYYY-MM-DD'),
-            time_window_start: t.start,
-            time_window_end: t.end,
-            available_flag: true,
-            created_at: new Date()
-          }
-        });
-        createdCount++;
-        console.log(`Created ${slotType} slot: ${date.format('YYYY-MM-DD')} ${t.start}-${t.end}`);
-      }
-    }
-  }
-
-  console.log(`Total new timeslots created: ${createdCount}`);
-  return createdCount;
+  console.log(`Total new timeslots created: ${created}`);
+  return created;
 }
 
 /**
@@ -587,10 +552,7 @@ async function ensureTimeslotAssignments(timeslotId, slotVolumeCm3, teams, truck
 
   if (orderCount === 0) {
     console.log(`[ensureTimeslotAssignments] No orders in timeslot. Clearing assignments.`);
-    await prisma.time_slots.update({
-      where: { id: timeslotId },
-      data: { delivery_team_id: null, truck_id: null }
-    });
+    await releaseSlotAssignment(prisma, timeslotId);
     return;
   }
 
@@ -654,12 +616,16 @@ async function fetchTrucks() {
 async function fetchAvailableTimeslots() {
   const today = dayjs().startOf('day');
   const tomorrow = today.add(1, 'day').format('YYYY-MM-DD');
+  // Slots exist for SLOT_HORIZON_DAYS, but the auto-scheduler only fills the next 7
+  // days so overflow orders stay visibly unscheduled instead of being pushed weeks out.
+  const lastDay = today.add(AUTO_SCHEDULE_WINDOW_DAYS, 'day').format('YYYY-MM-DD');
 
   const timeslots = await prisma.time_slots.findMany({
     where: {
       available_flag: true,
       date: {
-        gte: tomorrow  // Only future dates (tomorrow or later)
+        gte: tomorrow,  // Only future dates (tomorrow or later)
+        lte: lastDay
       }
     },
     orderBy: [
@@ -668,7 +634,7 @@ async function fetchAvailableTimeslots() {
     ]
   });
 
-  console.log(`Available future timeslots: ${timeslots.length} (from ${tomorrow} onwards)`);
+  console.log(`Available future timeslots: ${timeslots.length} (${tomorrow} to ${lastDay})`);
 
   return timeslots;
 }

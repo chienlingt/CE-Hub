@@ -42,7 +42,6 @@ export default function DoDrawer({ detail, moveTargets = [], past, busy, canEdit
             {moveTargets.map(t => (
               <option key={t.slotId} value={t.slotId}>
                 {t.windowLabel} {t.timeLabel} · {t.truckPlate ?? 'no lorry'}
-                {t.startsNight ? ' · starts night delivery' : ''}
               </option>
             ))}
           </select>

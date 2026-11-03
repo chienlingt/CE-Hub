@@ -15,7 +15,7 @@
 //     over-the-DO-cap state only appear if some slot actually reaches them, and
 //     a flat week would render exactly one of the three. See PEAK_WEEKDAY.
 //   * Slot windows are exactly the ones server/services/scheduler.js
-//     generateTimeSlots() emits (08:00-12:00 / 13:00-19:00 / 19:00-21:00), so a
+//     generateTimeSlots() emits (10:00-13:00 / 14:00-17:00 / 17:00-19:00), so a
 //     later scheduler run lands on this grid instead of creating a second,
 //     parallel set of slots next to it.
 //   * Crew skills always match their load, on every day including the peak one:
@@ -111,23 +111,16 @@ function minusHours(date, hours) {
 }
 
 // ── Slot windows ────────────────────────────────────────────────────────────
-// Verbatim from scheduler.js generateTimeSlots(). Must not drift: utils/schedule
+// Verbatim from scheduler.js SLOT_WINDOW_TEMPLATES. Must not drift: utils/schedule
 // /slotWindows.js classifies AM/PM/NIGHT by these start times.
 const NORMAL_WINDOWS = [
-  { start: '08:00', end: '12:00' },
-  { start: '13:00', end: '19:00' },
-  { start: '19:00', end: '21:00' },
+  { start: '10:00', end: '13:00' },
+  { start: '14:00', end: '17:00' },
+  { start: '17:00', end: '19:00' },
 ];
 
-// Thursday is the far-area run (Genting and beyond) — scheduler.js:338 flags
-// dayOfWeek 4 as 'far-area'. A lorry that spends the day outside the Klang
-// Valley physically cannot be back for a 19:00-21:00 night drop, so Thursday
-// gets two windows and visibly less capacity in the grid. The windows are still
-// the normal 08:00/13:00 pair rather than the engine's farArea template, because
-// that template is dead code today: the loop at scheduler.js:340 iterates
-// `timeslotTemplates.normal` whatever slotType says.
-function windowsFor(dateKey) {
-  return dayjs(dateKey).day() === 4 ? NORMAL_WINDOWS.slice(0, 2) : NORMAL_WINDOWS;
+function windowsFor() {
+  return NORMAL_WINDOWS;
 }
 
 // Wednesday is the peak day. §1 says the daily volume "may reach 90 DOs, but
@@ -140,13 +133,12 @@ function windowsFor(dateKey) {
 // is itself the thing being demonstrated.
 const PEAK_WEEKDAY = 3;
 
-// §1: average 70-80 DOs/day, with the Wednesday peak at 92. Thursday is the
-// lightest because it is the far-area day with one window fewer.
+// §1: average 70-80 DOs/day, with the Wednesday peak at 92.
 const DAILY_ORDER_TOTALS = { 1: 78, 2: 74, [PEAK_WEEKDAY]: 92, 4: 70, 5: 76 };
 
-// The 19:00-21:00 window exists for customers who can only take a delivery after
+// The 17:00-19:00 window exists for customers who can only take a delivery after
 // work, so it is deliberately the lightest of the three.
-const WINDOW_SHARE = { 3: [0.4, 0.4, 0.2], 2: [0.5, 0.5] };
+const WINDOW_SHARE = [0.4, 0.4, 0.2];
 
 // Lorries rostered per day, out of the fleet of 21 — the rest are on other
 // duties (inter-branch transfers, §3) or in for service. The peak day runs a
@@ -178,9 +170,9 @@ const ROUTINE_MIX = [
 // totals exactly 92, so that overload is something the dispatcher fixes by
 // dragging orders off the slot, which is the whole interaction.
 const PEAK_DAY_PLAN = [
-  [{ dos: 26, sofas: 0 }, { dos: 4, sofas: 1 }, { dos: 4, sofas: 4 }, { dos: 3, sofas: 2 }], // 08:00 = 37
-  [{ dos: 10, sofas: 2 }, { dos: 9, sofas: 0 }, { dos: 9, sofas: 2 }, { dos: 9, sofas: 0 }], // 13:00 = 37
-  [{ dos: 5, sofas: 0 }, { dos: 5, sofas: 0 }, { dos: 4, sofas: 2 }, { dos: 4, sofas: 3 }],  // 19:00 = 18
+  [{ dos: 26, sofas: 0 }, { dos: 4, sofas: 1 }, { dos: 4, sofas: 4 }, { dos: 3, sofas: 2 }], // 10:00 = 37
+  [{ dos: 10, sofas: 2 }, { dos: 9, sofas: 0 }, { dos: 9, sofas: 2 }, { dos: 9, sofas: 0 }], // 14:00 = 37
+  [{ dos: 5, sofas: 0 }, { dos: 5, sofas: 0 }, { dos: 4, sofas: 2 }, { dos: 4, sofas: 3 }],  // 17:00 = 18
 ];
 
 function splitEvenly(total, buckets) {
@@ -355,7 +347,7 @@ const BUILDINGS = [
     city: 'Cheras', state: 'Wilayah Persekutuan',
     loading_bay_available: true, lift_available: true, lift_dimensions: '200cm x 160cm x 230cm',
     narrow_doorways: false, pre_registration_required: true,
-    // Afternoon-only window: nothing in the 08:00 run can legally reach this block.
+    // Afternoon-only window: nothing in the 10:00 run can legally reach this block.
     access_time_window_start: '14:00', access_time_window_end: '18:00',
     latitude: 3.06180000, longitude: 101.74610000,
   },
@@ -723,8 +715,8 @@ async function main() {
   const approvedThrough = Math.max(liveDayIndex, Math.min(liveDayIndex + 1, lastIndex - 1));
 
   weekDays.forEach((dateKey, dayIndex) => {
-    const windows = windowsFor(dateKey);
-    const shares = WINDOW_SHARE[windows.length];
+    const windows = windowsFor();
+    const shares = WINDOW_SHARE;
     const dayTotal = DAILY_ORDER_TOTALS[dayjs(dateKey).day()];
     const weekday = dayjs(dateKey).format('dddd');
 
@@ -1076,7 +1068,7 @@ async function main() {
     const biggest = Math.max(...daySlots.map(s => orderRows.filter(o => o.time_slot_id === s.id).length));
     const tag = dayjs(dateKey).day() === PEAK_WEEKDAY
       ? '  <- peak day, thin roster'
-      : (dayjs(dateKey).day() === 4 ? '  <- far-area day, 2 windows' : '');
+      : '';
     return `  ${dayjs(dateKey).format('ddd DD MMM')}  ${String(daySlots.length).padStart(2)} slots (incl. open)  `
       + `${String(ordersPerDay.get(dateKey)).padStart(3)} orders  ${rostered} lorries  `
       + `busiest slot ${String(biggest).padStart(2)} DOs${tag}`;
@@ -1087,7 +1079,6 @@ async function main() {
   console.log('\n=== Scheduler demo seed complete ===');
   console.log(`Week:              ${weekDays[0]} .. ${weekDays[weekDays.length - 1]} (Sat/Sun skipped, as the engine does)`);
   console.log(`Live day:          ${liveDay} — morning slots out_for_delivery, afternoon/night still scheduled`);
-  console.log(`Far-area day:      Thursday, two windows only, so its column is visibly lighter`);
   if (peakDate) {
     console.log(`Peak day:          ${peakDate} — ${DAILY_ORDER_TOTALS[PEAK_WEEKDAY]} DOs on ${ROSTER_SIZES[PEAK_WEEKDAY]} lorries, so the`);
     console.log('                   capacity meters reach their amber and red bands and one slot');

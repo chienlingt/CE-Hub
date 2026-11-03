@@ -450,16 +450,16 @@ async function main() {
   // ── Time slots ──────────────────────────────────────────────────────────
   // Past, completed round trip (used by the delivered + failed/returned orders)
   const slotPastCompleted = await prisma.time_slots.create({ data: {
-    date: D.past6.format('YYYY-MM-DD'), time_window_start: '09:00', time_window_end: '13:00',
+    date: D.past6.format('YYYY-MM-DD'), time_window_start: '10:00', time_window_end: '13:00',
     delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: false, slot_status: 'completed', created_at: D.past6.subtract(1, 'day').toDate(),
     loading_start_date_time: atTime(D.past6, '07:30'), loading_end_date_time: atTime(D.past6, '08:45'),
-    departed_at: atTime(D.past6, '09:00'), ended_at: atTime(D.past6, '13:20'), ended_by: driver1.id,
+    departed_at: atTime(D.past6, '10:00'), ended_at: atTime(D.past6, '13:20'), ended_by: driver1.id,
     started_by: driver1.id,
   }});
   // A second past completed slot for the good delivered/rated order
   const slotPastDelivered = await prisma.time_slots.create({ data: {
-    date: D.past3.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '18:00',
+    date: D.past3.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '17:00',
     delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
     available_flag: false, slot_status: 'completed', created_at: D.past3.subtract(1, 'day').toDate(),
     loading_start_date_time: atTime(D.past3, '12:30'), loading_end_date_time: atTime(D.past3, '13:40'),
@@ -468,51 +468,52 @@ async function main() {
   }});
   // Today, truck out on the road right now
   const slotTodayOut = await prisma.time_slots.create({ data: {
-    date: D.today.format('YYYY-MM-DD'), time_window_start: '09:00', time_window_end: '13:00',
+    date: D.today.format('YYYY-MM-DD'), time_window_start: '10:00', time_window_end: '13:00',
     delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: false, slot_status: 'out_for_delivery', created_at: D.today.subtract(2, 'day').toDate(),
     loading_start_date_time: atTime(D.today, '07:15'), loading_end_date_time: atTime(D.today, '08:40'),
-    departed_at: atTime(D.today, '09:00'), started_by: driver1.id,
+    departed_at: atTime(D.today, '10:00'), started_by: driver1.id,
     route_polyline: null, route_distance_m: 18400, route_duration_s: 2760, route_computed_at: atTime(D.today, '08:45'),
   }});
   // Today, still loading at the warehouse (loading dashboard demo)
   const slotTodayLoading = await prisma.time_slots.create({ data: {
-    date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '18:00',
+    date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '17:00',
     delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
     available_flag: false, slot_status: 'scheduled', created_at: D.today.subtract(2, 'day').toDate(),
     loading_start_date_time: atTime(D.today, '12:00'),
   }});
   // Dedicated loading/departure demo for Razif / Delivery Team A.
   const slotTodayDemoLoading = await prisma.time_slots.create({ data: {
-    date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '18:00',
+    date: D.today.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '17:00',
     delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: false, slot_status: 'scheduled', created_at: D.today.subtract(2, 'day').toDate(),
     loading_start_date_time: atTime(D.today, '12:00'),
   }});
   // Future, scheduled
   const slotFuture1 = await prisma.time_slots.create({ data: {
-    date: D.future3.format('YYYY-MM-DD'), time_window_start: '09:00', time_window_end: '13:00',
+    date: D.future3.format('YYYY-MM-DD'), time_window_start: '10:00', time_window_end: '13:00',
     delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
   const slotFuture2 = await prisma.time_slots.create({ data: {
-    date: D.future5.format('YYYY-MM-DD'), time_window_start: '10:00', time_window_end: '14:00',
+    date: D.future5.format('YYYY-MM-DD'), time_window_start: '10:00', time_window_end: '13:00',
     delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
   const slotFuture3 = await prisma.time_slots.create({ data: {
-    date: D.future7.format('YYYY-MM-DD'), time_window_start: '13:00', time_window_end: '17:00',
+    date: D.future7.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '17:00',
     delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
   // Unused open slot, no team/truck attached yet — admin still needs to assign one
   const slotUnassignedFuture = await prisma.time_slots.create({ data: {
-    date: D.future3.format('YYYY-MM-DD'), time_window_start: '15:00', time_window_end: '19:00',
+    date: D.future3.format('YYYY-MM-DD'), time_window_start: '14:00', time_window_end: '17:00',
     available_flag: true, slot_status: 'scheduled', created_at: D.today.toDate(),
   }});
   // Dedicated route-optimisation rehearsal: the original records were on
   // 26 Aug 2026, but are shifted to DEMO_DATE so they appear immediately in
-  // Suresh's My Jobs and Route tabs after every seed run.
+  // Suresh's My Jobs and Route tabs after every seed run. Its window stays outside
+  // the three sessions on purpose: the historical stops run from 10:00 to 19:00.
   const slotHistoricalB2 = await prisma.time_slots.create({ data: {
     date: D.today.format('YYYY-MM-DD'), time_window_start: '09:30', time_window_end: '19:00',
     delivery_team_id: deliveryTeamB.id, truck_id: truck2.id,
@@ -526,9 +527,9 @@ async function main() {
     time_slot_id: slotPastCompleted.id, truck_id: truck1.id,
     delivery_team_id: deliveryTeamA.id,
     driver_id: driver1.id, assistant_id: assistant1.id, status: 'completed',
-    started_at: atTime(D.past6, '09:00'), started_by: driver1.id,
+    started_at: atTime(D.past6, '10:00'), started_by: driver1.id,
     ended_at: atTime(D.past6, '13:20'), ended_by: driver1.id,
-    created_at: atTime(D.past6, '09:00'), updated_at: atTime(D.past6, '13:20'),
+    created_at: atTime(D.past6, '10:00'), updated_at: atTime(D.past6, '13:20'),
   }});
   const tripPastDelivered = await prisma.lorry_trips.create({ data: {
     time_slot_id: slotPastDelivered.id, truck_id: truck2.id,
@@ -542,8 +543,8 @@ async function main() {
     time_slot_id: slotTodayOut.id, truck_id: truck1.id,
     delivery_team_id: deliveryTeamA.id,
     driver_id: driver1.id, assistant_id: assistant1.id, status: 'active',
-    started_at: atTime(D.today, '09:00'), started_by: driver1.id,
-    created_at: atTime(D.today, '09:00'), updated_at: atTime(D.today, '09:00'),
+    started_at: atTime(D.today, '10:00'), started_by: driver1.id,
+    created_at: atTime(D.today, '10:00'), updated_at: atTime(D.today, '10:00'),
   }});
   console.log('[seedDemo] 3 lorry trips created');
 
@@ -568,7 +569,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1002', odoo_sales_ref: 'S00102',
     customer_id: custTan.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotFuture1.id, order_status: 'Scheduled', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.future3, '09:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
+    scheduled_start_date_time: atTime(D.future3, '10:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
     delivery_address: custTan.address, delivery_city: custTan.city,
     delivery_postcode: custTan.postcode, delivery_state: custTan.state,
     salesperson_name: 'Grace Tan', salesperson_phone: '0171112222',
@@ -584,7 +585,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1003', odoo_sales_ref: 'S00103',
     customer_id: custWong.id, building_id: buildingCondoLift.id, employee_id: driver2.id,
     time_slot_id: slotFuture2.id, order_status: 'Scheduled', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.future5, '10:00'), scheduled_end_date_time: atTime(D.future5, '14:00'),
+    scheduled_start_date_time: atTime(D.future5, '10:00'), scheduled_end_date_time: atTime(D.future5, '13:00'),
     delivery_address: custWong.address, delivery_city: custWong.city,
     delivery_postcode: custWong.postcode, delivery_state: custWong.state,
     delivery_notes: custWong.preferred_delivery_notes,
@@ -606,14 +607,14 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1004', odoo_sales_ref: 'S00104',
     customer_id: custLee.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Delivering', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
-    actual_start_date_time: atTime(D.today, '09:00'),
+    scheduled_start_date_time: atTime(D.today, '10:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
+    actual_start_date_time: atTime(D.today, '10:00'),
     delivery_address: custLee.address, delivery_city: custLee.city,
     delivery_postcode: custLee.postcode, delivery_state: custLee.state,
     truck_loading_sequence: 1, salesperson_name: 'Grace Tan', salesperson_phone: '0171112222',
     dispatched_by: admin.id, notified_pending: true, notified_scheduled: true,
-    notified_on_the_way_at: atTime(D.today, '08:55'),
-    created_at: D.today.subtract(3, 'day').toDate(), updated_at: atTime(D.today, '09:00'),
+    notified_on_the_way_at: atTime(D.today, '09:55'),
+    created_at: D.today.subtract(3, 'day').toDate(), updated_at: atTime(D.today, '10:00'),
   }});
   await prisma.order_products.create({ data: {
     order_id: order4.id, product_id: pFridge.id, quantity: 1, delivered_quantity: 0,
@@ -626,15 +627,15 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1005', odoo_sales_ref: 'S00105',
     customer_id: custCorp.id, building_id: buildingCommercial.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Delivering', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
-    actual_start_date_time: atTime(D.today, '09:00'),
+    scheduled_start_date_time: atTime(D.today, '10:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
+    actual_start_date_time: atTime(D.today, '10:00'),
     delivery_address: custCorp.address, delivery_city: custCorp.city,
     delivery_postcode: custCorp.postcode, delivery_state: custCorp.state,
     special_equipment_needed: buildingCommercial.special_equipment_needed,
     truck_loading_sequence: 2, salesperson_name: 'Amirul Hakim', salesperson_phone: '0173334444',
     dispatched_by: admin.id, notified_pending: true, notified_scheduled: true,
-    notified_on_the_way_at: atTime(D.today, '08:55'),
-    created_at: D.today.subtract(3, 'day').toDate(), updated_at: atTime(D.today, '09:00'),
+    notified_on_the_way_at: atTime(D.today, '09:55'),
+    created_at: D.today.subtract(3, 'day').toDate(), updated_at: atTime(D.today, '10:00'),
   }});
   await prisma.order_products.create({ data: {
     order_id: order5.id, product_id: pDining.id, quantity: 2, delivered_quantity: 0,
@@ -651,7 +652,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1006', odoo_sales_ref: 'S00106',
     customer_id: custWong.id, building_id: buildingCondoLift.id, employee_id: driver2.id,
     time_slot_id: slotPastDelivered.id, order_status: 'Delivered', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '18:00'),
+    scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '17:00'),
     actual_start_date_time: atTime(D.past3, '14:10'), actual_arrival_date_time: atTime(D.past3, '15:05'),
     actual_end_date_time: atTime(D.past3, '15:25'),
     delivery_start_date_time: atTime(D.past3, '15:05'), delivery_end_date_time: atTime(D.past3, '15:25'),
@@ -683,7 +684,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1007', odoo_sales_ref: 'S00107',
     customer_id: custTan.id, building_id: buildingLanded.id, employee_id: driver2.id,
     time_slot_id: slotPastDelivered.id, order_status: 'Delivered', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '18:00'),
+    scheduled_start_date_time: atTime(D.past3, '14:00'), scheduled_end_date_time: atTime(D.past3, '17:00'),
     actual_start_date_time: atTime(D.past3, '15:30'), actual_arrival_date_time: atTime(D.past3, '16:40'),
     actual_end_date_time: atTime(D.past3, '17:00'),
     delivered_by: driver2.id, proof_of_delivery_url: '/uploads/demo/pod-demo-1007.jpg',
@@ -719,7 +720,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1008', odoo_sales_ref: 'S00108',
     customer_id: custNorain.id, building_id: buildingCondoNoLift.id, employee_id: driver1.id,
     time_slot_id: slotPastCompleted.id, order_status: 'Failed', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.past6, '09:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
+    scheduled_start_date_time: atTime(D.past6, '10:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
     actual_start_date_time: atTime(D.past6, '09:10'), actual_arrival_date_time: atTime(D.past6, '10:30'),
     delivery_address: buildingCondoNoLift.address, delivery_city: 'Petaling Jaya',
     delivery_postcode: buildingCondoNoLift.postal_code, delivery_state: 'Selangor',
@@ -766,7 +767,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1010', odoo_sales_ref: 'S00110',
     customer_id: custSiti.id, building_id: buildingGated.id, employee_id: driver2.id,
     time_slot_id: slotTodayLoading.id, order_status: 'Issue', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '18:00'),
+    scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '17:00'),
     delivery_address: buildingGated.address, delivery_city: 'Shah Alam',
     delivery_postcode: buildingGated.postal_code, delivery_state: 'Selangor',
     issue_status: 'open', issue_priority_level: 'High', issue_reason: 'Vehicle breakdown en route',
@@ -800,7 +801,7 @@ async function main() {
     customer_id: custPriya.id, building_id: buildingCondoLift.id,
     rescheduled_from_order_id: order11.id, time_slot_id: slotFuture3.id,
     order_status: 'Scheduled', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.future7, '13:00'), scheduled_end_date_time: atTime(D.future7, '17:00'),
+    scheduled_start_date_time: atTime(D.future7, '14:00'), scheduled_end_date_time: atTime(D.future7, '17:00'),
     delivery_address: custPriya.address, delivery_city: custPriya.city,
     delivery_postcode: custPriya.postcode, delivery_state: custPriya.state,
     salesperson_name: 'Grace Tan', salesperson_phone: '0171112222',
@@ -830,7 +831,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1014', odoo_sales_ref: 'S00114',
     customer_id: custLee.id, building_id: buildingLanded.id, employee_id: driver1.id,
     time_slot_id: slotFuture1.id, order_status: 'Scheduled', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.future3, '09:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
+    scheduled_start_date_time: atTime(D.future3, '10:00'), scheduled_end_date_time: atTime(D.future3, '13:00'),
     original_delivery_address: custLee.address,
     delivery_address: custLee.address, delivery_city: custLee.city,
     delivery_postcode: custLee.postcode, delivery_state: custLee.state,
@@ -849,7 +850,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1015', odoo_sales_ref: 'S00115',
     customer_id: custSiti.id, building_id: buildingGated.id, employee_id: driver1.id,
     time_slot_id: slotPastCompleted.id, order_status: 'Delivered', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.past6, '09:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
+    scheduled_start_date_time: atTime(D.past6, '10:00'), scheduled_end_date_time: atTime(D.past6, '13:00'),
     actual_start_date_time: atTime(D.past6, '11:00'), actual_arrival_date_time: atTime(D.past6, '12:40'),
     actual_end_date_time: atTime(D.past6, '13:00'), delivered_by: driver1.id,
     proof_of_delivery_url: '/uploads/demo/pod-demo-1015.jpg',
@@ -877,7 +878,7 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1016', odoo_sales_ref: 'S00116',
     customer_id: custNorain.id, building_id: buildingCondoNoLift.id, employee_id: driver1.id,
     time_slot_id: slotTodayDemoLoading.id, order_status: 'Scheduled', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '18:00'),
+    scheduled_start_date_time: atTime(D.today, '14:00'), scheduled_end_date_time: atTime(D.today, '17:00'),
     delivery_address: buildingCondoNoLift.address, delivery_city: 'Petaling Jaya',
     delivery_postcode: buildingCondoNoLift.postal_code, delivery_state: 'Selangor',
     truck_loading_sequence: 1, salesperson_name: 'Amirul Hakim', salesperson_phone: '0173334444',
@@ -908,7 +909,7 @@ async function main() {
 
   // Fresh end-to-end rehearsal. Do not pre-load or pre-complete these items.
   const flowSlots = { afternoon: slotTodayDemoLoading };
-  for (const [name, start, end] of [['morning', '09:00', '13:00'], ['night', '18:00', '21:00']]) {
+  for (const [name, start, end] of [['morning', '10:00', '13:00'], ['night', '17:00', '19:00']]) {
     flowSlots[name] = await prisma.time_slots.create({ data: {
       date: D.today.format('YYYY-MM-DD'), time_window_start: start, time_window_end: end,
       delivery_team_id: deliveryTeamA.id, truck_id: truck1.id,
@@ -961,8 +962,8 @@ async function main() {
     odoo_order_ref: 'DEMO-DO-1017', odoo_sales_ref: 'S00117',
     customer_id: custMuthu.id, building_id: buildingShoplot.id, employee_id: driver1.id,
     time_slot_id: slotTodayOut.id, order_status: 'Failed', assignment_status: 'approved',
-    scheduled_start_date_time: atTime(D.today, '09:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
-    actual_start_date_time: atTime(D.today, '09:00'), actual_arrival_date_time: atTime(D.today, '10:15'),
+    scheduled_start_date_time: atTime(D.today, '10:00'), scheduled_end_date_time: atTime(D.today, '13:00'),
+    actual_start_date_time: atTime(D.today, '10:00'), actual_arrival_date_time: atTime(D.today, '10:15'),
     delivery_address: buildingShoplot.address, delivery_city: 'Klang',
     delivery_postcode: buildingShoplot.postal_code, delivery_state: 'Selangor',
     truck_loading_sequence: 3, number_of_attempts: 1, issue_status: 'open', issue_priority_level: 'Medium',
@@ -1053,7 +1054,7 @@ async function main() {
     { user_id: driver1.id, order_id: order2.id, type: 'info', message: 'New delivery assigned: DEMO-DO-1002 on ' + D.future3.format('D MMM YYYY'), is_read: false, created_at: D.today.toDate() },
     { user_id: admin.id, order_id: order10.id, type: 'warning', message: 'Order DEMO-DO-1010 overdue — vehicle breakdown reported, needs acknowledgement.', is_read: false, created_at: D.today.subtract(1, 'hour').toDate() },
     { user_id: dispatcher.id, order_id: order7.id, type: 'warning', message: 'New complaint filed for order DEMO-DO-1007.', is_read: true, created_at: atTime(D.past3, '19:05') },
-    { user_id: driver1.id, order_id: order4.id, type: 'info', message: 'Trip departed — 2 stops on today’s 09:00 slot.', is_read: true, created_at: atTime(D.today, '09:00') },
+    { user_id: driver1.id, order_id: order4.id, type: 'info', message: 'Trip departed — 2 stops on today’s 10:00 slot.', is_read: true, created_at: atTime(D.today, '10:00') },
   ]});
 
   // ── System settings & scheduler config ──────────────────────────────────

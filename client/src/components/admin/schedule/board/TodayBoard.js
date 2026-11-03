@@ -4,8 +4,7 @@
 // auto-scheduler proposes; the warehouse admin approves, and rescues what it
 // could not place by dragging from the unscheduled panel. Every manual placement is
 // confirmed in a pop-up — Place (pending, with Undo) or Place & approve (writes
-// to Odoo, no Undo). A drop into an empty cell creates that lorry's slot; the
-// first drop into NIGHT is the request for a night delivery.
+// to Odoo, no Undo). A drop into an empty cell creates that lorry's slot.
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 

@@ -265,7 +265,7 @@ export function expectedInfo(order, slotDateKey = null) {
 /**
  * Can this order be dropped into this slot (real or would-be)?
  * validateAssignment with the Board's context: the lorry's PAIRED team, the
- * window's shared DO cap (none at NIGHT), and two rules stricter than the
+ * window's shared DO cap, and two rules stricter than the
  * engine's warnings — a lorry with no crew cannot take work, and a past day
  * cannot change.
  */
@@ -359,8 +359,7 @@ export function compareBoardRows(a, b) {
 /**
  * One day, every lorry (rows, busiest first) x AM / PM / NIGHT (columns,
  * always all three), plus the per-window totals the sticky footer shows.
- * Every cell is either a real slot or a would-be one; NIGHT is closed (grey,
- * but droppable — the drop is the request) until it holds a DO.
+ * Every cell is either a real slot or a would-be one.
  */
 export function selectBoardMatrix(state, dateKey, cache = {}) {
   const cfg = withDefaults(state.config);
@@ -382,7 +381,7 @@ export function selectBoardMatrix(state, dateKey, cache = {}) {
     ...evaluateWindowDoCap({ orders: c.ordersByWindow[`${dateKey}|${windowId}`] ?? [], config: cfg, windowId }),
   }));
   const totalOf = Object.fromEntries(totals.map(t => [t.windowId, t]));
-  // AM and PM carry the shared cap; each night DO adds one (night is uncapped).
+  // Every window carries the shared cap.
   const dayTotal = {
     doCount: totals.reduce((n, t) => n + t.doCount, 0),
     doCap: totals.reduce((n, t) => n + (t.capped ? t.doCap : t.doCount), 0),
@@ -395,8 +394,7 @@ export function selectBoardMatrix(state, dateKey, cache = {}) {
       label: windowLabel(windowId),
       timeLabel: times ? `${times.start}–${times.end}` : '',
       capped: isCappedWindow(windowId),
-      // NIGHT runs only on the warehouse admin's request: open while it has DOs.
-      open: isCappedWindow(windowId) || totalOf[windowId].doCount > 0,
+      open: true,
     };
   });
 
@@ -425,7 +423,6 @@ export function selectBoardMatrix(state, dateKey, cache = {}) {
       else if (lane?.locked) { cellState = 'locked'; reason = lane.lockReason; }
       else if (teamState === 'none') { cellState = 'noteam'; reason = 'No team paired'; }
       else if (teamState === 'unavailable') { cellState = 'noteam'; reason = teamAvail.reason ?? 'Team unavailable'; }
-      else if (!open) { cellState = 'nightclosed'; reason = 'No night delivery'; }
       else if (lane && (lane.capacity.over.includes('volume') || lane.capacity.over.includes('weight'))) {
         cellState = 'full';
         reason = lane.capacity.over.includes('volume') ? 'Lorry volume full' : 'Lorry payload full';
@@ -434,7 +431,7 @@ export function selectBoardMatrix(state, dateKey, cache = {}) {
       const slotId = lane?.id ?? newSlotId(dateKey, windowId, truck.id);
       // Refuses drops outright, before any validation runs. A full lorry
       // (volume or weight) is blocked here too; the cell just says so.
-      const droppable = ['open', 'nightclosed'].includes(cellState);
+      const droppable = cellState === 'open';
       if (droppable) cellIds.push(slotId);
 
       return {
@@ -554,8 +551,6 @@ export function selectDropTarget(state, orderId, slotId, cache = {}) {
     timeLabel: `${slot.start}–${slot.end}`,
     truckPlate: slot.truckId ? state.entities.trucks.byId[slot.truckId]?.plate ?? null : null,
     isNew: Boolean(slot.isNew),
-    // The first DO into a closed NIGHT is the request for a night delivery.
-    startsNight: !isCappedWindow(windowId) && windowCount === 0,
     expected: expectedInfo(order, slot.dateKey),
     verdict: selectDropVerdict(state, orderId, slotId, c),
   };
@@ -618,8 +613,7 @@ const PANEL_SUGGESTIONS = 2;
 
 /**
  * Droppable AM/PM cells per day from today across the loaded week: every
- * crewed, available lorry, real slots and would-be ones. NIGHT is on request,
- * so it is never suggested.
+ * crewed, available lorry, real slots and would-be ones.
  */
 function candidateCellsByDay(state, c) {
   const today = todayLocalDateKey();

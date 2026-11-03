@@ -1,22 +1,20 @@
 // Slot time windows — the single source of truth for AM / PM / NIGHT.
 //
 // There is no slot-type column in the database: a time_slot is just
-// (date, time_window_start, time_window_end) as strings. Three places in the
-// codebase disagree about what those strings are:
-//
-//   server/services/scheduler.js:310   08:00-12:00 / 13:00-19:00 / 19:00-21:00  (generated)
-//   docs/Final_Scheduler_Design_Proposal.md   10:00-13:00 / 14:00-17:00 / 18:00-21:00
-//   server/seedDemo.js                 09:00-13:00 / 14:00-18:00
-//
-// So classification MUST be threshold-based, not equality-based. The previous
-// implementation in utils/driverOrderFilters.js matched against fixed windows
-// starting at 09:00 and returned 'other' for anything outside — which meant
-// every 08:00 slot the scheduler generates was mis-bucketed.
+// (date, time_window_start, time_window_end) as strings. The windows below match
+// server/services/scheduler.js (SLOT_WINDOW_TEMPLATES) and the Odoo appointment
+// sessions in server/services/odooAppointmentSessions.js (morning / afternoon /
+// evening). Older rows in the database may still carry the retired windows
+// (08:00-12:00 / 13:00-19:00 / 19:00-21:00), and other seeds use their own
+// (and appointment times vary), so classification MUST be
+// threshold-based, not equality-based. The previous implementation in
+// utils/driverOrderFilters.js once matched against fixed windows and returned
+// 'other' for anything outside.
 
 export const SLOT_WINDOWS = [
-  { id: 'am',    label: 'AM',    longLabel: 'Morning',   start: '08:00', end: '12:00' },
-  { id: 'pm',    label: 'PM',    longLabel: 'Afternoon', start: '13:00', end: '19:00' },
-  { id: 'night', label: 'NIGHT', longLabel: 'Night',     start: '19:00', end: '21:00' },
+  { id: 'am',    label: 'AM',    longLabel: 'Morning',   start: '10:00', end: '13:00' },
+  { id: 'pm',    label: 'PM',    longLabel: 'Afternoon', start: '14:00', end: '17:00' },
+  { id: 'night', label: 'NIGHT', longLabel: 'Evening',   start: '17:00', end: '19:00' },
 ];
 
 export const SLOT_WINDOW_IDS = SLOT_WINDOWS.map(w => w.id);
@@ -46,8 +44,8 @@ export function minutesToClock(minutes) {
 //
 // The rule is "the latest window that has already started": a slot starting
 // before PM's start is AM, before NIGHT's start is PM, otherwise NIGHT. Note
-// the windows do not tile the day — there is a gap between AM's end (12:00)
-// and PM's start (13:00) — so a slot starting at 12:30 classifies as AM. That
+// the windows do not tile the day — there is a gap between AM's end (13:00)
+// and PM's start (14:00) — so a slot starting at 13:30 classifies as AM. That
 // is deliberate and harmless here (no real slot starts in the gap), but it is
 // why the boundary is PM_START and not AM's end.
 const PM_START = clockToMinutes(SLOT_WINDOWS[1].start);

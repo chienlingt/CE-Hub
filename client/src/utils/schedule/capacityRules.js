@@ -156,10 +156,11 @@ export function evaluateSlotCapacity({
 }
 
 /**
- * NIGHT runs only when the warehouse admin starts it, and has no DO cap: each
- * night DO adds one to the day's capacity. AM and PM share the configured cap.
+ * Every window (the 17:00-19:00 evening session included) is a regular bookable
+ * session and shares the configured DO cap. Kept as a function so callers that
+ * ask "is this window capped?" keep working.
  */
-export const isCappedWindow = (windowId) => windowId !== 'night';
+export const isCappedWindow = () => true;
 
 /**
  * The DO cap for one date + window, summed across ALL lorries in it. TBM's
@@ -168,7 +169,7 @@ export const isCappedWindow = (windowId) => windowId !== 'night';
  *
  * @param {object}   input
  * @param {object[]} input.orders   every order in the window, across lanes
- * @param {string}   [input.windowId]  'night' is uncapped
+ * @param {string}   [input.windowId]  unused: every window is capped
  * @returns {{doCount, doCap, doPct, full: boolean, over: boolean, capped: boolean}}
  */
 export function evaluateWindowDoCap({ orders = [], config = {}, windowId = null }) {

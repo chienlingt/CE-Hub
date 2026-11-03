@@ -131,8 +131,8 @@ export const DEFAULT_SCENARIO = 'normal';
 
 const REJECT_REASONS = ['Customer rescheduled', 'Building access not confirmed', 'Items not ready in the warehouse'];
 
-// AM and PM carry the day. NIGHT runs only when the warehouse admin starts it,
-// so the generator opens it on one sample day only.
+// AM and PM carry the day. The 17:00-19:00 evening session is light, so the
+// generator fills it on one sample day only.
 const WINDOW_WEIGHTS = { am: 0.5, pm: 0.5 };
 const NIGHT_SAMPLE_DOS = 3;
 
@@ -168,7 +168,7 @@ function buildMockRaw({ scenario = DEFAULT_SCENARIO, anchorDateKey } = {}) {
 
   const todayKey = todayLocalDateKey();
   const teamByTruck = Object.fromEntries(TEAMS.filter(t => t.truck_id).map(t => [t.truck_id, t]));
-  // Tonight if today is in the week (so the default screen shows it), else Wednesday.
+  // Evening sample: today if it is in the week (so the default screen shows it), else Wednesday.
   const nightDay = dateKeys.includes(todayKey) ? todayKey : dateKeys[2];
 
   dateKeys.forEach((dateKey, dayIndex) => {

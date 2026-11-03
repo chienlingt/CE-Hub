@@ -11,16 +11,9 @@ const capPct = (total) => (total.full && !total.over ? 1.0001 : total.doCount / 
 
 /**
  * What a header says about its window across ALL lorries — the line a
- * salesperson reads to see if there is room. NIGHT is on request, uncapped.
+ * salesperson reads to see if there is room.
  */
 function WindowAvailability({ total, open }) {
-  if (!total.capped) {
-    return (
-      <span className="block text-[11px] font-normal text-gray-500">
-        {open ? `${total.doCount} DO${total.doCount === 1 ? '' : 's'} · no cap` : 'on request — drop a DO to start'}
-      </span>
-    );
-  }
   const left = Math.max(0, total.doCap - total.doCount);
   return (
     <span className="mt-0.5 block font-normal">

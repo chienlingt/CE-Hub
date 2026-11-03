@@ -5,10 +5,9 @@
 // items — CE Hub has no item master data — so every answer is approximate and
 // the UI says so.
 //
-// Candidates are every lorry x AM/PM window x date in the horizon. A lorry with
+// Candidates are every lorry x window x date in the horizon. A lorry with
 // no slot yet in a window is still a candidate (the engine only creates a slot
-// once the lorry carries a DO). NIGHT is never recommended: it runs only when
-// the warehouse admin requests it.
+// once the lorry carries a DO).
 
 import { evaluateSlotCapacity, evaluateWindowDoCap, orderVolumeCm3, truckVolumeCm3 } from './capacityRules';
 import { evaluateAccessWindow, projectStopTimes } from './accessWindowRules';
@@ -26,7 +25,7 @@ export const RECOMMEND_MAX_OPTIONS = 3;
 /** Used when installation is ticked: there are no items to estimate from. */
 export const DEFAULT_INSTALL_MINUTES = 90;
 
-const RECOMMENDED_WINDOWS = SLOT_WINDOWS.filter(w => w.id === 'am' || w.id === 'pm');
+const RECOMMENDED_WINDOWS = SLOT_WINDOWS;
 const PROBE_ID = '__recommend__';
 
 /** Match a typed address to a building by postal code, then by name. */

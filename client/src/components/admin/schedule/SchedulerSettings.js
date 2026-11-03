@@ -165,7 +165,7 @@ function SettingsInner() {
           >
             <BufferField
               label="Maximum DOs per slot"
-              hint="Shared by every lorry in the AM and in the PM window, so a day holds twice this. NIGHT runs only when the warehouse admin starts it and has no cap — each night DO adds one."
+              hint="Shared by every lorry in a window (morning, afternoon and evening), so a day holds three times this."
               value={working.maxDOsPerSlot}
               onChange={v => patch('maxDOsPerSlot', v)}
               min={1}

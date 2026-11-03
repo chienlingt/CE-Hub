@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, Moon } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import Modal from '../../../common/Modal';
 import Button from '../../../common/Button';
 import { longDateLabel } from '../../../../utils/schedule/weekRange';
@@ -38,14 +38,8 @@ export default function DropConfirm({ order, target, busy, onCancel, onPlace }) 
         </p>
       )}
 
-      {(target.startsNight || expected.dateMismatch || warnings.length > 0) && (
+      {(expected.dateMismatch || warnings.length > 0) && (
         <ul className="mt-3 space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
-          {target.startsNight && (
-            <li className="flex gap-1.5">
-              <Moon className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-              This starts a night delivery for {longDateLabel(target.dateKey)}.
-            </li>
-          )}
           {expected.dateMismatch && (
             <li className="flex gap-1.5">
               <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
