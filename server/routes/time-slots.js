@@ -10,6 +10,27 @@ const {
   enqueueSlotEndTripSideEffects,
   enqueueOnTheWayNotifications,
 } = require('../services/integrationOutboxService');
+const { verifySecret } = require('../middleware/odooWebhookAuth');
+const { MAX_DAYS, parseDays, getAvailability } = require('../services/availabilityService');
+
+// ── GET /api/time-slots/availability  (INT-01) ─────────────────────────────
+// Dates and sessions Odoo may show the salesperson. Requires x-odoo-secret.
+// Must be declared BEFORE /:id routes to avoid being matched as an id.
+//
+// Query params:
+//   ?days=N — dates after the first bookable date (default 30, max 90, else 400)
+router.get('/availability', verifySecret, async (req, res) => {
+  const days = parseDays(req.query.days);
+  if (days === null) {
+    return res.status(400).json({ error: `days must be a whole number from 1 to ${MAX_DAYS}` });
+  }
+  try {
+    res.json(await getAvailability({ days }));
+  } catch (err) {
+    console.error('GET /api/time-slots/availability error', err);
+    res.status(500).json({ error: 'Failed to load availability' });
+  }
+});
 
 // ── GET /api/time-slots/active  (A.3.7) ────────────────────────────────────
 // Returns all slots currently out_for_delivery with order count summary.

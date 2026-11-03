@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { syncOrderPreparation } = require('../services/odooOrderIngestService');
 const { requestAppointment, requestAppointmentChange, requestOrderCancellation } = require('../services/odooAppointmentService');
+const { verifySecret } = require('../middleware/odooWebhookAuth');
 
 const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET;
 const { recordWebhook } = require('../services/odooSyncRunService');
@@ -19,14 +20,6 @@ router.use((req, res, next) => {
 // Import/update/readiness payloads require order_line_model: 'stock.move'.
 // Each order_lines[].order_line_id is a stock.move.id from this DO, not an SO
 // line or individual stock.move.line serial record. Cancellation has no lines.
-
-function verifySecret(req, res, next) {
-  const provided = req.headers['x-odoo-secret'];
-  if (!WEBHOOK_SECRET || provided !== WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
-}
 
 router.post('/odoo/order-readiness', verifySecret, async (req, res) => {
   try {
