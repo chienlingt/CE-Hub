@@ -4,10 +4,10 @@ import { ArrowRight, TrendingDown, TrendingUp, Minus } from 'lucide-react';
 /**
  * What a config change actually does, computed live.
  *
- * This is what makes the grace-period control more than a number box: set it
- * from 15 to 30 and the access-window conflict count visibly drops. Honest
- * because validation is pure and client-side, so the preview runs the same
- * rules the board does.
+ * Raise the grace period and "slots running past their window" drops; lower
+ * the DO cap and "slots over capacity" rises. Building access windows are hard
+ * and grace does not change them. Nothing existing is moved by a save: this
+ * preview is how an admin sees which upcoming slots now break a stricter rule.
  */
 export default function ConfigImpactPreview({ before, after }) {
   if (!before || !after) return null;

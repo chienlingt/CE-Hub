@@ -3,9 +3,9 @@
 // Two sources of unavailability:
 //   1. trucks.off_day — a free-text weekday name that exists in the schema today
 //      (e.g. "Sunday"), applying every week.
-//   2. Admin overrides — Mr Lee asked (Meeting §4) to adjust lorry availability
-//      himself. There is no table for this yet, so config.fleetOverrides carries
-//      date-ranged blocks with a reason; the Phase-3 migration gives it a home.
+//   2. Block-offs — dated leave/MC/event/maintenance for a truck or team, set by
+//      the logistics admin (Meeting §4) and stored in resource_blockoffs
+//      (GET /api/scheduler/blockoffs). The gateway puts them on config.blockoffs.
 
 import { parseDateKey } from './weekRange';
 
@@ -23,15 +23,19 @@ export function truckOffDayMatches(truck, dateKey) {
   return raw.includes(weekday) || raw.includes(weekday.slice(0, 3));
 }
 
-/** Date-ranged admin override covering this date, if any. */
-export function fleetOverrideFor(truckId, dateKey, fleetOverrides = {}) {
-  const blocks = fleetOverrides?.[truckId];
-  if (!Array.isArray(blocks)) return null;
-  return blocks.find(b => {
-    const from = b?.from ?? '0000-00-00';
-    const to = b?.to ?? '9999-12-31';
-    return dateKey >= from && dateKey <= to;   // yyyy-mm-dd compares lexically
-  }) ?? null;
+const REASON_LABELS = { leave: 'Leave', mc: 'MC', event: 'Event', maintenance: 'Maintenance', other: 'Blocked' };
+
+/** Block-off covering this resource on this date, if any. */
+export function blockoffFor(resourceType, resourceId, dateKey, blockoffs = []) {
+  if (!Array.isArray(blockoffs)) return null;
+  return blockoffs.find(b => b?.resourceType === resourceType
+    && b?.resourceId === resourceId
+    && dateKey >= b.startDate && dateKey <= b.endDate) ?? null;   // yyyy-mm-dd compares lexically
+}
+
+function blockoffReason(b) {
+  const label = REASON_LABELS[b.reason] ?? 'Blocked';
+  return b.note ? `${label}: ${b.note}` : label;
 }
 
 /**
@@ -40,10 +44,8 @@ export function fleetOverrideFor(truckId, dateKey, fleetOverrides = {}) {
 export function truckAvailableOn(truck, dateKey, config = {}) {
   if (!truck) return { available: true, reason: null };
 
-  const override = fleetOverrideFor(truck.id, dateKey, config.fleetOverrides);
-  if (override) {
-    return { available: false, reason: override.reason || 'Blocked by admin' };
-  }
+  const blocked = blockoffFor('truck', truck.id, dateKey, config.blockoffs);
+  if (blocked) return { available: false, reason: blockoffReason(blocked) };
   if (truckOffDayMatches(truck, dateKey)) {
     return { available: false, reason: `Off day (${truck.offDay})` };
   }
@@ -51,17 +53,14 @@ export function truckAvailableOn(truck, dateKey, config = {}) {
 }
 
 /**
- * Teams only carry a boolean `available_flag` in the schema — there is no
- * per-date crew roster, so MC/leave cannot be modelled yet.
+ * Dated MC/leave comes from block-offs; `available_flag` is the standing switch.
  * @returns {{available: boolean, reason: string|null}}
  */
 export function teamAvailableOn(team, dateKey, config = {}) {
   if (!team) return { available: true, reason: null };
 
-  const override = fleetOverrideFor(team.id, dateKey, config.teamOverrides);
-  if (override) {
-    return { available: false, reason: override.reason || 'Blocked by admin' };
-  }
+  const blocked = blockoffFor('team', team.id, dateKey, config.blockoffs);
+  if (blocked) return { available: false, reason: blockoffReason(blocked) };
   if (team.availableFlag === false) {
     return { available: false, reason: 'Marked unavailable' };
   }

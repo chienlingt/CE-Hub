@@ -199,8 +199,12 @@ async function truncateAll() {
 
 // ── Static descriptors ──────────────────────────────────────────────────────
 
-// Mr Lee's fleet, §4. Plates WXX 1234 / WYY 5678 are kept from seedDemo.js so
-// the two lorries everyone already recognises from the other demos stay put.
+// Mr Lee's fleet (Meeting 13-10-2026 §4): 8 x 3-ton and 13 x 1-ton. Plates
+// WXX 1234 / WYY 5678 are kept from seedDemo.js so the two lorries everyone
+// already recognises from the other demos stay put.
+//
+// ORDER MATTERS: the first ten carry Teams A-J (trucks[i] below) and the peak-day
+// roster takes the first two of each size, so new lorries are appended after them.
 const FLEET = [
   { plate: 'WXX 1234', tone: 3 },
   { plate: 'WKL 3201', tone: 3 },
@@ -212,6 +216,19 @@ const FLEET = [
   { plate: 'WPB 1404', tone: 1 },
   { plate: 'WPC 1707', tone: 1 },
   { plate: 'WPD 2010', tone: 1, off_day: 'Thursday' },
+  // Remaining 3-ton (8 total)
+  { plate: 'WKM 3403', tone: 3 },
+  { plate: 'WKM 3504', tone: 3 },
+  { plate: 'WKN 3605', tone: 3 },
+  { plate: 'WKN 3706', tone: 3 },
+  // Remaining 1-ton (13 total)
+  { plate: 'WPE 2111', tone: 1 },
+  { plate: 'WPE 2212', tone: 1 },
+  { plate: 'WPF 2313', tone: 1 },
+  { plate: 'WPF 2414', tone: 1 },
+  { plate: 'WPG 2515', tone: 1 },
+  { plate: 'WPG 2616', tone: 1 },
+  { plate: 'WPH 2717', tone: 1 },
 ];
 // Both off-days are mid-week on purpose: the grid skips Sat/Sun entirely, so an
 // off_day of 'Sunday' would never render the "— off —" cell it exists to show.

@@ -83,7 +83,11 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
     let mounted = true;
     gateway.loadConfig()
       .then(config => { if (mounted) dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config }); })
-      .catch(() => { /* defaults already in the reducer */ });
+      .catch((err) => {
+        // Defaults stay in the reducer for the board's rules, but the Settings
+        // screen must not present them as stored values.
+        if (mounted) dispatch({ type: ACTIONS.PATCH_CONFIG, payload: { configScope: 'error', configError: err?.message ?? String(err) } });
+      });
     return () => { mounted = false; };
   }, [gateway]);
 
@@ -114,14 +118,33 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
       }
     },
 
+    /**
+     * Saves a partial config. Not optimistic: the server validates, so the
+     * screen shows what was actually stored. Rejects with `fieldErrors` so the
+     * form can show them; resolves to the saved config (with `saveWarnings`).
+     */
     patchConfig: async (patch) => {
-      // Optimistic: the settings forms must feel immediate, and the impact
-      // preview recomputes from the same state.
-      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: patch });
-      try {
-        const saved = await gateway.saveConfig(patch);
-        dispatch({ type: ACTIONS.PATCH_CONFIG, payload: saved });
-      } catch { /* keep the optimistic value */ }
+      const saved = await gateway.saveConfig(patch);
+      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: saved });
+      return saved;
+    },
+
+    reloadConfig: async () => {
+      const config = await gateway.loadConfig();
+      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
+      return config;
+    },
+
+    addBlockoff: async (blockoff) => {
+      await gateway.addBlockoff(blockoff);
+      const config = await gateway.loadConfig();
+      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
+    },
+
+    removeBlockoff: async (id) => {
+      await gateway.removeBlockoff(id);
+      const config = await gateway.loadConfig();
+      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
     },
 
     runAutoSchedule: async () => {

@@ -1,39 +1,39 @@
 // server/schedulerCron.js
 const cron = require('node-cron');
-const prisma = require('./prismaClient');
-const { scheduleOrders, loadConfiguration } = require('./services/scheduler');
+const { scheduleOrders } = require('./services/scheduler');
+const { getSchedulerSettings } = require('./services/schedulerSettings');
 
 let cronJob = null;
 
 /**
- * Initialize the cron job on server startup
+ * (Re)start the cron job from the stored settings. The schedule is derived from
+ * planning_cutoff + planning_run_offset_minutes (default 17:00 + 60 = 18:00 KL),
+ * so it runs after the Odoo INT-12 5 PM fallback sync. Safe to call repeatedly:
+ * any existing job is stopped first, so disabling really stops it.
  */
 async function initializeSchedulerCron() {
   try {
     console.log('\n🕐 Initializing scheduler cron job...');
 
-    const config = await loadConfiguration();
+    if (cronJob) {
+      cronJob.stop();
+      cronJob = null;
+      console.log('🛑 Stopped existing cron job');
+    }
 
-    if (!config.enabled) {
+    const settings = await getSchedulerSettings();
+
+    if (!settings.enabled) {
       console.log('⏸️  Scheduler is disabled in configuration. Cron job will not run.');
       return;
     }
 
-    const cronExpression = config.cron_expression || '0 0 * * *'; // Default: daily at midnight
-
-    // Validate cron expression
+    const cronExpression = settings.cron_expression;
     if (!cron.validate(cronExpression)) {
       console.error(`❌ Invalid cron expression: ${cronExpression}`);
       return;
     }
 
-    // Stop existing job if any
-    if (cronJob) {
-      cronJob.stop();
-      console.log('🛑 Stopped existing cron job');
-    }
-
-    // Create new cron job
     cronJob = cron.schedule(cronExpression, async () => {
       console.log(`\n⏰ Cron job triggered at ${new Date().toISOString()}`);
 
@@ -48,38 +48,17 @@ async function initializeSchedulerCron() {
       timezone: 'Asia/Kuala_Lumpur' // Malaysia timezone
     });
 
-    console.log(`✅ Scheduler cron job initialized with expression: ${cronExpression}`);
-    console.log(`   (Timezone: Asia/Kuala_Lumpur)`);
-    console.log(`   Example: "0 0 * * *" = Daily at 12:00 AM`);
-    console.log(`   Example: "0 0 */2 * *" = Every 2 days at 12:00 AM`);
-    console.log(`   Current time: ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' })}`);
-
+    console.log(`✅ Scheduler cron job initialized: daily at ${settings.planning_run_at} (${cronExpression}, Asia/Kuala_Lumpur)`);
   } catch (error) {
     console.error('❌ Failed to initialize scheduler cron job:', error);
   }
 }
 
 /**
- * Update cron job with new schedule
- * @param {string} cronExpression - New cron expression
+ * Restart the cron job after a settings change (cutoff, run offset or enabled).
  */
-async function updateSchedulerCron(cronExpression) {
-  try {
-    console.log(`\n🔄 Updating cron job with new expression: ${cronExpression}`);
-
-    // Validate cron expression
-    if (!cron.validate(cronExpression)) {
-      throw new Error(`Invalid cron expression: ${cronExpression}`);
-    }
-
-    // Reinitialize cron job
-    await initializeSchedulerCron();
-
-    console.log('✅ Cron job updated successfully');
-  } catch (error) {
-    console.error('❌ Failed to update cron job:', error);
-    throw error;
-  }
+async function updateSchedulerCron() {
+  await initializeSchedulerCron();
 }
 
 /**

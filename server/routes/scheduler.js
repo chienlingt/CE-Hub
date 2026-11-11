@@ -2,7 +2,15 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
-const { scheduleOrders, loadConfiguration } = require('../services/scheduler');
+const { scheduleOrders } = require('../services/scheduler');
+const { getSchedulerSettings, getSettingsView, updateSchedulerSettings, SettingsValidationError } = require('../services/schedulerSettings');
+const { validateBlockoff } = require('../services/schedulerSettingsSpec');
+const { geocodeAddress } = require('../services/googleRoutingService');
+const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
+const { updateSchedulerCron } = require('../schedulerCron');
+
+const dateKey = d => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
+const blockoffToApi = row => ({ ...row, start_date: dateKey(row.start_date), end_date: dateKey(row.end_date) });
 
 /**
  * POST /api/scheduler/run
@@ -42,25 +50,13 @@ router.post('/run', async (req, res) => {
 
 /**
  * GET /api/scheduler/config
- * Get scheduler configuration
+ * Every B.1 setting, plus the read-only delivery windows, the valid ranges
+ * (so the client does not hardcode them) and the live fleet count by tonnage.
  */
 router.get('/config', async (req, res) => {
   try {
-    const config = await loadConfiguration();
-
-    res.json({
-      success: true,
-      config: {
-        id: config.id,
-        warehouse_address: config.warehouse_address,
-        warehouse_postal: config.warehouse_postal,
-        cron_expression: config.cron_expression,
-        enabled: config.enabled,
-        last_run_at: config.last_run_at,
-        created_at: config.created_at,
-        updated_at: config.updated_at
-      }
-    });
+    const view = await getSettingsView();
+    res.json({ success: true, ...view });
   } catch (error) {
     console.error('GET /api/scheduler/config error', error);
     res.status(500).json({
@@ -73,60 +69,21 @@ router.get('/config', async (req, res) => {
 
 /**
  * PUT /api/scheduler/config
- * Update scheduler configuration
+ * Partial update. Admin session required. 400 carries per-field `errors`.
+ * Changes apply to the next run and new bookings; nothing existing is moved.
  */
-router.put('/config', async (req, res) => {
+router.put('/config', requireReviewAdmin, async (req, res) => {
   try {
-    const { warehouse_address, warehouse_postal, cron_expression, enabled } = req.body;
-
-    // Find existing config
-    let config = await prisma.scheduler_config.findFirst();
-
-    if (!config) {
-      // Create new config if none exists
-      config = await prisma.scheduler_config.create({
-        data: {
-          warehouse_address: warehouse_address || 'University of Malaya, Kuala Lumpur',
-          warehouse_postal: warehouse_postal || '50603',
-          cron_expression: cron_expression || '0 0 * * *',
-          enabled: enabled !== undefined ? enabled : true,
-          created_at: new Date(),
-          updated_at: new Date()
-        }
-      });
-    } else {
-      // Update existing config
-      const updateData = { updated_at: new Date() };
-
-      if (warehouse_address !== undefined) updateData.warehouse_address = warehouse_address;
-      if (warehouse_postal !== undefined) updateData.warehouse_postal = warehouse_postal;
-      if (cron_expression !== undefined) updateData.cron_expression = cron_expression;
-      if (enabled !== undefined) updateData.enabled = enabled;
-
-      config = await prisma.scheduler_config.update({
-        where: { id: config.id },
-        data: updateData
-      });
-    }
-
-    // TODO: Restart cron job with new schedule if cron_expression changed
-    console.log('✅ Scheduler configuration updated:', config);
-
-    res.json({
-      success: true,
-      config: {
-        id: config.id,
-        warehouse_address: config.warehouse_address,
-        warehouse_postal: config.warehouse_postal,
-        cron_expression: config.cron_expression,
-        enabled: config.enabled,
-        last_run_at: config.last_run_at,
-        created_at: config.created_at,
-        updated_at: config.updated_at
-      },
-      message: 'Scheduler configuration updated successfully'
+    const { config, warnings } = await updateSchedulerSettings(req.body ?? {}, {
+      employeeId: req.reviewAdmin?.id,
+      geocode: geocodeAddress,
+      onScheduleChange: () => updateSchedulerCron(),
     });
+    res.json({ success: true, config, warnings, message: 'Scheduler configuration updated successfully' });
   } catch (error) {
+    if (error instanceof SettingsValidationError) {
+      return res.status(400).json({ success: false, error: 'Invalid scheduler settings', code: 'INVALID_SETTINGS', errors: error.errors });
+    }
     console.error('PUT /api/scheduler/config error', error);
     res.status(500).json({
       success: false,
@@ -137,34 +94,86 @@ router.put('/config', async (req, res) => {
 });
 
 /**
+ * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=truck|team
+ * Truck/team unavailability overlapping the range (all when no range given).
+ */
+router.get('/blockoffs', async (req, res) => {
+  try {
+    const { from, to, resource_type } = req.query;
+    const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
+    const where = {};
+    if (resource_type) where.resource_type = String(resource_type);
+    if (isDate(to)) where.start_date = { lte: new Date(`${to}T00:00:00Z`) };
+    if (isDate(from)) where.end_date = { gte: new Date(`${from}T00:00:00Z`) };
+    const rows = await prisma.resource_blockoffs.findMany({ where, orderBy: [{ start_date: 'asc' }] });
+    res.json({ success: true, blockoffs: rows.map(blockoffToApi) });
+  } catch (error) {
+    console.error('GET /api/scheduler/blockoffs error', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch block-offs', details: error.message });
+  }
+});
+
+/**
+ * POST /api/scheduler/blockoffs
+ * Admin session required. The truck or team must exist.
+ */
+router.post('/blockoffs', requireReviewAdmin, async (req, res) => {
+  try {
+    const { value, errors } = validateBlockoff(req.body ?? {});
+    if (Object.keys(errors).length) {
+      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF', errors });
+    }
+    const model = value.resource_type === 'truck' ? prisma.trucks : prisma.teams;
+    const exists = await model.findUnique({ where: { id: value.resource_id }, select: { id: true } });
+    if (!exists) {
+      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF',
+        errors: { resource_id: `no ${value.resource_type} with this id` } });
+    }
+    const row = await prisma.resource_blockoffs.create({
+      data: {
+        ...value,
+        start_date: new Date(`${value.start_date}T00:00:00Z`),
+        end_date: new Date(`${value.end_date}T00:00:00Z`),
+        created_by: req.reviewAdmin?.id ?? null,
+      },
+    });
+    res.status(201).json({ success: true, blockoff: blockoffToApi(row) });
+  } catch (error) {
+    console.error('POST /api/scheduler/blockoffs error', error);
+    res.status(500).json({ success: false, error: 'Failed to create block-off', details: error.message });
+  }
+});
+
+/**
+ * DELETE /api/scheduler/blockoffs/:id
+ * Admin session required.
+ */
+router.delete('/blockoffs/:id', requireReviewAdmin, async (req, res) => {
+  try {
+    const { count } = await prisma.resource_blockoffs.deleteMany({ where: { id: req.params.id } });
+    if (!count) return res.status(404).json({ success: false, error: 'Block-off not found' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('DELETE /api/scheduler/blockoffs error', error);
+    res.status(500).json({ success: false, error: 'Failed to delete block-off', details: error.message });
+  }
+});
+
+/**
  * GET /api/scheduler/status
  * Get scheduler status and next run time
  */
 router.get('/status', async (req, res) => {
   try {
-    const config = await prisma.scheduler_config.findFirst();
-
-    if (!config) {
-      return res.json({
-        success: true,
-        status: {
-          enabled: false,
-          last_run_at: null,
-          next_run_at: null,
-          cron_expression: null
-        }
-      });
-    }
-
-    // TODO: Calculate next run time from cron expression
-    const nextRunAt = null; // Placeholder
+    const config = await getSchedulerSettings();
 
     res.json({
       success: true,
       status: {
         enabled: config.enabled,
         last_run_at: config.last_run_at,
-        next_run_at: nextRunAt,
+        next_run_at: null, // TODO: compute from cron_expression
+        planning_run_at: config.planning_run_at,
         cron_expression: config.cron_expression
       }
     });

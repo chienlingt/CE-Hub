@@ -11,7 +11,6 @@ import {
   CheckCircle,
   AlertCircle,
   Settings,
-  Save,
   Users,
   Warehouse,
   ChevronDown,
@@ -32,14 +31,9 @@ export default function AutoScheduleReview() {
 
   // Configuration state
   const [showConfig, setShowConfig] = useState(false);
-  const [config, setConfig] = useState({
-    warehouse_address: 'University of Malaya, Kuala Lumpur',
-    warehouse_postal: '50603',
-    cron_expression: '0 0 * * *',
-    enabled: true
-  });
+  // Read-only summary; scheduler settings are edited only in Schedule → Settings.
+  const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(false);
-  const [configSaving, setConfigSaving] = useState(false);
 
   // Load configuration on mount
   useEffect(() => {
@@ -57,38 +51,15 @@ export default function AutoScheduleReview() {
         setConfig({
           warehouse_address: data.config.warehouse_address || '',
           warehouse_postal: data.config.warehouse_postal || '',
-          cron_expression: data.config.cron_expression || '0 0 * * *',
-          enabled: data.config.enabled !== undefined ? data.config.enabled : true
+          planning_cutoff: data.config.planning_cutoff || null,
+          planning_run_at: data.config.planning_run_at || null,
+          enabled: Boolean(data.config.enabled)
         });
       }
     } catch (error) {
       console.error('Error loading configuration:', error);
     } finally {
       setConfigLoading(false);
-    }
-  };
-
-  const saveConfiguration = async () => {
-    try {
-      setConfigSaving(true);
-      const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        alert('Configuration saved successfully! The cron schedule has been updated.');
-      } else {
-        alert(`Failed to save configuration: ${data.error}`);
-      }
-    } catch (error) {
-      console.error('Error saving configuration:', error);
-      alert('Failed to save configuration. Please try again.');
-    } finally {
-      setConfigSaving(false);
     }
   };
 
@@ -204,79 +175,27 @@ export default function AutoScheduleReview() {
                 <RefreshCw className="animate-spin h-8 w-8 text-blue-600 mx-auto mb-2" />
                 <p className="text-gray-600">Loading configuration...</p>
               </div>
+            ) : !config ? (
+              <p className="text-sm text-gray-600">Could not load the scheduler configuration.</p>
             ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Warehouse Address
-                  </label>
-                  <input
-                    type="text"
-                    value={config.warehouse_address}
-                    onChange={(e) => setConfig({ ...config, warehouse_address: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="e.g., University of Malaya, Kuala Lumpur"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Warehouse Postal Code
-                  </label>
-                  <input
-                    type="text"
-                    value={config.warehouse_postal}
-                    onChange={(e) => setConfig({ ...config, warehouse_postal: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="e.g., 50603"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Cron Schedule Expression
-                  </label>
-                  <input
-                    type="text"
-                    value={config.cron_expression}
-                    onChange={(e) => setConfig({ ...config, cron_expression: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-                    placeholder="0 0 * * *"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Examples: "0 0 * * *" (daily at midnight), "0 0 */2 * *" (every 2 days at midnight)
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="enabled"
-                    checked={config.enabled}
-                    onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-                  />
-                  <label htmlFor="enabled" className="text-sm font-medium text-gray-700">
-                    Enable automatic scheduling
-                  </label>
-                </div>
-
+              <div className="space-y-3 text-sm text-gray-700">
+                <p>
+                  <span className="font-medium">Warehouse:</span> {config.warehouse_address || '—'}
+                  {config.warehouse_postal ? ` (${config.warehouse_postal})` : ''}
+                </p>
+                <p>
+                  <span className="font-medium">Automatic run:</span>{' '}
+                  {config.enabled
+                    ? `daily at ${config.planning_run_at ?? '—'} (cutoff ${config.planning_cutoff ?? '—'}, Kuala Lumpur)`
+                    : 'off'}
+                </p>
                 <button
-                  onClick={saveConfiguration}
-                  disabled={configSaving}
-                  className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  type="button"
+                  onClick={() => navigate('/schedule/settings')}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
-                  {configSaving ? (
-                    <>
-                      <RefreshCw size={16} className="animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save size={16} />
-                      Save Configuration
-                    </>
-                  )}
+                  <Settings size={16} />
+                  Edit in Schedule settings
                 </button>
               </div>
             )}

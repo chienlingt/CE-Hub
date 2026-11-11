@@ -14,6 +14,7 @@ import { orderServiceMinutes, DEFAULT_DURATION_CONFIG } from './serviceDuration'
 import { slotDurationMinutes } from './slotWindows';
 import { ISSUE, makeIssue } from './issueCodes';
 import { isActiveStatus } from './orderStatus';
+import { DEFAULT_SCHEDULE_CONFIG, graceMinutesOf } from './gracePeriod';
 
 /** Load space of a lorry in cm³, or null when its dimensions are incomplete. */
 export function truckVolumeCm3(truck) {
@@ -80,7 +81,7 @@ export function evaluateSlotCapacity({
   productsById = {},
   config = {},
 }) {
-  const doCap = Number.isFinite(config.maxDOsPerSlot) ? config.maxDOsPerSlot : 25;
+  const doCap = Number.isFinite(config.maxDOsPerSlot) ? config.maxDOsPerSlot : DEFAULT_SCHEDULE_CONFIG.maxDOsPerSlot;
   const durationConfig = { ...DEFAULT_DURATION_CONFIG, ...(config.duration ?? {}) };
 
   // Cancelled work neither occupies the lorry nor consumes the crew's day.
@@ -133,10 +134,14 @@ export function evaluateSlotCapacity({
       detail: `${weightKg.toFixed(1)} kg against a ${weightCapKg} kg payload.`,
     }));
   }
-  if (timePct !== null && timePct > 1) {
+  // Grace is ETA tolerance: the work may run up to graceMinutes past the usable
+  // window before the trip is judged not to fit (proposal §2, decision 5b).
+  const graceMinutes = graceMinutesOf(config);
+  if (slotMinutes !== null && serviceMinutes > slotMinutes + graceMinutes) {
     over.push('time');
     issues.push(makeIssue(ISSUE.SERVICE_TIME_OVERFLOW, {
-      detail: `${Math.round(serviceMinutes)} min of work in a ${slotMinutes} min window.`,
+      detail: `${Math.round(serviceMinutes)} min of work in a ${slotMinutes} min window`
+        + (graceMinutes ? ` (+${graceMinutes} min grace).` : '.'),
     }));
   }
   if (!truck && counted.length > 0) {
@@ -150,7 +155,7 @@ export function evaluateSlotCapacity({
     doCount: counted.length, doCap, doPct,
     volumeCm3, volumeCapCm3, volumePct,
     weightKg, weightCapKg, weightPct, weightKnown,
-    serviceMinutes, slotMinutes, timePct,
+    serviceMinutes, slotMinutes, timePct, graceMinutes,
     issues, over,
   };
 }
@@ -177,7 +182,7 @@ export function evaluateWindowDoCap({ orders = [], config = {}, windowId = null 
   if (!isCappedWindow(windowId)) {
     return { doCount, doCap: null, doPct: null, full: false, over: false, capped: false };
   }
-  const doCap = Number.isFinite(config.maxDOsPerSlot) ? config.maxDOsPerSlot : 25;
+  const doCap = Number.isFinite(config.maxDOsPerSlot) ? config.maxDOsPerSlot : DEFAULT_SCHEDULE_CONFIG.maxDOsPerSlot;
   return {
     capped: true,
     doCount,

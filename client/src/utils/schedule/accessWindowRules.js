@@ -7,12 +7,15 @@
 //
 // Arrival times are projected, not authoritative: real stop sequencing and road
 // travel times are B.2's (Chien Ling's). Until B.2 supplies them, the chain uses
-// the configurable per-leg estimate from gracePeriod.js — the same fallback the
-// engine itself uses. When a slot carries a B.2 route plan, prefer its ETAs.
+// FALLBACK_LEG_MINUTES from gracePeriod.js — the same fallback the engine itself
+// uses. When a slot carries a B.2 route plan, prefer its ETAs.
+//
+// Access windows are hard: the grace period is ETA tolerance against the SLOT
+// end (capacityRules), never a widening of a building's own hours.
 
 import { clockToMinutes, minutesToClock } from './slotWindows';
 import { orderServiceMinutes } from './serviceDuration';
-import { applyGrace, legMinutes, withDefaults } from './gracePeriod';
+import { FALLBACK_LEG_MINUTES, withDefaults } from './gracePeriod';
 import { ISSUE, makeIssue } from './issueCodes';
 
 /** The building's own access window, or nulls when unrestricted. */
@@ -55,7 +58,7 @@ export function projectStopTimes({ slot, orders = [], productsById = {}, config 
     } else {
       // No travel before the first stop's departure leg is already counted in
       // loadMinutes; every subsequent stop pays a leg plus the inter-stop buffer.
-      travel = legMinutes(cursor, cfg) + (index === 0 ? 0 : Number(cfg.bufferMinutes) || 0);
+      travel = FALLBACK_LEG_MINUTES + (index === 0 ? 0 : Number(cfg.bufferMinutes) || 0);
       arrival = cursor + travel;
     }
 
@@ -82,9 +85,11 @@ export function projectStopTimes({ slot, orders = [], productsById = {}, config 
  * @returns {{ok: boolean, issues: object[], window: object}}
  */
 export function evaluateAccessWindow({ order, building, arrivalMinutes, finishMinutes, config = {} }) {
-  const cfg = withDefaults(config);
   const issues = [];
-  const window = applyGrace(accessWindow(building), cfg);
+  const actual = accessWindow(building);
+  const start = clockToMinutes(actual.start);
+  const end = clockToMinutes(actual.end);
+  const window = { start, end, hadWindow: start !== null || end !== null };
 
   if (window.hadWindow && Number.isFinite(arrivalMinutes)) {
     const tooEarly = window.start !== null && arrivalMinutes < window.start;
@@ -94,7 +99,6 @@ export function evaluateAccessWindow({ order, building, arrivalMinutes, finishMi
     const tooLate = window.end !== null && endRef > window.end;
 
     if (tooEarly || tooLate) {
-      const actual = accessWindow(building);
       issues.push(makeIssue(ISSUE.ACCESS_WINDOW_MISS, {
         detail: tooEarly
           ? `Arrives ${minutesToClock(arrivalMinutes)}, building opens ${actual.start}`
@@ -102,7 +106,6 @@ export function evaluateAccessWindow({ order, building, arrivalMinutes, finishMi
         arrival: minutesToClock(arrivalMinutes),
         windowStart: actual.start,
         windowEnd: actual.end,
-        graceMinutes: window.graceApplied,
       }));
     }
   }

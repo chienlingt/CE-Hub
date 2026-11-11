@@ -18,19 +18,14 @@ import { API_BASE_URL } from '../../utils/apiBaseUrl';
 import { assertGateway } from './scheduleGateway';
 import { normalizeSnapshot, normalizeSlot } from '../../utils/schedule/scheduleNormalize';
 import { buildWorkingRange } from '../../utils/schedule/weekRange';
-import { DEFAULT_SCHEDULE_CONFIG } from '../../utils/schedule/gracePeriod';
+import {
+  configFromServer, patchToServer, fieldErrorsFromServer, blockoffToServer, blockoffFromServer,
+} from '../../utils/schedule/schedulerConfigMapping';
+import { todayLocalDateKey } from '../../utils/dateKey';
 
-// Tuning knobs with no server home yet. The scheduler_config migration gives
-// them columns; until then they live here. Deliberately NOT /api/settings:
-// routes/settings.js:56 does `if (!value)`, so a 0-minute grace period cannot
-// be saved there, and GET /:key 404s on a missing key.
-const LOCAL_CONFIG_KEY = 'ce.schedule.config';
-
-const LOCAL_ONLY_KEYS = [
-  'graceMinutes', 'bufferMinutes', 'loadMinutes', 'unloadMinutes',
-  'maxDOsPerSlot', 'planningCutoff', 'defaultLegMinutes',
-  'trafficMatrix', 'defaultMultiplier', 'fleetOverrides', 'teamOverrides',
-];
+// Scheduler settings live on the server (scheduler_config + resource_blockoffs).
+// This key held the old browser-only copy; it is deleted on first load.
+const LEGACY_LOCAL_CONFIG_KEY = 'ce.schedule.config';
 
 /**
  * Raw request that does NOT throw on a non-2xx, because the error BODY carries
@@ -59,23 +54,17 @@ async function rawRequest(path, options = {}) {
   }
 }
 
-function readLocalConfig() {
-  try {
-    const raw = localStorage.getItem(LOCAL_CONFIG_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+function dropLegacyLocalConfig() {
+  try { localStorage.removeItem(LEGACY_LOCAL_CONFIG_KEY); } catch { /* storage blocked */ }
 }
 
-function writeLocalConfig(patch) {
-  try {
-    const next = { ...readLocalConfig(), ...patch };
-    localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(next));
-    return next;
-  } catch {
-    return readLocalConfig();
-  }
+/** Error carrying the server's message, status and per-field errors (client names). */
+function requestError(status, data, fallback) {
+  const err = new Error(data?.error || data?.message || fallback);
+  err.status = status;
+  err.code = data?.code ?? null;
+  if (data?.errors) err.fieldErrors = fieldErrorsFromServer(data.errors);
+  return err;
 }
 
 const unwrap = (result) => (Array.isArray(result) ? result : (result?.data ?? []));
@@ -143,49 +132,41 @@ export const liveScheduleGateway = {
   },
 
   async loadConfig() {
-    const local = readLocalConfig();
-    const { ok, data } = await rawRequest('scheduler/config');
-    const server = ok && data?.config ? data.config : {};
-
-    return {
-      ...DEFAULT_SCHEDULE_CONFIG,
-      ...local,
-      warehouse: {
-        address: server.warehouse_address ?? '',
-        postal: server.warehouse_postal ?? '',
-        // The columns exist and the optimisers read them, but GET
-        // /api/scheduler/config does not return them.
-        lat: null,
-        lng: null,
-      },
-      cronExpression: server.cron_expression ?? '',
-      autoEnabled: Boolean(server.enabled),
-      lastRunAt: server.last_run_at ?? null,
-      // Partly local until the scheduler_config migration lands, and the UI
-      // says so rather than implying everything is persisted.
-      configScope: 'local',
-    };
+    dropLegacyLocalConfig();
+    const [config, blockoffs] = await Promise.all([
+      rawRequest('scheduler/config'),
+      // Past block-offs do not affect planning, so only today onwards.
+      rawRequest(`scheduler/blockoffs?from=${todayLocalDateKey()}`),
+    ]);
+    if (!config.ok) throw requestError(config.status, config.data, 'Could not load scheduler settings.');
+    if (!blockoffs.ok) console.warn('[liveScheduleGateway] block-offs failed:', blockoffs.data?.error);
+    return configFromServer(config.data, blockoffs.ok ? blockoffs.data?.blockoffs : []);
   },
 
+  /** Saves a partial patch; rejects with `fieldErrors` on a 400. */
   async saveConfig(patch = {}) {
-    const serverPatch = {};
-    if (patch.warehouse?.address !== undefined) serverPatch.warehouse_address = patch.warehouse.address;
-    if (patch.warehouse?.postal !== undefined) serverPatch.warehouse_postal = patch.warehouse.postal;
-    if (patch.cronExpression !== undefined) serverPatch.cron_expression = patch.cronExpression;
-    if (patch.autoEnabled !== undefined) serverPatch.enabled = patch.autoEnabled;
-
-    if (Object.keys(serverPatch).length) {
-      await rawRequest('scheduler/config', { method: 'PUT', body: serverPatch });
+    const body = patchToServer(patch);
+    if (Object.keys(body).length) {
+      const { ok, status, data } = await rawRequest('scheduler/config', { method: 'PUT', body });
+      if (!ok) throw requestError(status, data, 'Could not save scheduler settings.');
+      const fresh = await liveScheduleGateway.loadConfig();
+      return { ...fresh, saveWarnings: Array.isArray(data?.warnings) ? data.warnings : [] };
     }
-
-    const localPatch = {};
-    for (const key of LOCAL_ONLY_KEYS) {
-      if (patch[key] !== undefined) localPatch[key] = patch[key];
-    }
-    if (Object.keys(localPatch).length) writeLocalConfig(localPatch);
-
     // Named reference rather than `this`, so the method survives destructuring.
     return liveScheduleGateway.loadConfig();
+  },
+
+  async addBlockoff(blockoff) {
+    const { ok, status, data } = await rawRequest('scheduler/blockoffs', {
+      method: 'POST', body: blockoffToServer(blockoff),
+    });
+    if (!ok) throw requestError(status, data, 'Could not save the block-off.');
+    return blockoffFromServer(data.blockoff);
+  },
+
+  async removeBlockoff(id) {
+    const { ok, status, data } = await rawRequest(`scheduler/blockoffs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!ok) throw requestError(status, data, 'Could not remove the block-off.');
   },
 
   async commitMoves(moves = []) {

@@ -2,13 +2,12 @@ import React from 'react';
 import { FOCUS_RING } from '../../../common/tokens';
 
 /**
- * A numeric minutes input. Separate component because there are eight of them
- * and because 0 must be a valid, savable value — the server's
- * PUT /api/settings/:key currently rejects "0" via `if (!value)`, which is one
- * of the reasons this config goes to scheduler_config instead.
+ * A numeric minutes input. 0 must be a valid, savable value (grace can be 0).
+ * `min`/`max` come from the server's settings spec; `error` is the server's
+ * message for this field after a rejected save.
  */
 export default function BufferField({
-  label, hint, value, onChange, min = 0, max = 240, step = 5, unit = 'min', disabled,
+  label, hint, value, onChange, min = 0, max = 240, step = 1, unit = 'min', disabled, error,
 }) {
   const handle = (next) => {
     const n = Number(next);
@@ -29,9 +28,10 @@ export default function BufferField({
           step={step}
           disabled={disabled}
           onChange={e => handle(e.target.value)}
-          className={`w-20 rounded border border-gray-300 px-2 py-1 text-sm tabular-nums ${FOCUS_RING} disabled:bg-gray-100`}
+          className={`w-20 rounded border ${error ? 'border-red-400' : 'border-gray-300'} px-2 py-1 text-sm tabular-nums ${FOCUS_RING} disabled:bg-gray-100`}
         />
         <span className="text-xs text-gray-500">{unit}</span>
+        <span className="text-[10px] tabular-nums text-gray-400">{min}–{max}</span>
         <input
           type="range"
           value={value ?? 0}
@@ -44,6 +44,7 @@ export default function BufferField({
           className="h-1 flex-1 accent-blue-600"
         />
       </span>
+      {error && <span role="alert" className="mt-0.5 block text-[11px] text-red-600">{label} {error}</span>}
     </label>
   );
 }

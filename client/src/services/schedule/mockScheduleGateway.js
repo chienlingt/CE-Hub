@@ -7,6 +7,7 @@
 
 import { buildMockSnapshot, DEFAULT_SCENARIO } from '../../mocks/schedule';
 import { DEFAULT_SCHEDULE_CONFIG } from '../../utils/schedule/gracePeriod';
+import { SLOT_WINDOWS } from '../../utils/schedule/slotWindows';
 import { recommendSlots, RECOMMEND_HORIZON_DAYS } from '../../utils/schedule/recommendSlots';
 import { todayLocalDateKey, toLocalDateKey } from '../../utils/dateKey';
 
@@ -16,7 +17,8 @@ const LATENCY_MAX_MS = 480;
 /** Deterministic-ish rejection: every 9th committed order, so it is reproducible. */
 const REJECT_EVERY = 9;
 
-const CONFIG_STORAGE_KEY = 'ce.schedule.config';
+// Mock/demo only; the live path keeps settings on the server.
+const CONFIG_STORAGE_KEY = 'ce.schedule.mockConfig';
 
 let state = null;        // { snapshot, scenario }
 let commitCounter = 0;
@@ -81,14 +83,33 @@ export const mockScheduleGateway = {
 
   async loadConfig() {
     await delay();
-    return { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}), configScope: 'local' };
+    return {
+      ...DEFAULT_SCHEDULE_CONFIG,
+      ...(readStoredConfig() ?? {}),
+      slotWindows: SLOT_WINDOWS.map(w => ({ id: w.id, label: w.longLabel, start: w.start, end: w.end })),
+      configScope: 'mock',
+    };
   },
 
   async saveConfig(patch) {
     await delay();
     const next = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}), ...patch };
     writeStoredConfig(next);
-    return { ...next, configScope: 'local' };
+    return { ...next, configScope: 'mock' };
+  },
+
+  async addBlockoff(blockoff) {
+    await delay();
+    const current = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
+    const created = { note: null, ...blockoff, id: `mock-blk-${Date.now()}` };
+    writeStoredConfig({ ...current, blockoffs: [...(current.blockoffs ?? []), created] });
+    return created;
+  },
+
+  async removeBlockoff(id) {
+    await delay();
+    const current = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
+    writeStoredConfig({ ...current, blockoffs: (current.blockoffs ?? []).filter(b => b.id !== id) });
   },
 
   async commitMoves(moves = []) {

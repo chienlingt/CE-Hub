@@ -320,18 +320,42 @@ async function main() {
   const truck2 = await prisma.trucks.create({
     data: { plate_no: 'WYY 5678', tone: 1, length_cm: 280, width_cm: 160, height_cm: 170, driver_id: driver2.id, assistant_id: assistant2.id },
   });
-  const truck3 = await prisma.trucks.create({
-    data: { plate_no: 'WZZ 9999', tone: 5, length_cm: 520, width_cm: 210, height_cm: 220, off_day: 'Sunday' }, // spare truck, unassigned driver
-  });
+  // The rest of Mr Lee's fleet (8 x 3-ton, 13 x 1-ton in total, Meeting
+  // 13-10-2026 §4). Spares: no default crew, one primary zone each in rotation.
+  const TONE_DIMENSIONS = {
+    3: { length_cm: 420, width_cm: 190, height_cm: 200 },
+    1: { length_cm: 280, width_cm: 160, height_cm: 170 },
+  };
+  const SPARE_FLEET = [
+    { plate: 'WKL 3201', tone: 3 }, { plate: 'WKL 3302', tone: 3 },
+    { plate: 'WKM 3403', tone: 3 }, { plate: 'WKM 3504', tone: 3 },
+    { plate: 'WKN 3605', tone: 3 }, { plate: 'WKN 3706', tone: 3 },
+    { plate: 'WKN 3807', tone: 3, off_day: 'Wednesday' },
+    { plate: 'WPA 1101', tone: 1 }, { plate: 'WPA 1202', tone: 1 },
+    { plate: 'WPB 1303', tone: 1 }, { plate: 'WPB 1404', tone: 1 },
+    { plate: 'WPC 1505', tone: 1 }, { plate: 'WPC 1606', tone: 1 },
+    { plate: 'WPC 1707', tone: 1 }, { plate: 'WPD 1808', tone: 1 },
+    { plate: 'WPD 1909', tone: 1 }, { plate: 'WPD 2010', tone: 1, off_day: 'Thursday' },
+    { plate: 'WPE 2111', tone: 1 }, { plate: 'WPE 2212', tone: 1 },
+  ];
+  const spareZones = [zoneKL, zonePJ, zoneKlang];
+  const spareTrucks = [];
+  for (const spec of SPARE_FLEET) {
+    spareTrucks.push(await prisma.trucks.create({
+      data: { plate_no: spec.plate, tone: spec.tone, ...TONE_DIMENSIONS[spec.tone], off_day: spec.off_day ?? null },
+    }));
+  }
   await prisma.truck_zones.createMany({
     data: [
       { truck_id: truck1.id, zone_id: zoneKL.id, is_primary_zone: true },
       { truck_id: truck1.id, zone_id: zoneKlang.id, is_primary_zone: false },
       { truck_id: truck2.id, zone_id: zonePJ.id, is_primary_zone: true },
-      { truck_id: truck3.id, zone_id: zoneKL.id, is_primary_zone: false },
+      ...spareTrucks.map((t, i) => ({ truck_id: t.id, zone_id: spareZones[i % spareZones.length].id, is_primary_zone: true })),
     ],
   });
-  console.log('[seedDemo] 3 trucks, 4 truck_zones created');
+  const allTrucks = [truck1, truck2, ...spareTrucks];
+  const threeTon = allTrucks.filter(t => t.tone === 3).length;
+  console.log(`[seedDemo] ${allTrucks.length} trucks (${threeTon} x 3-ton, ${allTrucks.length - threeTon} x 1-ton), ${spareTrucks.length + 3} truck_zones created`);
 
   // ── Teams (primary/assistant driver + truck pairing) ───────────────────
   const deliveryTeamA = await prisma.teams.create({

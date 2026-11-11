@@ -63,7 +63,7 @@ export function evaluateCandidates({
   const { orders, slots, trucks, teams, employees, products } = entities;
   const truckList = trucks.allIds.map(id => trucks.byId[id]);
   const demand = bandDemandCm3(input.sizeBand, truckList);
-  const jobMinutes = (cfg.duration?.baseDeliveryMinutes ?? 10)
+  const jobMinutes = cfg.duration.baseDeliveryMinutes
     + (input.installation ? DEFAULT_INSTALL_MINUTES : 0);
 
   const teamByTruckId = {};

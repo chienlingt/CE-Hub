@@ -47,11 +47,18 @@
  *   creates one on the first drop. Resolves to the normalized slot.
  * @property {(input: {address: string, sizeBand: string, installation: boolean, notBefore: string|null}) => Promise<{options: object[], reasons: string[], notCounted: number, addressMatched: boolean}>} recommendSlots
  *   Advisory slot recommendation for an order Odoo has not synced yet. Writes nothing.
+ * @property {(b: {resourceType: 'truck'|'team', resourceId: string, startDate: string, endDate: string, reason: string, note?: string}) => Promise<object>} addBlockoff
+ *   Dated truck/team unavailability. Rejects with `fieldErrors` when invalid.
+ * @property {(id: string) => Promise<void>} removeBlockoff
+ *
+ * loadConfig resolves to the client config shape (utils/schedule/schedulerConfigMapping.js);
+ * saveConfig takes a partial of it and rejects with `fieldErrors` on invalid values.
  */
 
 export const GATEWAY_METHODS = [
   'loadSnapshot', 'loadConfig', 'saveConfig', 'commitMoves',
   'runAutoSchedule', 'approveOrders', 'rejectOrders', 'unapproveOrders', 'createSlot', 'recommendSlots',
+  'addBlockoff', 'removeBlockoff',
 ];
 
 /** Dev guard: fail loudly rather than at the first missing call. */

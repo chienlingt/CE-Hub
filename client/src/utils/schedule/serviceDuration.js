@@ -1,22 +1,20 @@
 // B.1 responsibility: "Estimate service duration".
 //
-// Ported from the duplicated logic in:
-//   client/src/components/admin/schedule/Schedule.js:244  calculateServiceTimes
-//   server/services/scheduler.js:425                        calculateOrderTimes
+// Rule (proposal §5, decision 6a 2026-11-12): delivery + installation +
+// dismantle are ADDITIVE, e.g. 15 min delivery + 30 min install = 45 min.
+// baseDeliveryMinutes applies once per order with any items.
 //
-// Both of those read `op.custom_dismantle_time`, A COLUMN THAT DOES NOT EXIST.
-// order_products has dismantle_time_min / dismantle_time_max, so dismantle time
-// has been silently zero in production. This reads the real columns.
+// Dismantle reads the real order_products columns (dismantle_time_min/max), not
+// the phantom `custom_dismantle_time` the old FIFO engine reads
+// (server/services/scheduler.js:423). That engine also drops delivery time when
+// anything is installed (scheduler.js:446). Both are known bugs left for the
+// engine rewrite, so on live data the UI and the old engine can disagree.
 //
-// The odd "delivery minutes only count when there is no installation" rule is
-// preserved deliberately: the engine behaves that way today, and the UI must
-// agree with the engine or a dispatcher sees "fits" and the API says otherwise.
-// It is wrong per the design proposal (§5 shows 15 min delivery + 30 min install
-// as additive) — fix it in both places at once, not here alone.
-
+// The base value comes from server settings (config.duration). This default
+// mirrors the server default for the mock data source and first render.
 export const DEFAULT_DURATION_CONFIG = {
-  baseDeliveryMinutes: 10,
-  // Fallback when a product carries no installation estimate at all.
+  baseDeliveryMinutes: 15,
+  // Fallback when a line counts as installation but has no estimate at all.
   fallbackInstallMinutes: 0,
 };
 
@@ -84,7 +82,6 @@ export function orderServiceMinutes(order, productsById = {}, config = DEFAULT_D
   let installMinutes = 0;
   let dismantleMinutes = 0;
   let requiresInstaller = false;
-  let anyInstall = false;
 
   for (const item of items) {
     const product = productsById[item?.productId] ?? {};
@@ -92,11 +89,10 @@ export function orderServiceMinutes(order, productsById = {}, config = DEFAULT_D
     installMinutes += line.installMinutes;
     dismantleMinutes += line.dismantleMinutes;
     if (line.requiresInstaller) requiresInstaller = true;
-    if (line.countsAsInstall) anyInstall = true;
   }
 
-  // Matches the engine: base delivery time applies only to pure-delivery orders.
-  const deliveryMinutes = items.length > 0 && !anyInstall ? config.baseDeliveryMinutes : 0;
+  // Additive: every order with items pays the base delivery time once.
+  const deliveryMinutes = items.length > 0 ? Number(config?.baseDeliveryMinutes) || 0 : 0;
 
   return {
     totalMinutes: deliveryMinutes + installMinutes + dismantleMinutes,

@@ -404,11 +404,42 @@ model scheduler_config {
   warehouse_postal  String?
   warehouse_latitude  Decimal? @db.Decimal(10, 7)
   warehouse_longitude Decimal? @db.Decimal(10, 7)
-  cron_expression   String?   @default("0 0 * * *")
+  // Mirror of the derived run time (planning_cutoff + planning_run_offset_minutes).
+  cron_expression   String?   @default("0 18 * * *")
   enabled           Boolean?  @default(true)
   last_run_at       DateTime? @db.Timestamp(6)
   created_at        DateTime? @default(now()) @db.Timestamp(6)
   updated_at        DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+  // B.1 settings. Defaults and ranges: services/schedulerSettingsSpec.js.
+  singleton                   Boolean   @unique @default(true)
+  grace_minutes               Int       @default(15)
+  buffer_minutes              Int       @default(10)
+  load_minutes                Int       @default(20)
+  unload_minutes              Int       @default(10)
+  max_dos_per_slot            Int       @default(25)
+  planning_cutoff             String    @default("17:00") @db.VarChar(5)
+  planning_run_offset_minutes Int       @default(60)
+  base_delivery_minutes       Int       @default(15)
+  fallback_install_minutes    Int       @default(0)
+  service_time_catalogue      Json      @default("[]")
+  updated_by                  String?   @db.Uuid
+}
+
+// Dated unavailability for a truck or team (leave, MC, events, maintenance).
+// Polymorphic on resource_type, so no foreign key; the route checks the id exists.
+model resource_blockoffs {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resource_type String   @db.VarChar(10)
+  resource_id   String   @db.Uuid
+  start_date    DateTime @db.Date
+  end_date      DateTime @db.Date
+  reason        String   @db.VarChar(20)
+  note          String?  @db.VarChar(300)
+  created_by    String?  @db.Uuid
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([resource_type, resource_id, start_date])
+  @@index([start_date, end_date])
 }
 
 model complaint {
