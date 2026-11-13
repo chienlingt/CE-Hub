@@ -62,7 +62,8 @@ async function adminRouteOrigin(slot) {
   const driverId = trip ? trip.driver_id : team?.primary_driver_id || truck?.driver_id;
   if (!driverId) return null;
   const position = await prisma.employee_locations.findUnique({ where: { employee_id: driverId } });
-  return position?.latitude != null && position?.longitude != null ? { lat: Number(position.latitude), lon: Number(position.longitude) } : null;
+  return position?.latitude != null && position?.longitude != null && position.updated_at && Date.now() - new Date(position.updated_at).getTime() <= 5 * 60000
+    ? { lat: Number(position.latitude), lon: Number(position.longitude) } : null;
 }
 
 // ─── GET /api/driver/jobs ────────────────────────────────────────────────────
@@ -470,7 +471,7 @@ router.get('/route/:timeSlotId', async (req, res) => {
       where: {
         time_slot_id: timeSlotId,
         // Route view and manual arrangement operate on remaining stops only.
-        order_status: { notIn: ['Cancelled', 'Delivered', 'Failed'] },
+        order_status: { notIn: ['Cancelled', 'Delivered', 'Failed', 'Completed'] },
       },
       orderBy: { truck_loading_sequence: 'desc' }, // last-loaded (seq 1) is first delivered
       include: {
@@ -491,7 +492,8 @@ router.get('/route/:timeSlotId', async (req, res) => {
       },
     });
 
-    const stops = orders.map(order => {
+    const stops = await Promise.all(orders.map(async order => {
+      const coordinates = await require('../services/googleRoutingService').getCachedOrderCoords(order);
       const plannedStop = timeslot.route_plan?.stops?.find(s => s.order_id === order.id) || null;
       const serviceDurationMin = plannedStop?.eta && plannedStop?.service_end_at
         ? Math.max(0, Math.round((new Date(plannedStop.service_end_at) - new Date(plannedStop.eta)) / 60000))
@@ -515,8 +517,8 @@ router.get('/route/:timeSlotId', async (req, res) => {
       address:                order.delivery_address || order.buildings?.building_name || null,
       // Prisma Decimal fields serialize to strings in JSON — Google Maps'
       // SDK requires actual numbers for lat/lng, so convert explicitly.
-      latitude:               order.buildings?.latitude  != null ? Number(order.buildings.latitude)  : null,
-      longitude:              order.buildings?.longitude != null ? Number(order.buildings.longitude) : null,
+      latitude:               coordinates?.lat ?? null,
+      longitude:              coordinates?.lon ?? null,
       order_status:           order.order_status,
       truck_loading_sequence: order.truck_loading_sequence,
       eta:                    plannedStop?.eta || order.scheduled_start_date_time,
@@ -528,7 +530,7 @@ router.get('/route/:timeSlotId', async (req, res) => {
       work_items:             workItems,
       segment:                timeslot.route_plan?.segments?.find(s => s.to_order_id === order.id) || null,
       };
-    });
+    }));
 
     res.json({
       time_slot_id:      timeslot.id,
@@ -578,7 +580,7 @@ router.post('/route/:timeSlotId/reoptimize', async (req, res) => {
       originCoords = { lat: Number(latitude), lon: Number(longitude) };
     } else {
       const saved = await prisma.employee_locations.findUnique({ where: { employee_id } });
-      if (saved?.latitude != null && saved?.longitude != null) {
+      if (saved?.latitude != null && saved?.longitude != null && saved.updated_at && Date.now() - new Date(saved.updated_at).getTime() <= 5 * 60000) {
         originCoords = { lat: Number(saved.latitude), lon: Number(saved.longitude) };
       }
     }

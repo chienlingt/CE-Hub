@@ -183,7 +183,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setRerouteMessage('System-recommended optimal route restored.');
+      setRerouteMessage(data.applied ? 'System-recommended route updated.' : `Route unchanged: ${String(data.reason || 'needs review').replaceAll('_', ' ').toLowerCase()}.`);
       setRouteRefreshKey(key => key + 1);
       if (!sharedControls) onRefresh?.();
       return true;
@@ -286,14 +286,15 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
 
         const warningLines = (data.violations || []).map(violation => {
           const stop = draftStops.find(item => item.order_id === violation.order_id);
-          return `• ${stop?.customer_name || stop?.odoo_order_ref || 'Stop'}: approximately ${violation.minutes_late} min outside its access window`;
+          return `• ${stop?.customer_name || stop?.odoo_order_ref || 'Stop'}: approximately ${violation.minutes_late} min outside ${violation.session_violation_s ? 'the delivery session' : 'its access window'}`;
         });
         const proceed = window.confirm(
-          `This manual order violates access windows:\n\n${warningLines.join('\n')}\n\nSave this route anyway?`
+          `This arrangement exceeds a delivery session or access window:\n\n${warningLines.join('\n')}\n\nSave this route anyway?`
         );
         if (!proceed) return false;
         confirmedViolations = true;
       }
+      if (!data.applied) throw new Error(String(data.reason || 'Route could not be applied').replaceAll('_', ' ').toLowerCase());
       setArranging(false);
       setRerouteMessage('Manual route saved. ETAs, road legs and loading sequence were recalculated.');
       setRouteRefreshKey(key => key + 1);
@@ -519,6 +520,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
                 </button>
               </div>
             )}
+            {route.route_plan?.feasibility === 'needs_review' && <p role="alert" className="mt-2 text-xs text-amber-700">Route needs review: {String(route.route_plan.review?.reason || 'delivery session or access window exceeded').replaceAll('_', ' ').toLowerCase()}.</p>}
             {route.route_plan?.used_fallback && showFallbackNotice && (
               <div className="mt-2 flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs text-amber-700">
                 <p>Road service unavailable — using straight-line estimates.</p>

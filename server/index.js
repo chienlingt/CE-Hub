@@ -201,6 +201,13 @@ app.listen(port, async () => {
   }
 
   // A1.4 — Odoo polling fallback (daily at 5PM MYT — catches any orders missed by manual push)
+  {
+    const { processGeocodeQueue } = require('./services/routeGeocodeCache');
+    const run = () => processGeocodeQueue().catch(() => console.warn('[Geocoding] Address queue deferred; check migration/key configuration.'));
+    require('node-cron').schedule('* * * * *', run, { timezone: 'Asia/Kuala_Lumpur' });
+    run();
+  }
+
   if (process.env.ODOO_URL) {
     const cron = require('node-cron');
     const { syncOrdersFromOdoo } = require('./services/odooSyncService');

@@ -2,6 +2,8 @@
 // this service only changes stop order, ETA and last-stop-first-loaded sequence.
 
 const prisma = require('../prismaClient');
+const { validCoords } = require('./routeGeocodeCache');
+const { SETTINGS_SPEC } = require('./schedulerSettingsSpec');
 const {
   geocodeAddress,
   resolveOrderCoords,
@@ -14,7 +16,29 @@ const {
 const DEFAULT_WAREHOUSE_ADDRESS = 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor';
 const MIN_IMPROVEMENT_SECONDS = 10 * 60;
 const MIN_IMPROVEMENT_RATIO = 0.10;
-const TERMINAL_STATUSES = ['Delivered', 'Failed', 'Cancelled'];
+const TERMINAL_STATUSES = ['Delivered', 'Failed', 'Cancelled', 'Completed'];
+
+// The gap after each stop comes from the admin setting scheduler_config.grace_minutes
+// (Schedule > Settings). The spec default is only a fallback when the setting is
+// missing, unreadable or outside its allowed range.
+const GRACE_SPEC = SETTINGS_SPEC.grace_minutes;
+const DEFAULT_GRACE_SECONDS = GRACE_SPEC.default * 60;
+const ORDER_GRACE_SECONDS = DEFAULT_GRACE_SECONDS; // kept for existing imports/tests: the fallback value
+
+function graceSecondsFrom(config) {
+  const raw = config?.grace_minutes; // Prisma returns a number; null/blank must not count as 0
+  const minutes = typeof raw === 'number' ? raw : NaN;
+  return Number.isInteger(minutes) && minutes >= GRACE_SPEC.min && minutes <= GRACE_SPEC.max
+    ? minutes * 60 : DEFAULT_GRACE_SECONDS;
+}
+
+async function loadGraceSeconds(db = prisma) {
+  try {
+    return graceSecondsFrom(await db.scheduler_config.findFirst({ select: { grace_minutes: true } }));
+  } catch {
+    return DEFAULT_GRACE_SECONDS;
+  }
+}
 
 function shouldApplyDynamicRoute({ dynamic, hasExistingPlan, preventsViolation, savedSeconds, savedRatio }) {
   return !dynamic || !hasExistingPlan || preventsViolation ||
@@ -22,7 +46,7 @@ function shouldApplyDynamicRoute({ dynamic, hasExistingPlan, preventsViolation, 
 }
 
 function slotDateTime(date, clock) {
-  return new Date(`${date}T${clock || '00:00'}:00+08:00`);
+  return new Date(`${date}T${String(clock || '00:00').slice(0, 5)}:00+08:00`);
 }
 
 function serviceSeconds(order) {
@@ -66,7 +90,7 @@ function fillFallbackMatrices(points, metrics) {
   return metrics;
 }
 
-function evaluateSequence(sequence, orders, slot, metrics, departureMs) {
+function evaluateSequence(sequence, orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS) {
   let currentIndex = 0; // matrix index 0 is origin; order i is i + 1
   let clock = departureMs;
   let travelSeconds = 0;
@@ -74,6 +98,8 @@ function evaluateSequence(sequence, orders, slot, metrics, departureMs) {
   let waitSeconds = 0;
   let lateSeconds = 0;
   let hardViolationSeconds = 0;
+  let slotViolationSeconds = 0;
+  const slotEnd = slot.time_window_end ? slotDateTime(slot.date, slot.time_window_end).getTime() : null;
   const segments = [];
   const stops = [];
 
@@ -81,11 +107,14 @@ function evaluateSequence(sequence, orders, slot, metrics, departureMs) {
     const matrixIndex = orderIndex + 1;
     const durationSeconds = metrics.durations[currentIndex][matrixIndex] || 0;
     const distanceM = metrics.distances[currentIndex][matrixIndex] || 0;
+    const actualDeparture = clock;
     clock += durationSeconds * 1000;
+    const physicalArrival = clock;
     const bounds = accessBounds(orders[orderIndex], slot);
-    if (bounds.start && clock < bounds.start) {
-      waitSeconds += Math.round((bounds.start - clock) / 1000);
-      clock = bounds.start;
+    const earliestService = Math.max(bounds.start || 0, slotDateTime(slot.date, slot.time_window_start).getTime());
+    if (clock < earliestService) {
+      waitSeconds += Math.round((earliestService - clock) / 1000);
+      clock = earliestService;
     }
     const arrivalMs = clock;
     const preferredMs = orders[orderIndex].scheduled_start_date_time
@@ -95,33 +124,40 @@ function evaluateSequence(sequence, orders, slot, metrics, departureMs) {
     const accessWindowViolationSeconds = bounds.end && endMs > bounds.end
       ? Math.round((endMs - bounds.end) / 1000) : 0;
     hardViolationSeconds += accessWindowViolationSeconds;
+    const readyForNextStop = endMs + graceSeconds * 1000;
+    const sessionViolation = slotEnd && readyForNextStop > slotEnd ? Math.round((readyForNextStop - slotEnd) / 1000) : 0;
+    slotViolationSeconds = Math.max(slotViolationSeconds, sessionViolation);
 
     segments.push({
       from_order_id: stopIndex === 0 ? null : orders[sequence[stopIndex - 1]].id,
       to_order_id: orders[orderIndex].id,
       distance_m: distanceM,
       travel_time_s: durationSeconds,
-      departure_at: new Date(arrivalMs - durationSeconds * 1000).toISOString(),
-      arrival_at: new Date(arrivalMs).toISOString(),
+      departure_at: new Date(actualDeparture).toISOString(),
+      arrival_at: new Date(physicalArrival).toISOString(),
+      service_start_at: new Date(arrivalMs).toISOString(),
+      waiting_time_s: Math.round((arrivalMs - physicalArrival) / 1000),
     });
     stops.push({
       order_id: orders[orderIndex].id,
       eta: new Date(arrivalMs).toISOString(),
       service_end_at: new Date(endMs).toISOString(),
+      physical_arrival_at: new Date(physicalArrival).toISOString(),
       delivery_sequence: stopIndex + 1,
       loading_sequence: sequence.length - stopIndex,
       access_window_violation_s: accessWindowViolationSeconds,
+      session_violation_s: sessionViolation,
     });
     travelSeconds += durationSeconds;
     distanceMeters += distanceM;
-    clock = endMs;
+    clock = readyForNextStop;
     currentIndex = matrixIndex;
   });
 
   // Lexicographic priorities represented by weights: hard feasibility,
   // lateness, travel time, distance, then operational waiting/disruption.
-  const score = hardViolationSeconds * 1e9 + lateSeconds * 1e5 + travelSeconds * 100 + distanceMeters + waitSeconds;
-  return { sequence, score, travelSeconds, distanceMeters, waitSeconds, lateSeconds, hardViolationSeconds, segments, stops };
+  const score = (hardViolationSeconds + slotViolationSeconds) * 1e9 + lateSeconds * 1e5 + travelSeconds * 100 + distanceMeters + waitSeconds;
+  return { sequence, score, travelSeconds, distanceMeters, waitSeconds, lateSeconds, hardViolationSeconds, slotViolationSeconds, segments, stops };
 }
 
 function nearestNeighbour(orders, metrics) {
@@ -129,7 +165,7 @@ function nearestNeighbour(orders, metrics) {
   const result = [];
   let from = 0;
   while (remaining.length) {
-    remaining.sort((a, b) => (metrics.durations[from][a + 1] || Infinity) - (metrics.durations[from][b + 1] || Infinity));
+    remaining.sort((a, b) => (metrics.durations[from][a + 1] ?? Infinity) - (metrics.durations[from][b + 1] ?? Infinity));
     const next = remaining.shift();
     result.push(next);
     from = next + 1;
@@ -137,8 +173,8 @@ function nearestNeighbour(orders, metrics) {
   return result;
 }
 
-function improveTwoOpt(seed, orders, slot, metrics, departureMs) {
-  let best = evaluateSequence(seed, orders, slot, metrics, departureMs);
+function improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS) {
+  let best = evaluateSequence(seed, orders, slot, metrics, departureMs, graceSeconds);
   let changed = true;
   let passes = 0;
   while (changed && passes++ < 5) {
@@ -146,7 +182,7 @@ function improveTwoOpt(seed, orders, slot, metrics, departureMs) {
     for (let i = 0; i < seed.length - 1; i++) {
       for (let j = i + 1; j < seed.length; j++) {
         const candidate = [...best.sequence.slice(0, i), ...best.sequence.slice(i, j + 1).reverse(), ...best.sequence.slice(j + 1)];
-        const evaluated = evaluateSequence(candidate, orders, slot, metrics, departureMs);
+        const evaluated = evaluateSequence(candidate, orders, slot, metrics, departureMs, graceSeconds);
         if (evaluated.score < best.score) { best = evaluated; changed = true; }
       }
     }
@@ -154,7 +190,7 @@ function improveTwoOpt(seed, orders, slot, metrics, departureMs) {
   return best;
 }
 
-function selectBestSequence(orders, slot, metrics, departureMs) {
+function selectBestSequence(orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS) {
   const current = orders.map((_, i) => i).sort((a, b) =>
     Number(orders[b].truck_loading_sequence || 0) - Number(orders[a].truck_loading_sequence || 0));
   const earliestWindow = orders.map((_, i) => i).sort((a, b) => {
@@ -163,16 +199,17 @@ function selectBestSequence(orders, slot, metrics, departureMs) {
     return aa - bb;
   });
   const seeds = [current, nearestNeighbour(orders, metrics), earliestWindow];
-  return seeds.map(seed => improveTwoOpt(seed, orders, slot, metrics, departureMs))
+  return seeds.map(seed => improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds))
     .sort((a, b) => a.score - b.score)[0];
 }
 
-async function loadSlot(slotId) {
-  return prisma.time_slots.findUnique({
+async function loadSlot(slotId, db = prisma) {
+  return db.time_slots.findUnique({
     where: { id: slotId },
     include: {
       orders: {
         where: { order_status: { notIn: TERMINAL_STATUSES } },
+        orderBy: { id: 'asc' },
         include: {
           buildings: true,
           customers: true,
@@ -183,218 +220,185 @@ async function loadSlot(slotId) {
   });
 }
 
-async function optimiseSlot(slot, { warehouseAddress, warehouseCoords, originCoords, departureAt, reason = 'initial_optimisation', dynamic = false } = {}) {
+function currentSequence(orders) {
+  return orders.map((_, index) => index).sort((a, b) =>
+    Number(orders[b].truck_loading_sequence || 0) - Number(orders[a].truck_loading_sequence || 0));
+}
+
+function snapshot(slot) {
+  return JSON.stringify([slot.route_version, slot.date, slot.time_window_start, slot.time_window_end,
+    slot.departed_at, slot.delivery_team_id, slot.truck_id, slot.orders]);
+}
+
+function reviewDetails(evaluation) {
+  return evaluation.stops.filter(stop => stop.access_window_violation_s || stop.session_violation_s)
+    .map(stop => ({ order_id: stop.order_id, minutes_late: Math.ceil(Math.max(stop.access_window_violation_s, stop.session_violation_s) / 60),
+      access_window_violation_s: stop.access_window_violation_s, session_violation_s: stop.session_violation_s,
+      service_end_at: stop.service_end_at }));
+}
+
+async function persistPlan(slot, plan, stops = []) {
+  return prisma.$transaction(async tx => {
+    // Serialize route commits, then reject calculations based on stale orders,
+    // assignments, windows or another route version.
+    await tx.$queryRaw`SELECT id FROM time_slots WHERE id = ${slot.id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM orders WHERE time_slot_id = ${slot.id}::uuid FOR UPDATE`;
+    const fresh = await loadSlot(slot.id, tx);
+    if (!fresh || snapshot(fresh) !== snapshot(slot)) {
+      return { applied: false, reason: 'STALE_ROUTE', needs_review: true };
+    }
+    for (const stop of stops) {
+      // ETAs live in route_plan; never replace confirmed appointment fields.
+      await tx.orders.update({ where: { id: stop.order_id }, data: { truck_loading_sequence: stop.loading_sequence } });
+      await tx.installation_schedules.updateMany({ where: { order_id: stop.order_id },
+        data: { estimated_arrival_time: new Date(stop.eta), updated_at: new Date() } });
+    }
+    await tx.time_slots.update({ where: { id: slot.id }, data: {
+      route_plan: plan, route_version: { increment: 1 }, route_last_reason: plan.reason,
+      ...(stops.length ? { route_polyline: plan.polyline || null, route_distance_m: plan.total_distance_m,
+        route_duration_s: plan.total_travel_time_s, route_computed_at: new Date() } : {}),
+    } });
+    return { applied: stops.length > 0, needs_review: plan.feasibility === 'needs_review', plan };
+  }, { timeout: 20000 });
+}
+
+async function markNeedsReview(slot, reason, issues) {
+  const plan = { ...(slot.route_plan || {}), reason, feasibility: 'needs_review',
+    review: { reason, issues, checked_at: new Date().toISOString() } };
+  const result = await persistPlan(slot, plan);
+  return { ...result, reason: result.reason || reason, needs_review: true, issues };
+}
+
+async function finalEvaluation(sequence, orders, slot, origin, departureMs, matrix, legCache, graceSeconds = DEFAULT_GRACE_SECONDS) {
+  const metrics = { durations: matrix.durations.map(row => [...row]), distances: matrix.distances.map(row => [...row]) };
+  let clock = departureMs, from = origin, fromIndex = 0, usedFallback = false, staticSeconds = 0;
+  for (const index of sequence) {
+    const to = orders[index].coords;
+    const key = JSON.stringify([from, to, Math.floor(clock / 1000)]);
+    let leg = legCache.get(key);
+    if (!leg) {
+      try {
+        const route = await computeOrderedRoute(from, [{ coords: to }], clock);
+        if (!route || !Number.isFinite(route.totalDurationSec) || !Number.isFinite(route.totalDistanceM)) throw new Error('Route unavailable');
+        leg = { duration: route.totalDurationSec, distance: route.totalDistanceM, static: route.staticDurationSec || 0, fallback: false };
+      } catch {
+        const estimate = estimateFallbackLeg(from, to);
+        leg = { duration: Math.round(estimate.durationSeconds), distance: Math.round(estimate.distanceMeters), static: 0, fallback: true };
+      }
+      legCache.set(key, leg);
+    }
+    metrics.durations[fromIndex][index + 1] = leg.duration;
+    metrics.distances[fromIndex][index + 1] = leg.distance;
+    usedFallback = usedFallback || leg.fallback;
+    staticSeconds += leg.static;
+    clock += leg.duration * 1000;
+    const bounds = accessBounds(orders[index], slot);
+    clock = Math.max(clock, bounds.start || 0, slotDateTime(slot.date, slot.time_window_start).getTime());
+    clock += (serviceSeconds(orders[index]) + graceSeconds) * 1000;
+    from = to; fromIndex = index + 1;
+  }
+  return { ...evaluateSequence(sequence, orders, slot, metrics, departureMs, graceSeconds), usedFallback, staticSeconds };
+}
+
+async function calculateSlot(slot, options = {}, requestedIds = null) {
   const orders = slot.orders || [];
   if (!orders.length) return { applied: false, reason: 'NO_ACTIVE_ORDERS' };
-  const origin = originCoords || warehouseCoords || await geocodeAddress(warehouseAddress || DEFAULT_WAREHOUSE_ADDRESS);
-  if (!originCoords && !warehouseCoords) {
-    const config = await prisma.scheduler_config.findFirst();
-    if (config) {
-      await prisma.scheduler_config.update({
-        where: { id: config.id },
-        data: { warehouse_latitude: origin.lat, warehouse_longitude: origin.lon },
-      }).catch(() => {});
-    }
+  if (orders.some(order => ['In Progress', 'Installing', 'Arrived'].includes(order.order_status) ||
+      (order.actual_arrival_date_time && !order.delivery_end_date_time))) {
+    return { applied: false, reason: 'ACTIVE_STOP_IN_PROGRESS' };
   }
-  const resolved = [];
-  for (const order of orders) resolved.push({ ...order, coords: await resolveOrderCoords(order) });
-  const points = [origin, ...resolved.map(o => o.coords)];
+  const { warehouseAddress = DEFAULT_WAREHOUSE_ADDRESS, warehouseCoords, originCoords, departureAt, dynamic = false,
+    reason = 'initial_optimisation', allowAccessWindowViolation = false } = options;
+  // Admin-configurable gap after each stop (Schedule > Settings); callers may inject it (tests, batches).
+  const graceSeconds = options.graceSeconds ?? await loadGraceSeconds();
   const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
-  const trafficDepartureAt = departureAt || slotStart;
-  let metrics;
-  try {
-    metrics = await buildTravelMetricsMatrix(points, trafficDepartureAt);
-  } catch (error) {
-    metrics = {
-      durations: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
-      distances: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
-      usedFallback: true,
-    };
+  const onRoad = Boolean(slot.departed_at) || reason === 'departure_traffic_check';
+  const departureMs = onRoad ? (departureAt ? new Date(departureAt).getTime() : Date.now()) : slotStart;
+  if (!Number.isFinite(departureMs) || (!onRoad && slotStart < Date.now())) {
+    return markNeedsReview(slot, 'PAST_OR_INVALID_SESSION', []);
   }
-  fillFallbackMatrices(points, metrics);
-  const departureMs = Math.max(departureAt ? new Date(departureAt).getTime() : slotStart, slotStart);
-  const best = selectBestSequence(resolved, slot, metrics, departureMs);
-  const ordered = best.sequence.map(i => resolved[i]);
-  const geometry = await computeOrderedRoute(origin, ordered, trafficDepartureAt).catch(() => null);
-  const oldPlan = slot.route_plan && typeof slot.route_plan === 'object' ? slot.route_plan : null;
-  const activeOrderIds = new Set(resolved.map(o => o.id));
-  const oldRemainingSeconds = Array.isArray(oldPlan?.segments)
-    ? oldPlan.segments
-        .filter(segment => activeOrderIds.has(segment.to_order_id))
-        .reduce((sum, segment) => sum + Number(segment.travel_time_s || 0), 0)
-    : 0;
-  const oldSeconds = oldRemainingSeconds || Number(oldPlan?.total_travel_time_s ?? slot.route_duration_s ?? 0);
-  const savedSeconds = oldSeconds > 0 ? oldSeconds - best.travelSeconds : 0;
-  const savedRatio = oldSeconds > 0 ? savedSeconds / oldSeconds : 0;
-  const preventsViolation = Number(oldPlan?.hard_violation_s || 0) > best.hardViolationSeconds;
-  const shouldApply = shouldApplyDynamicRoute({
-    dynamic,
-    hasExistingPlan: !!oldPlan,
-    preventsViolation,
-    savedSeconds,
-    savedRatio,
-  });
-
-  if (!shouldApply) {
-    return { applied: false, reason: 'INSIGNIFICANT_IMPROVEMENT', saved_seconds: savedSeconds, saved_ratio: savedRatio };
+  if (onRoad && reason !== 'departure_traffic_check' && !originCoords) {
+    return markNeedsReview(slot, 'CURRENT_LOCATION_REQUIRED', []);
   }
-
+  let origin;
+  try { origin = (onRoad && originCoords) || warehouseCoords || await geocodeAddress(warehouseAddress); }
+  catch { return markNeedsReview(slot, 'WAREHOUSE_COORDINATES_UNAVAILABLE', []); }
+  if (!validCoords(origin)) return markNeedsReview(slot, 'INVALID_ORIGIN_COORDINATES', []);
+  const resolved = [], unresolved = [];
+  for (const order of orders) {
+    try {
+      const coords = await resolveOrderCoords(order);
+      if (!validCoords(coords)) throw new Error('Invalid coordinates');
+      resolved.push({ ...order, coords });
+    }
+    catch { unresolved.push({ order_id: order.id, reason: 'UNRESOLVED_ADDRESS' }); }
+  }
+  if (unresolved.length) return markNeedsReview(slot, 'UNRESOLVED_ADDRESS', unresolved);
+  let matrix;
+  try { matrix = await buildTravelMetricsMatrix([origin, ...resolved.map(order => order.coords)], departureMs); }
+  catch { matrix = { durations: Array.from({ length: orders.length + 1 }, () => Array(orders.length + 1).fill(null)),
+    distances: Array.from({ length: orders.length + 1 }, () => Array(orders.length + 1).fill(null)), usedFallback: true }; }
+  fillFallbackMatrices([origin, ...resolved.map(order => order.coords)], matrix);
+  const baselineSequence = currentSequence(resolved);
+  const proposedSequence = requestedIds
+    ? requestedIds.map(id => resolved.findIndex(order => order.id === id))
+    : selectBestSequence(resolved, slot, matrix, departureMs, graceSeconds).sequence;
+  const cache = new Map();
+  const baseline = await finalEvaluation(baselineSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
+  let best = JSON.stringify(baselineSequence) === JSON.stringify(proposedSequence) ? baseline
+    : await finalEvaluation(proposedSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
+  // A matrix candidate may be worse once leg departures include service/wait.
+  if (!requestedIds && best.score > baseline.score) best = baseline;
+  const violations = reviewDetails(best);
+  if (violations.length && requestedIds && !allowAccessWindowViolation) {
+    return { applied: false, requires_confirmation: true, needs_review: true, violations };
+  }
+  if (violations.length && !requestedIds) return markNeedsReview(slot, 'NO_FEASIBLE_SEQUENCE', violations);
+  const savedSeconds = baseline.travelSeconds - best.travelSeconds;
+  const savedRatio = baseline.travelSeconds > 0 ? savedSeconds / baseline.travelSeconds : 0;
+  const preventsViolation = baseline.hardViolationSeconds + baseline.slotViolationSeconds > best.hardViolationSeconds + best.slotViolationSeconds;
+  // Do not claim a saving by comparing road data with straight-line estimates.
+  if (dynamic && !requestedIds && baseline.usedFallback !== best.usedFallback) {
+    return { applied: false, reason: 'INCOMPARABLE_TRAFFIC_ESTIMATES' };
+  }
+  if (!requestedIds && !shouldApplyDynamicRoute({ dynamic, hasExistingPlan: !!slot.route_plan, preventsViolation, savedSeconds, savedRatio })) {
+    // Refresh timing without sequence churn when the recommended route is kept.
+    best = baseline;
+  }
+  const usedFallback = matrix.usedFallback || best.usedFallback;
+  const geometry = usedFallback ? null : await computeOrderedRoute(origin, best.sequence.map(index => resolved[index]), departureMs).catch(() => null);
   const plan = {
-    algorithm: 'road-time-matrix-multi-objective-2opt',
-    reason,
-    generated_at: new Date().toISOString(),
-    used_fallback: metrics.usedFallback,
-    traffic_model: metrics.usedFallback ? null : (geometry?.trafficModel || 'BEST_GUESS'),
-    traffic_departure_at: metrics.usedFallback ? null : new Date(predictiveDeparture(trafficDepartureAt)).toISOString(),
-    static_travel_time_s: geometry?.staticDurationSec || null,
-    predicted_traffic_delay_s: geometry?.trafficDelaySec || 0,
-    origin: { address: warehouseAddress || DEFAULT_WAREHOUSE_ADDRESS, latitude: origin.lat, longitude: origin.lon },
-    total_distance_m: geometry?.totalDistanceM || best.distanceMeters,
-    total_travel_time_s: geometry?.totalDurationSec || best.travelSeconds,
-    wait_time_s: best.waitSeconds,
-    late_time_s: best.lateSeconds,
-    hard_violation_s: best.hardViolationSeconds,
-    score: best.score,
-    stops: best.stops,
-    segments: best.segments,
+    algorithm: requestedIds ? 'manual-road-time-sequence' : 'road-time-matrix-multi-objective-2opt', reason,
+    generated_at: new Date().toISOString(), used_fallback: usedFallback,
+    traffic_model: usedFallback ? null : 'BEST_GUESS',
+    traffic_departure_at: new Date(predictiveDeparture(departureMs)).toISOString(),
+    traffic_basis: onRoad ? 'actual_departure' : 'session_forecast',
+    origin: { address: onRoad ? 'Current position' : warehouseAddress, latitude: origin.lat, longitude: origin.lon },
+    total_distance_m: best.distanceMeters, total_travel_time_s: best.travelSeconds,
+    static_travel_time_s: usedFallback ? null : best.staticSeconds,
+    predicted_traffic_delay_s: usedFallback ? null : Math.max(0, best.travelSeconds - best.staticSeconds),
+    wait_time_s: best.waitSeconds, late_time_s: best.lateSeconds, hard_violation_s: best.hardViolationSeconds,
+    session_violation_s: best.slotViolationSeconds, feasibility: violations.length ? 'needs_review' : 'feasible',
+    violations, manual_override: Boolean(requestedIds && violations.length && allowAccessWindowViolation),
+    score: best.score, stops: best.stops, segments: best.segments, polyline: geometry?.polyline || null,
   };
-
-  await prisma.$transaction([
-    ...best.stops.map(stop => prisma.orders.update({
-      where: { id: stop.order_id },
-      data: {
-        truck_loading_sequence: stop.loading_sequence,
-        scheduled_start_date_time: new Date(stop.eta),
-        scheduled_end_date_time: new Date(stop.service_end_at),
-        updated_at: new Date(),
-      },
-    })),
-    ...best.stops.map(stop => prisma.installation_schedules.updateMany({
-      where: { order_id: stop.order_id },
-      data: { estimated_arrival_time: new Date(stop.eta), updated_at: new Date() },
-    })),
-    prisma.time_slots.update({
-      where: { id: slot.id },
-      data: {
-        route_polyline: geometry?.polyline || null,
-        route_distance_m: plan.total_distance_m,
-        route_duration_s: plan.total_travel_time_s,
-        route_computed_at: new Date(),
-        route_plan: plan,
-        route_version: { increment: 1 },
-        route_last_reason: reason,
-      },
-    }),
-  ]);
-  return { applied: true, plan, saved_seconds: savedSeconds, saved_ratio: savedRatio };
+  return { ...await persistPlan(slot, plan, best.stops), saved_seconds: savedSeconds, saved_ratio: savedRatio };
 }
 
 async function optimizeScheduledSlot(timeSlotId, options = {}) {
   const slot = await loadSlot(timeSlotId);
   if (!slot) throw new Error('Time slot not found');
-  return optimiseSlot(slot, options);
+  return calculateSlot(slot, options);
 }
 
-async function reorderScheduledSlot(timeSlotId, orderedOrderIds, {
-  warehouseAddress = DEFAULT_WAREHOUSE_ADDRESS,
-  warehouseCoords = null,
-  originCoords = null,
-  departureAt = null,
-  reason = 'manual_reorder',
-  allowAccessWindowViolation = false,
-} = {}) {
+async function reorderScheduledSlot(timeSlotId, orderedOrderIds, options = {}) {
   const slot = await loadSlot(timeSlotId);
   if (!slot) throw new Error('Time slot not found');
-  const orders = slot.orders || [];
-  const requested = Array.isArray(orderedOrderIds) ? orderedOrderIds : [];
-  const activeIds = new Set(orders.map(order => order.id));
-  if (requested.length !== orders.length || new Set(requested).size !== requested.length ||
-      requested.some(id => !activeIds.has(id))) {
+  const ids = slot.orders.map(order => order.id), requested = Array.isArray(orderedOrderIds) ? orderedOrderIds : [];
+  if (requested.length !== ids.length || new Set(requested).size !== ids.length || requested.some(id => !ids.includes(id))) {
     throw new Error('Manual order must contain every active stop exactly once');
   }
-
-  const origin = originCoords || warehouseCoords || await geocodeAddress(warehouseAddress);
-  const resolved = [];
-  for (const order of orders) resolved.push({ ...order, coords: await resolveOrderCoords(order) });
-  const points = [origin, ...resolved.map(order => order.coords)];
-  const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
-  const trafficDepartureAt = departureAt || slotStart;
-  let metrics;
-  try {
-    metrics = await buildTravelMetricsMatrix(points, trafficDepartureAt);
-  } catch (error) {
-    metrics = {
-      durations: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
-      distances: Array.from({ length: points.length }, () => Array(points.length).fill(null)),
-      usedFallback: true,
-    };
-  }
-  fillFallbackMatrices(points, metrics);
-
-  const indexById = new Map(resolved.map((order, index) => [order.id, index]));
-  const sequence = requested.map(id => indexById.get(id));
-  const departureMs = Math.max(departureAt ? new Date(departureAt).getTime() : slotStart, slotStart);
-  const evaluated = evaluateSequence(sequence, resolved, slot, metrics, departureMs);
-  const violations = evaluated.stops
-    .filter(stop => stop.access_window_violation_s > 0)
-    .map(stop => ({
-      order_id: stop.order_id,
-      minutes_late: Math.ceil(stop.access_window_violation_s / 60),
-      service_end_at: stop.service_end_at,
-    }));
-  if (violations.length && !allowAccessWindowViolation) {
-    return { applied: false, requires_confirmation: true, violations };
-  }
-  const ordered = sequence.map(index => resolved[index]);
-  const geometry = await computeOrderedRoute(origin, ordered, trafficDepartureAt).catch(() => null);
-  const plan = {
-    algorithm: 'manual-road-time-sequence',
-    reason,
-    generated_at: new Date().toISOString(),
-    used_fallback: metrics.usedFallback,
-    traffic_model: metrics.usedFallback ? null : (geometry?.trafficModel || 'BEST_GUESS'),
-    traffic_departure_at: metrics.usedFallback ? null : new Date(predictiveDeparture(trafficDepartureAt)).toISOString(),
-    static_travel_time_s: geometry?.staticDurationSec || null,
-    predicted_traffic_delay_s: geometry?.trafficDelaySec || 0,
-    origin: { address: warehouseAddress, latitude: origin.lat, longitude: origin.lon },
-    total_distance_m: geometry?.totalDistanceM || evaluated.distanceMeters,
-    total_travel_time_s: geometry?.totalDurationSec || evaluated.travelSeconds,
-    wait_time_s: evaluated.waitSeconds,
-    late_time_s: evaluated.lateSeconds,
-    hard_violation_s: evaluated.hardViolationSeconds,
-    score: evaluated.score,
-    stops: evaluated.stops,
-    segments: evaluated.segments,
-  };
-
-  await prisma.$transaction([
-    ...evaluated.stops.map(stop => prisma.orders.update({
-      where: { id: stop.order_id },
-      data: {
-        truck_loading_sequence: stop.loading_sequence,
-        scheduled_start_date_time: new Date(stop.eta),
-        scheduled_end_date_time: new Date(stop.service_end_at),
-        updated_at: new Date(),
-      },
-    })),
-    ...evaluated.stops.map(stop => prisma.installation_schedules.updateMany({
-      where: { order_id: stop.order_id },
-      data: { estimated_arrival_time: new Date(stop.eta), updated_at: new Date() },
-    })),
-    prisma.time_slots.update({
-      where: { id: slot.id },
-      data: {
-        route_polyline: geometry?.polyline || null,
-        route_distance_m: plan.total_distance_m,
-        route_duration_s: plan.total_travel_time_s,
-        route_computed_at: new Date(),
-        route_plan: plan,
-        route_version: { increment: 1 },
-        route_last_reason: reason,
-      },
-    }),
-  ]);
-  return { applied: true, plan };
+  return calculateSlot(slot, { ...options, reason: options.reason || 'manual_reorder' }, requested);
 }
 
 async function optimizeScheduledSlots({ timeSlotIds = [], warehouseAddress = DEFAULT_WAREHOUSE_ADDRESS, warehouseCoords = null } = {}) {
@@ -410,6 +414,10 @@ module.exports = {
   DEFAULT_WAREHOUSE_ADDRESS,
   MIN_IMPROVEMENT_SECONDS,
   MIN_IMPROVEMENT_RATIO,
+  ORDER_GRACE_SECONDS,
+  DEFAULT_GRACE_SECONDS,
+  graceSecondsFrom,
+  loadGraceSeconds,
   shouldApplyDynamicRoute,
   evaluateSequence,
   selectBestSequence,

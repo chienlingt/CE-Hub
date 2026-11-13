@@ -10,6 +10,8 @@ const { unitsFor, summarizeUnits } = require('./orderProductUnits');
 const { recordPickedMilestone } = require('./odooProgressService');
 const { assertIncomingLineIdentity, assertStoredLineIdentity } = require('./odooLineIdentity');
 const { saveChangeRequest, approvalBlockers } = require('./odooChangeReviewService');
+const { queueAddress } = require('./routeGeocodeCache');
+const { getOrderAddress } = require('./googleRoutingService');
 
 const IN_MOTION_STATUSES = ['Scheduled', 'Loaded', 'Delivering', 'In Progress', 'Installing', 'Delivered', 'Failed', 'Cancelled', 'Completed'];
 
@@ -146,6 +148,7 @@ async function ingestOrder(payload, db, { createOnly = false, approvedChange = f
 
     const lineResult = await mergeOrderLines(existing.id, order_lines, odoo_order_ref, db, ready);
 
+    await queueAddress(getOrderAddress({ ...existing, ...changes }), db);
     return { success: true, action: 'updated', order_id: existing.id, address_changed: !!addressChanged, lines: lineResult };
   }
 
@@ -202,6 +205,7 @@ async function ingestOrder(payload, db, { createOnly = false, approvedChange = f
     },
   });
 
+  await queueAddress(getOrderAddress(order), db);
   return { success: true, action: 'created', order_id: order.id };
 }
 

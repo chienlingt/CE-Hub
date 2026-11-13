@@ -2,10 +2,9 @@
 //
 // Route Optimisation (B.2) — Google Maps API implementation.
 //
-// Owns exactly six responsibilities, called once per scheduler run by
-// scheduler.js (B.1) via planRoutes(), never inside the per-timeslot
-// fitting loop — every Google call costs money, so this module is
-// deliberately written to make each geocode/route call exactly once.
+// Supplies clustering estimates and the forecast leg requests used by B.2.
+// Final old/new route evaluation makes additional calls at predicted leg
+// departures; only address geocoding is reused through the durable cache.
 //
 //   1. Convert a delivery address into GPS coordinates (Geocoding API)
 //   2. Group nearby orders by real road travel time (Distance Matrix API)
@@ -15,14 +14,12 @@
 //   6. Fall back to straight-line distance if Google is unreachable
 //
 // Requires GOOGLE_MAPS_SERVER_KEY in server/.env. If unset, every function
-// falls back to the Haversine estimate so the scheduler keeps working
-// (degraded, not broken) — matching the existing fallback behaviour of
-// the OSRM-based routingService.js this module replaces.
+// can fall back to Haversine only when valid coordinates are already known.
+// Missing coordinates must be resolved or explicitly flagged for review.
 
 const axios  = require('axios');
-const prisma = require('../prismaClient');
+const { geocodeCachedAddress, readCachedAddress, normalizeAddress, validCoords } = require('./routeGeocodeCache');
 
-const GEOCODE_URL       = 'https://maps.googleapis.com/maps/api/geocode/json';
 const DISTANCE_MATRIX_URL = 'https://maps.googleapis.com/maps/api/distancematrix/json';
 const ROUTES_URL        = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
@@ -76,45 +73,28 @@ function getOrderAddress(order) {
 }
 
 async function geocodeAddress(address) {
-  const key = apiKey();
-  if (!key) throw new Error('GOOGLE_MAPS_SERVER_KEY not configured');
-
-  const res = await axios.get(GEOCODE_URL, {
-    params:  { address: `${address}, Malaysia`, key },
-    timeout: 5000,
-  });
-
-  const result = res.data?.results?.[0];
-  if (!result) throw new Error(`Geocoding failed for address: ${address}`);
-
-  return { lat: result.geometry.location.lat, lon: result.geometry.location.lng };
+  return geocodeCachedAddress(address);
 }
 
 /**
- * Resolve coordinates for one order, preferring the permanent buildings
- * cache over a fresh Geocoding API call. Writes the result back to
- * buildings.latitude/longitude on first lookup so it is never paid for
- * again (fixes the "geocode cache lost on restart" problem the old
- * in-memory-only OSRM cache had).
+ * Resolve an exact full address through the expiring durable cache. Legacy
+ * building coordinates require an exact address match, not just a name.
  */
 async function resolveOrderCoords(order) {
+  const cached = await cachedOrderCoords(order);
+  if (cached) return cached;
+  return geocodeAddress(getOrderAddress(order));
+}
+
+async function cachedOrderCoords(order) {
   const building = order.buildings;
 
-  if (building?.latitude != null && building?.longitude != null) {
+  // Never reuse a building-name match for an unrelated/changed street address.
+  if (building?.address && normalizeAddress(building.address) === normalizeAddress(getOrderAddress(order)) && validCoords({ lat: building.latitude, lon: building.longitude })) {
     return { lat: Number(building.latitude), lon: Number(building.longitude) };
   }
 
-  const address = getOrderAddress(order);
-  const coords  = await geocodeAddress(address);
-
-  if (building?.id) {
-    await prisma.buildings.update({
-      where: { id: building.id },
-      data:  { latitude: coords.lat, longitude: coords.lon },
-    }).catch(e => console.warn(`[GoogleRouting] Failed to cache coords for building ${building.id}:`, e.message));
-  }
-
-  return coords;
+  return readCachedAddress(getOrderAddress(order));
 }
 
 // ── 2. Group nearby orders by real travel time (Distance Matrix, batched) ──
@@ -124,26 +104,10 @@ async function resolveOrderCoords(order) {
  * the old pattern of one call per pair — this is the single biggest cost
  * lever versus the previous per-pair OSRM approach.
  */
-async function buildTravelTimeMatrix(coordsList) {
-  const key = apiKey();
-  if (!key || coordsList.length === 0) return null;
-
-  const points = coordsList.map(c => `${c.lat},${c.lon}`).join('|');
-
-  const res = await axios.get(DISTANCE_MATRIX_URL, {
-    params: {
-      origins:      points,
-      destinations: points,
-      key,
-      mode: 'driving',
-    },
-    timeout: 10000,
-  });
-
-  if (res.data?.status !== 'OK') throw new Error(`Distance Matrix error: ${res.data?.status}`);
-
-  // rows[i].elements[j].duration.value → seconds from point i to point j
-  return res.data.rows.map(row => row.elements.map(el => el.duration?.value ?? null));
+async function buildTravelTimeMatrix(coordsList, departureTime = 'now') {
+  if (!apiKey() || !coordsList.length) return null;
+  const metrics = await buildTravelMetricsMatrix(coordsList, departureTime);
+  return metrics.durations;
 }
 
 /** Road-time and road-distance matrices. Traffic-aware Distance Matrix calls
@@ -227,12 +191,12 @@ async function computeOrderedRoute(originCoords, orderedStops, departureTime = '
   };
 }
 
-async function groupNearbyOrders(ordersWithCoords) {
+async function groupNearbyOrders(ordersWithCoords, departureTime) {
   if (ordersWithCoords.length <= 1) return [ordersWithCoords];
 
   let matrix;
   try {
-    matrix = await buildTravelTimeMatrix(ordersWithCoords.map(o => o.coords));
+    matrix = await buildTravelTimeMatrix(ordersWithCoords.map(o => o.coords), departureTime);
   } catch (err) {
     console.warn('[GoogleRouting] Distance Matrix failed, falling back to Haversine clustering:', err.message);
     matrix = null;
@@ -290,6 +254,8 @@ function decodePolylinePlaceholder(encoded) {
 async function computeClusterRoute(warehouseCoords, clusterOrders) {
   const key = apiKey();
   if (!key) throw new Error('GOOGLE_MAPS_SERVER_KEY not configured');
+  const traffic = { routingPreference: 'TRAFFIC_AWARE_OPTIMAL', trafficModel: GOOGLE_TRAFFIC_MODEL,
+    departureTime: new Date(predictiveDeparture(clusterOrders[0]?.preferred_timeslot || 'now')).toISOString() };
 
   if (clusterOrders.length === 1) {
     // Single stop — no waypoint optimisation needed, just warehouse -> stop.
@@ -298,6 +264,7 @@ async function computeClusterRoute(warehouseCoords, clusterOrders) {
       destination: { location: { latLng: { latitude: clusterOrders[0].coords.lat, longitude: clusterOrders[0].coords.lon } } },
       travelMode:  'DRIVE',
       polylineQuality: 'OVERVIEW',
+      ...traffic,
     };
     const res = await axios.post(ROUTES_URL, body, {
       headers: {
@@ -335,6 +302,8 @@ async function computeClusterRoute(warehouseCoords, clusterOrders) {
     travelMode:            'DRIVE',
     optimizeWaypointOrder: true,
     polylineQuality:       'OVERVIEW',
+    routingPreference: 'TRAFFIC_AWARE',
+    departureTime: traffic.departureTime,
   };
 
   const res = await axios.post(ROUTES_URL, body, {
@@ -449,20 +418,32 @@ async function planRoutes(orders, warehouseAddress) {
 
   // 1. Geocode every order (cached — most calls should hit buildings.latitude/longitude)
   const ordersWithCoords = [];
+  const unresolved = [];
   for (const order of orders) {
     try {
       const coords = await resolveOrderCoords(order);
       ordersWithCoords.push({ ...order, coords });
     } catch (err) {
-      console.warn(`[GoogleRouting] Geocode failed for order ${order.id}, excluding from this run:`, err.message);
+      console.warn(`[GoogleRouting] Geocode failed for order ${order.id}; keeping it visible for review.`);
+      unresolved.push(order);
     }
   }
 
   // 2. Group nearby orders
-  const clusters = await groupNearbyOrders(ordersWithCoords);
+  // These are pending orders for potentially different sessions. Forecast each
+  // requested session separately, not the traffic at the 5 PM scheduler run.
+  const groups = new Map();
+  ordersWithCoords.forEach(order => {
+    const departure = order.preferred_timeslot || order.scheduled_start_date_time;
+    const key = departure ? new Date(departure).toISOString() : 'unconfirmed';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(order);
+  });
+  const clusters = [];
+  for (const [departure, group] of groups) clusters.push(...await groupNearbyOrders(group, departure === 'unconfirmed' ? 'now' : departure));
 
   // 3 & 4. Sequence + per-leg timing for each cluster
-  const results = [];
+  const results = unresolved.map(order => ({ orders: assignLoadingSequence([order]), legDurationsSec: [17 * 60], legDistancesM: [0], totalDistanceM: 0, totalDurationSec: 17 * 60, polyline: null, usedFallback: true, needs_review: true, reason: 'UNRESOLVED_ADDRESS' }));
   for (const cluster of clusters) {
     try {
       const { orderSequence, legDurationsSec, legDistancesM, totalDistanceM, totalDurationSec, polyline } =
@@ -507,4 +488,5 @@ module.exports = {
   buildTravelMetricsMatrix,
   computeOrderedRoute,
   predictiveDeparture,
+  getCachedOrderCoords: cachedOrderCoords,
 };

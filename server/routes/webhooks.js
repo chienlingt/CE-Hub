@@ -52,6 +52,10 @@ async function handleOrderWebhook(req, res) {
     }
 
     console.log(`[Odoo Webhook] ${result.action} ${name} → local id ${result.order_id}`);
+    // Import has committed: geocode asynchronously, never hold the Odoo response
+    // or the preparation/appointment transaction open for a Google request.
+    setImmediate(() => require('../services/routeGeocodeCache').processGeocodeQueue()
+      .catch(() => console.warn('[Geocoding] New order queued for the minute worker.')));
     const status = result.action === 'previously_received' ? 200 : 202;
     return res.status(status).json(result);
   } catch (err) {

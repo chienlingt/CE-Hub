@@ -2,6 +2,20 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model route_geocode_cache {
+  address_key   String    @id @db.VarChar(64)
+  address       String
+  latitude      Float?
+  longitude     Float?
+  expires_at    DateTime?
+  next_retry_at DateTime  @default(now())
+  attempts      Int       @default(0)
+  last_error    String?
+  updated_at    DateTime  @default(now()) @updatedAt
+
+  @@index([next_retry_at])
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

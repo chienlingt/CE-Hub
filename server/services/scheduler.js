@@ -7,7 +7,7 @@ const prisma = require('../prismaClient');
 const { SLOT_HORIZON_DAYS, horizonDates, buildMissingSlots } = require('./slotGeneration');
 const { releaseSlotAssignment } = require('./slotRelease');
 const { planRoutes } = require('./googleRoutingService');
-const { optimizeScheduledSlots } = require('./intelligentRouteOptimizationService');
+const { optimizeScheduledSlots, graceSecondsFrom } = require('./intelligentRouteOptimizationService');
 
 dayjs.extend(weekday);
 dayjs.extend(isSameOrAfter);
@@ -189,7 +189,7 @@ async function scheduleOrders(options = {}) {
 
     // B.2 authoritative post-pass: B.1 assignments are now fixed. Optimise
     // sequence/ETA/loading only within each assigned Team + Truck + Time Slot.
-    await optimizeScheduledSlots({
+    results.routeOptimization = await optimizeScheduledSlots({
       timeSlotIds: [...new Set(results.scheduled.map(o => o.time_slot_id).filter(Boolean))],
       warehouseAddress: config.warehouse_address || DEFAULT_WAREHOUSE_ADDRESS,
       warehouseCoords: config.warehouse_latitude != null && config.warehouse_longitude != null
@@ -651,6 +651,8 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
   const unscheduled = [];
   let installationSchedulesCreated = 0;
   let installationTeamIndex = 0;
+  // Gap after each order: the admin setting scheduler_config.grace_minutes (falls back to the spec default).
+  const ORDER_GRACE_SECONDS = graceSecondsFrom(config);
 
   // Process each pre-planned route
   for (const plan of routePlans) {
@@ -682,7 +684,7 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
       // Calculate available start time and remaining duration
       let availableStartTime = slotStart.clone();
       if (existingOrdersCheck.length > 0) {
-        const lastOrderEnd = dayjs(existingOrdersCheck[0].scheduled_end_date_time);
+        const lastOrderEnd = dayjs(existingOrdersCheck[0].scheduled_end_date_time).add(ORDER_GRACE_SECONDS, 'second');
         if (lastOrderEnd.isAfter(slotStart)) {
           availableStartTime = lastOrderEnd;
         }
@@ -706,7 +708,7 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
         }
 
         // Order must fit in slot (delivery + installation time)
-        const totalTime = (order.calculatedServiceTime || order.calculatedDeliveryTime);
+        const totalTime = (order.calculatedServiceTime || order.calculatedDeliveryTime) + ORDER_GRACE_SECONDS / 60;
         return totalTime <= slotDuration;
       });
 
@@ -765,7 +767,7 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
           }
         }
 
-        if (orderEnd.isAfter(slotEnd)) {
+        if (orderEnd.add(ORDER_GRACE_SECONDS, 'second').isAfter(slotEnd)) {
           console.log(`   Order ${order.id} exceeds slot time, skipping remaining orders`);
           break;
         }
@@ -840,7 +842,7 @@ async function optimizeAndSchedule(routePlans, timeslots, teams, trucks, truckCa
         }
 
         // Update current time for next order
-        currentTime = orderEnd.clone();
+        currentTime = orderEnd.add(ORDER_GRACE_SECONDS, 'second');
       }
 
       console.log(`   [Scheduler] Total travel time for this route: ${Math.round(travelTimeAccumulated)} minutes (with traffic)`);
