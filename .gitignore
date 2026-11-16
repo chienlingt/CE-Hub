@@ -62,3 +62,8 @@ graphify-out
 
 # Local Sync Monitor preview seed
 /server/seedSyncMonitor.js
+
+# Local demo seed scripts (not for GitHub)
+/server/seedItemPoints.js
+/server/seedPerformanceDemo.js
+/server/seedArrivalDemo.js

@@ -9,10 +9,7 @@
     "seed:driver": "node seedDriverTestData.js",
     "seed:demo": "node seedDemo.js",
     "seed:scheduler": "node seedSchedulerDemo.js",
-    "backfill:incentives": "node backfillIncentivePoints.js",
-    "seed:items": "node seedItemPoints.js",
-    "seed:performance": "node seedPerformanceDemo.js",
-    "seed:arrival": "node seedArrivalDemo.js"
+    "backfill:incentives": "node backfillIncentivePoints.js"
   },
   "keywords": [],
   "author": "",
