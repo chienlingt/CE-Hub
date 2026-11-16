@@ -8,8 +8,7 @@ export const SUMMARY_COLUMNS = [
   { key: 'teams', label: 'Team' },
   { key: 'completed_orders', label: 'Orders' },
   { key: 'item_points', label: 'Item pts' },
-  { key: 'bonus_points', label: 'Bonus pts' },
-  { key: 'manual_points', label: 'Manual pts' },
+  { key: 'manual_points', label: 'Extra pts' },
   { key: 'total_points', label: 'Total pts' },
   { key: 'incentive_rm', label: 'Incentive (RM)' },
 ];
@@ -50,7 +49,7 @@ function save(blob, filename) {
 
 export function exportCsv(rows, filename) {
   // BOM so Excel reads UTF-8 names correctly.
-  save(new Blob(['﻿', buildCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename);
+  save(new Blob(['\ufeff', buildCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename);
 }
 
 export function exportPdf(rows, { title, subtitle, filename }) {
@@ -58,7 +57,7 @@ export function exportPdf(rows, { title, subtitle, filename }) {
   const width = doc.internal.pageSize.getWidth();
   const height = doc.internal.pageSize.getHeight();
   const margin = 36;
-  const widths = [36, 150, 90, 100, 48, 56, 56, 60, 60, 82];
+  const widths = [36, 160, 100, 120, 52, 60, 60, 64, 84];
   const lineHeight = 18;
   const data = summaryRows(rows);
   let y = margin;
@@ -88,6 +87,6 @@ export function exportPdf(rows, { title, subtitle, filename }) {
     });
     y += lineHeight;
   });
-  if (!data.length) doc.text('No completed orders in this period.', margin + 4, y);
+  if (!data.length) doc.text('No completed deliveries in this period.', margin + 4, y);
   doc.save(filename);
 }

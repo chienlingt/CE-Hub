@@ -30,7 +30,7 @@ export default function BottomNav({
             >
               <Icon size={20} className="flex-shrink-0" />
               <span className="text-[10px] font-medium truncate max-w-full leading-tight">
-                {shortNavLabel(item.title)}
+                {item.shortTitle || shortNavLabel(item.title)}
               </span>
             </button>
           );

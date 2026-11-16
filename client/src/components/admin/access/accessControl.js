@@ -40,16 +40,21 @@ const mockNavItems = [
 ];
 
 // Keep the additional edit capability beside Schedule, not as a separate page.
+// ADMIN_NAVIGATION is the admin sidebar, which has no My Performance (it is a crew
+// member's personal page), so it is added here: every role except Admin can be granted it.
 const orderedNavItems = ADMIN_NAVIGATION.flatMap(item => {
   const permission = { ...mockNavItems.find(nav => nav.key === item.key), name: item.title };
-  return item.key === 'schedule'
-    ? [permission, mockNavItems.find(nav => nav.key === 'schedule_edit')]
-    : [permission];
+  if (item.key === 'schedule') return [permission, mockNavItems.find(nav => nav.key === 'schedule_edit')];
+  if (item.key === 'access') return [mockNavItems.find(nav => nav.key === 'my_performance'), permission];
+  return [permission];
 });
+
+// What a role's permission grid offers. Admin does not get My Performance, which is
+// the personal page of crew members.
+const navItemsFor = role => (isAdminRole(role) ? orderedNavItems.filter(item => item.key !== 'my_performance') : orderedNavItems);
 
 export default function RoleAccessControl() {
   const [roles, setRoles] = useState([]); // [{ id, name, permissions }]
-  const navItems = orderedNavItems;
   const [accessControl, setAccessControl] = useState({}); // { roleId: [perm,...] }
   const [originalAccessControl, setOriginalAccessControl] = useState({});
   const [selectedRole, setSelectedRole] = useState(null);
@@ -90,6 +95,7 @@ export default function RoleAccessControl() {
         const map = {};
         loadedRoles.forEach(r => {
           map[r.id] = Array.isArray(r.permissions) ? r.permissions.slice() : [];
+          if (isAdminRole(r) && !map[r.id].includes('access')) map[r.id].push('access'); // always on for Admin
         });
 
         setAccessControl(map);
@@ -124,7 +130,8 @@ export default function RoleAccessControl() {
   }, [hasChanges]);
 
   const toggleAccess = (roleId, navKey) => {
-    if (isSaving || isAdminRole(roles.find(role => role.id === roleId))) return;
+    // Admin can change every section except Access Control, so it can never be locked out.
+    if (isSaving || (navKey === 'access' && isAdminRole(roles.find(role => role.id === roleId)))) return;
     setNotice('');
     setAccessControl(prev => {
       let next = prev[roleId]?.includes(navKey)
@@ -263,7 +270,7 @@ export default function RoleAccessControl() {
   };
 
   const getAccessCount = (roleId) => {
-    return isAdminRole(getRoleInfo(roleId)) ? navItems.length : navItems.filter(item => accessControl[roleId]?.includes(item.key)).length;
+    return navItemsFor(getRoleInfo(roleId)).filter(item => accessControl[roleId]?.includes(item.key)).length;
   };
 
   const selectedRoleInfo = selectedRole ? getRoleInfo(selectedRole) : null;
@@ -454,16 +461,18 @@ export default function RoleAccessControl() {
                 </div>
               </div>
 
-              {isAdminRole(selectedRoleInfo) && <p className="mb-4 text-sm text-gray-500">Admin always has full access.</p>}
+              {isAdminRole(selectedRoleInfo) && <p className="mb-4 text-sm text-gray-500">Access Control always stays on for Admin.</p>}
               <fieldset disabled={isSaving} className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {navItems.map(navItem => {
+                {navItemsFor(selectedRoleInfo).map(navItem => {
                   const key = navItem.key;
-                  const hasAccess = isAdminRole(selectedRoleInfo) || (selectedRole ? (accessControl[selectedRole] || []).includes(key) : false);
+                  const locked = isAdminRole(selectedRoleInfo) && key === 'access'; // cannot be turned off for Admin
+                  const hasAccess = locked || (selectedRole ? (accessControl[selectedRole] || []).includes(key) : false);
 
                   return (
                     <button
                       type="button"
-                      disabled={isSaving || !selectedRole || isAdminRole(selectedRoleInfo)}
+                      disabled={isSaving || !selectedRole || locked}
+                      title={locked ? 'Always on for Admin' : undefined}
                       aria-pressed={hasAccess}
                       key={key}
                       className={`text-left p-3 rounded-lg border transition-all disabled:cursor-default ${

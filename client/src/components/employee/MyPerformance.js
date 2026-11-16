@@ -28,12 +28,9 @@ export default function MyPerformance() {
   const setMonth = value => { if (value) { const [y, m] = value.split('-').map(Number); setRange(monthRange(y, m - 1)); } };
   const summary = data?.summary;
   const cards = summary ? [
-    ['Orders completed', summary.completed_orders],
-    ['Item points', formatPoints(summary.item_points)],
-    ['Bonus points', formatPoints(summary.bonus_points)],
-    ['Extra points', formatPoints(summary.manual_points)],
-    ['Total points', formatPoints(summary.total_points)],
-    ['Incentive', `RM ${summary.incentive_rm.toFixed(2)}`],
+    ['Orders completed', summary.completed_orders, null],
+    ['Total points', formatPoints(summary.total_points), `Items ${formatPoints(summary.item_points)} · Extra ${formatPoints(summary.manual_points)}`],
+    ['Incentive', `RM ${summary.incentive_rm.toFixed(2)}`, `RM ${Number(data.rm_per_point).toFixed(2)} per point`],
   ] : [];
 
   return (
@@ -54,16 +51,16 @@ export default function MyPerformance() {
 
       {data && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {cards.map(([name, value]) => (
+          <div className="grid gap-3 sm:grid-cols-3">
+            {cards.map(([name, value, note]) => (
               <div key={name} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <div className="text-xs text-gray-500">{name}</div>
-                <div className="text-xl font-bold text-gray-900">{value}</div>
+                <div className="text-xs font-medium text-gray-500">{name}</div>
+                <div className="mt-1 text-2xl font-bold text-gray-900">{value}</div>
+                <div className="mt-1 min-h-[1rem] text-xs text-gray-500">{note}</div>
               </div>
             ))}
           </div>
           <OrderPointsList orders={data.orders} />
-          <p className="text-xs text-gray-500">Points are earned when an order is delivered. Extra points are added by your admin for the whole order. Incentive uses the current RM-per-point rate.</p>
         </>
       )}
     </div>

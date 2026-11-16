@@ -31,8 +31,8 @@ const REACT_APP_API_BASE_URL = getApiBaseUrl();
 const isDemoAuth = () => process.env.REACT_APP_DEMO_AUTH === '1';
 
 // Must stay in sync with the keys of `navigationData` in components/Layout.js.
-// Layout also short-circuits on role === 'admin', so the role below is what
-// actually unlocks the nav; this list keeps hasPermission() honest too.
+// The Admin role follows its saved permissions like any role (Layout always adds
+// Access Control), so this list is the demo build's stand-in for them.
 const DEMO_PERMISSIONS = [
   'dashboard', 'driver', 'schedule', 'schedule_edit', 'info', 'cases',
   'access', 'delivery', 'customer', 'scanning', 'order',

@@ -33,15 +33,14 @@ import { selectTrayBlocks } from '../../../utils/schedule/scheduleSelectors';
 export const SCHEDULE_EDIT_PERMISSION = 'schedule_edit';
 
 /**
- * Admins and roles granted `schedule_edit` may change the schedule. Rendered
- * outside an AuthProvider (unit tests, isolated demos) it stays editable.
+ * Roles granted `schedule_edit` may change the schedule. That includes Admin, whose
+ * saved permissions carry it by default and can be changed in Access Control.
+ * Rendered outside an AuthProvider (unit tests, isolated demos) it stays editable.
  */
 export function useCanEditSchedule() {
   const auth = useAuth();
   if (!auth) return true;
-  const role = auth.employeeData?.role;
-  const roleName = String((typeof role === 'object' ? role?.name : role) ?? '').trim().toLowerCase();
-  return roleName === 'admin' || auth.hasPermission?.('admin') || auth.hasPermission?.(SCHEDULE_EDIT_PERMISSION);
+  return auth.hasPermission?.('admin') || auth.hasPermission?.(SCHEDULE_EDIT_PERMISSION);
 }
 
 function WorkspaceInner() {

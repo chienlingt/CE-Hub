@@ -1,93 +1,90 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Download, FileText, Trophy } from 'lucide-react';
-import Modal from '../../common/Modal';
-import RulesPanel from '../../performance/RulesPanel';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Download, Search } from 'lucide-react';
+import RateEditor from '../../performance/RateEditor';
 import OrderPointsList, { formatPoints } from '../../performance/OrderPointsList';
 import { getAllTeams } from '../../../services/informationService';
-import {
-  addOrderPoints, getEmployeePerformance, getPerformanceRanking, reverseOrderPoints,
-} from '../../../services/performanceApi';
+import { getEmployeePerformance, getPerformanceRanking, setOrderExtra } from '../../../services/performanceApi';
 import { exportCsv, exportPdf } from '../../../utils/performanceExport';
 
-// FR-10-002/003/005: ranked points, filters by team/role/month, CSV + PDF export.
-// FR-10-001: rules panel. Per-order extra points and per-item points are in the
-// expanded employee row.
+// Ranked points per employee (FR-10-002/003), with CSV and PDF export (FR-10-005).
+// Click a person to see their completed orders; an admin edits each order's extra
+// points right there. Points per item are set in Information > Item.
 
 const pad = n => String(n).padStart(2, '0');
 const isoDate = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const monthRange = (year, month) => ({ from: isoDate(new Date(year, month, 1)), to: isoDate(new Date(year, month + 1, 0)) });
-const monthValue = from => (from ? from.slice(0, 7) : '');
 
-const ROLE_OPTIONS = [
-  { value: '', label: 'All roles' },
-  { value: 'driver', label: 'Driver' },
-  { value: 'assistant', label: 'Assistant' },
-  { value: 'installer', label: 'Installer' },
-];
+// The last 12 months, newest first, plus "All time".
+function periodOptions() {
+  const now = new Date();
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    return { value: `${date.getFullYear()}-${pad(date.getMonth() + 1)}`, label: date.toLocaleDateString('en-MY', { month: 'long', year: 'numeric' }) };
+  });
+  return [...months, { value: 'all', label: 'All time' }];
+}
+function rangeOf(period) {
+  if (period === 'all') return { from: '', to: '' };
+  const [year, month] = period.split('-').map(Number);
+  return { from: isoDate(new Date(year, month - 1, 1)), to: isoDate(new Date(year, month, 0)) };
+}
 
-function Select({ label, value, onChange, children }) {
+const ROLE_LABEL = { driver: 'Driver', assistant: 'Assistant', installer: 'Installer' };
+const MEDAL = { 1: 'bg-yellow-100 text-yellow-800', 2: 'bg-gray-200 text-gray-700', 3: 'bg-orange-100 text-orange-800' };
+const CONTROL = 'h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200';
+
+function ExportMenu({ disabled, onCsv, onPdf }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = event => { if (event.type === 'keydown' ? event.key === 'Escape' : !ref.current?.contains(event.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close); };
+  }, [open]);
   return (
-    <label className="text-xs font-medium text-gray-600">
-      {label}
-      <select value={value} onChange={event => onChange(event.target.value)}
-        className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
-        {children}
-      </select>
-    </label>
+    <div ref={ref} className="relative">
+      <button type="button" disabled={disabled} onClick={() => setOpen(v => !v)} aria-haspopup="menu" aria-expanded={open}
+        className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+        <Download className="h-4 w-4" /> Export <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-20 mt-1 w-32 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+          {[['CSV', onCsv], ['PDF', onPdf]].map(([label, run]) => (
+            <button key={label} type="button" role="menuitem" onClick={() => { setOpen(false); run(); }}
+              className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">{label}</button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-function AddPointsModal({ order, onClose, onSubmit }) {
-  const [points, setPoints] = useState('');
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const submit = async event => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try { await onSubmit(order, points, reason); } catch (e) { setError(e.message); setBusy(false); }
-  };
+function Card({ label, children, footer }) {
   return (
-    <Modal show={!!order} onClose={onClose} maxWidth="max-w-md">
-      <form onSubmit={submit} className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900">Extra points for {order?.do_ref || 'this order'}</h3>
-        <p className="text-xs text-gray-500">Applies to the whole order: every crew member on it receives these points. Use a negative number to deduct.</p>
-        <label className="block text-sm font-medium text-gray-700">Points
-          <input type="number" step="0.01" required autoFocus value={points} onChange={e => setPoints(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
-        </label>
-        <label className="block text-sm font-medium text-gray-700">Reason
-          <textarea required maxLength={500} rows={3} value={reason} onChange={e => setReason(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
-        </label>
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-full px-4 py-2 text-sm text-gray-600">Cancel</button>
-          <button type="submit" disabled={busy} className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-            {busy ? 'Saving...' : 'Add points'}
-          </button>
-        </div>
-      </form>
-    </Modal>
+    <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+      <div className="text-xs font-medium text-gray-500">{label}</div>
+      <div className="mt-1 text-2xl font-bold text-gray-900">{children}</div>
+      {footer && <div className="mt-1 min-h-[1.5rem]">{footer}</div>}
+    </div>
   );
 }
 
 export default function EmployeePerformance() {
-  const today = new Date();
-  const [range, setRange] = useState(() => monthRange(today.getFullYear(), today.getMonth()));
+  const periods = useMemo(periodOptions, []);
+  const [period, setPeriod] = useState(periods[0].value);
   const [team, setTeam] = useState('');
   const [role, setRole] = useState('');
   const [search, setSearch] = useState('');
   const [teams, setTeams] = useState([]);
-  const [ranking, setRanking] = useState({ rows: [], rm_per_point: 0 });
+  const [ranking, setRanking] = useState({ rows: [], rm_per_point: 0, estimated_orders: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showRules, setShowRules] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(null);
-  const [addFor, setAddFor] = useState(null);
+
+  const range = useMemo(() => rangeOf(period), [period]);
 
   useEffect(() => { getAllTeams().then(setTeams).catch(() => setTeams([])); }, []);
 
@@ -96,142 +93,110 @@ export default function EmployeePerformance() {
     setError(null);
     return getPerformanceRanking({ ...range, team, role })
       .then(setRanking)
-      .catch(e => { setError(e.status === 401 || e.status === 403 ? 'Sign in again with an admin account to see performance.' : e.message); setRanking({ rows: [], rm_per_point: 0 }); })
+      .catch(e => { setError(e.status === 401 || e.status === 403 ? 'Sign in again with an admin account to see performance.' : e.message); setRanking({ rows: [], rm_per_point: 0, estimated_orders: 0 }); })
       .finally(() => setLoading(false));
   }, [range, team, role]);
   useEffect(() => { loadRanking(); }, [loadRanking]);
 
   const loadDetail = useCallback(employeeId => {
-    setDetail(null);
     setDetailError(null);
     return getEmployeePerformance(employeeId, range).then(setDetail).catch(e => setDetailError(e.message));
   }, [range]);
-  useEffect(() => { if (expanded) loadDetail(expanded); }, [expanded, loadDetail]);
+  useEffect(() => { setDetail(null); if (expanded) loadDetail(expanded); }, [expanded, loadDetail]);
 
   const rows = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return term ? ranking.rows.filter(r => [r.name, r.job_role, ...(r.teams || [])].some(v => String(v || '').toLowerCase().includes(term))) : ranking.rows;
+    return term ? ranking.rows.filter(r => [r.name, ...(r.teams || []), ...(r.award_roles || [])].some(v => String(v || '').toLowerCase().includes(term))) : ranking.rows;
   }, [ranking, search]);
-  const totals = useMemo(() => rows.reduce((t, r) => ({ orders: t.orders + r.completed_orders, points: t.points + r.total_points, rm: t.rm + r.incentive_rm }), { orders: 0, points: 0, rm: 0 }), [rows]);
+  const totals = useMemo(() => rows.reduce((t, r) => ({ orders: t.orders + r.completed_orders, rm: t.rm + r.incentive_rm }), { orders: 0, rm: 0 }), [rows]);
 
-  const refresh = async () => { await loadRanking(); if (expanded) await loadDetail(expanded); };
-  const submitPoints = async (order, points, reason) => { await addOrderPoints(order.order_id, points, reason); setAddFor(null); await refresh(); };
-  const reverse = async adjustment => {
-    if (!window.confirm('Reverse these extra points? A reversing entry is added; the original stays in the history.')) return;
-    try { await reverseOrderPoints(adjustment.id); await refresh(); } catch (e) { setDetailError(e.message); }
+  // Setting extra points saves an order's points if they were only estimated, so reload both views.
+  const setExtra = async (order, points) => {
+    await setOrderExtra(order.order_id, points);
+    await Promise.all([loadRanking(), expanded ? loadDetail(expanded) : null]);
   };
 
-  const label = `${range.from || 'start'} to ${range.to || 'today'}`;
-  const filenameBase = `employee-performance-${range.from || 'all'}_${range.to || 'all'}`;
-  const setMonth = value => { if (value) { const [y, m] = value.split('-').map(Number); setRange(monthRange(y, m - 1)); } };
+  const periodLabel = periods.find(p => p.value === period)?.label || period;
+  const filename = `employee-performance-${period}`;
   const teamName = teams.find(t => t.id === team)?.team_type;
-  const subtitle = `Period ${label}${teamName ? ` · Team ${teamName}` : ''}${role ? ` · Role ${role}` : ''} · RM ${ranking.rm_per_point} per point`;
+  const subtitle = `${periodLabel}${teamName ? ` · ${teamName}` : ''}${role ? ` · ${ROLE_LABEL[role]}` : ''} · RM ${ranking.rm_per_point} per point`;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-xs font-medium text-gray-600">Month
-          <input type="month" value={monthValue(range.from)} onChange={e => setMonth(e.target.value)}
-            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
-        </label>
-        <label className="text-xs font-medium text-gray-600">From
-          <input type="date" value={range.from || ''} max={range.to || undefined} onChange={e => setRange(r => ({ ...r, from: e.target.value }))}
-            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
-        </label>
-        <label className="text-xs font-medium text-gray-600">To
-          <input type="date" value={range.to || ''} min={range.from || undefined} onChange={e => setRange(r => ({ ...r, to: e.target.value }))}
-            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
-        </label>
-        <button type="button" onClick={() => setRange({ from: '', to: '' })} className="rounded-full border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">All time</button>
-        <Select label="Team" value={team} onChange={setTeam}>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <select aria-label="Period" value={period} onChange={e => setPeriod(e.target.value)} className={CONTROL}>
+          {periods.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
+        <select aria-label="Team" value={team} onChange={e => setTeam(e.target.value)} className={CONTROL}>
           <option value="">All teams</option>
           {teams.map(t => <option key={t.id} value={t.id}>{t.team_type || t.id}</option>)}
-        </Select>
-        <Select label="Role" value={role} onChange={setRole}>
-          {ROLE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
-        <label className="text-xs font-medium text-gray-600">Search
-          <input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Employee or team"
-            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
-        </label>
-        <div className="ml-auto flex gap-2">
-          <button type="button" disabled={!rows.length} onClick={() => exportCsv(rows, `${filenameBase}.csv`)}
-            className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <Download className="h-4 w-4" /> CSV
-          </button>
-          <button type="button" disabled={!rows.length}
-            onClick={() => exportPdf(rows, { title: 'Employee Performance and Incentives', subtitle, filename: `${filenameBase}.pdf` })}
-            className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <FileText className="h-4 w-4" /> PDF
-          </button>
+        </select>
+        <select aria-label="Role" value={role} onChange={e => setRole(e.target.value)} className={CONTROL}>
+          <option value="">All roles</option>
+          {Object.entries(ROLE_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <div className="relative min-w-[12rem] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+          <input type="search" aria-label="Search employees" placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} className={`${CONTROL} w-full pl-9`} />
         </div>
+        <ExportMenu disabled={!rows.length} onCsv={() => exportCsv(rows, `${filename}.csv`)}
+          onPdf={() => exportPdf(rows, { title: 'Employee Performance and Incentives', subtitle, filename: `${filename}.pdf` })} />
       </div>
 
-      <div>
-        <button type="button" onClick={() => setShowRules(v => !v)} aria-expanded={showRules}
-          className="text-sm font-medium text-emerald-700 hover:underline">{showRules ? 'Hide' : 'Edit'} incentive rules</button>
-        {showRules && <div className="mt-3"><RulesPanel onSaved={refresh} /></div>}
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        {[['Employees', rows.length], ['Orders completed', totals.orders], [`Incentive (RM @ ${ranking.rm_per_point}/pt)`, totals.rm.toFixed(2)]].map(([name, value]) => (
-          <div key={name} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-            <div className="text-xs text-gray-500">{name}</div>
-            <div className="text-xl font-bold text-gray-900">{value}</div>
-          </div>
-        ))}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Card label="Employees">{rows.length}</Card>
+        <Card label="Orders completed">{totals.orders}</Card>
+        <Card label="Incentive" footer={<RateEditor rate={ranking.rm_per_point} onSaved={loadRanking} />}>RM {totals.rm.toFixed(2)}</Card>
       </div>
 
       {error && <p role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
 
       <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
             <tr>
-              <th className="w-10 px-3 py-3" />
-              <th className="px-3 py-3 text-left">Rank</th>
+              <th className="w-16 py-3 pl-4 pr-2 text-left">Rank</th>
               <th className="px-3 py-3 text-left">Employee</th>
-              <th className="px-3 py-3 text-left">Role</th>
-              <th className="px-3 py-3 text-left">Team</th>
               <th className="px-3 py-3 text-right">Orders</th>
               <th className="px-3 py-3 text-right">Item pts</th>
-              <th className="px-3 py-3 text-right">Bonus</th>
               <th className="px-3 py-3 text-right">Extra</th>
-              <th className="px-3 py-3 text-right">Total pts</th>
-              <th className="px-3 py-3 text-right">RM</th>
+              <th className="px-3 py-3 text-right" title="Every crew member on an order gets its full points">Total</th>
+              <th className="py-3 pl-3 pr-4 text-right">RM</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {loading && <tr><td colSpan={11} className="px-3 py-6 text-center text-gray-500">Loading...</td></tr>}
-            {!loading && !rows.length && !error && <tr><td colSpan={11} className="px-3 py-6 text-center text-gray-500">No completed orders with points for these filters.</td></tr>}
+            {loading && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>}
+            {!loading && !rows.length && !error && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-500">No completed deliveries for this period.</td></tr>}
             {!loading && rows.map(row => {
               const open = expanded === row.employee_id;
+              const subtitleParts = [(row.award_roles || []).map(r => ROLE_LABEL[r] || r).join(' / '), (row.teams || []).join(', ')].filter(Boolean);
               return (
                 <React.Fragment key={row.employee_id}>
-                  <tr className="hover:bg-gray-50">
+                  <tr onClick={() => setExpanded(open ? null : row.employee_id)} className={`cursor-pointer transition-colors hover:bg-gray-50 ${open ? 'bg-gray-50' : ''}`}>
+                    <td className="py-3 pl-4 pr-2">
+                      <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${MEDAL[row.rank] || 'text-gray-500'}`}>{row.rank}</span>
+                    </td>
                     <td className="px-3 py-3">
-                      <button type="button" onClick={() => setExpanded(open ? null : row.employee_id)} aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} orders for ${row.name}`}
-                        className="text-gray-500 hover:text-gray-800">
-                        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      <button type="button" aria-expanded={open} className="flex items-center gap-2 text-left focus-visible:outline-emerald-600">
+                        {open ? <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />}
+                        <span>
+                          <span className="block font-medium text-gray-900">{row.name}</span>
+                          {subtitleParts.length > 0 && <span className="block text-xs text-gray-500">{subtitleParts.join(' · ')}</span>}
+                        </span>
                       </button>
                     </td>
-                    <td className="px-3 py-3 font-semibold">{row.rank <= 3 ? <Trophy className="inline h-4 w-4 text-yellow-500" aria-hidden="true" /> : null} {row.rank}</td>
-                    <td className="px-3 py-3 font-medium text-gray-900">{row.name}</td>
-                    <td className="px-3 py-3 capitalize text-gray-600">{(row.award_roles || []).join(' / ')}</td>
-                    <td className="px-3 py-3 text-gray-600">{(row.teams || []).join(', ') || '-'}</td>
-                    <td className="px-3 py-3 text-right">{row.completed_orders}</td>
-                    <td className="px-3 py-3 text-right">{formatPoints(row.item_points)}</td>
-                    <td className="px-3 py-3 text-right">{formatPoints(row.bonus_points)}</td>
-                    <td className="px-3 py-3 text-right">{formatPoints(row.manual_points)}</td>
-                    <td className="px-3 py-3 text-right font-semibold text-emerald-700">{formatPoints(row.total_points)}</td>
-                    <td className="px-3 py-3 text-right">{Number(row.incentive_rm).toFixed(2)}</td>
+                    <td className="px-3 py-3 text-right tabular-nums text-gray-700">{row.completed_orders}</td>
+                    <td className="px-3 py-3 text-right tabular-nums text-gray-700">{formatPoints(row.item_points)}</td>
+                    <td className="px-3 py-3 text-right tabular-nums text-gray-700">{formatPoints(row.manual_points)}</td>
+                    <td className="px-3 py-3 text-right font-semibold tabular-nums text-emerald-700">{formatPoints(row.total_points)}</td>
+                    <td className="py-3 pl-3 pr-4 text-right tabular-nums text-gray-700">{Number(row.incentive_rm).toFixed(2)}</td>
                   </tr>
                   {open && (
                     <tr>
-                      <td colSpan={11} className="bg-white px-4 py-4">
+                      <td colSpan={7} className="bg-gray-50 px-4 pb-4 pt-1">
                         {detailError && <p role="alert" className="mb-2 text-sm text-red-600">{detailError}</p>}
-                        {!detail && !detailError && <p className="text-sm text-gray-500">Loading orders...</p>}
-                        {detail && <OrderPointsList orders={detail.orders} onAddPoints={setAddFor} onReverse={reverse} />}
+                        {!detail && !detailError && <p className="py-2 text-sm text-gray-400">Loading…</p>}
+                        {detail && <OrderPointsList orders={detail.orders} onSetExtra={setExtra} />}
                       </td>
                     </tr>
                   )}
@@ -241,9 +206,10 @@ export default function EmployeePerformance() {
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-gray-500">Every crew member on an order receives the full order points. Extra points added to an order go to everyone on it. RM uses the current RM-per-point rate.</p>
 
-      {addFor && <AddPointsModal order={addFor} onClose={() => setAddFor(null)} onSubmit={submitPoints} />}
+      {ranking.estimated_orders > 0 && (
+        <p className="text-xs text-gray-500">{ranking.estimated_orders} order{ranking.estimated_orders === 1 ? '' : 's'} marked Estimated: points not saved yet, using the current item points.</p>
+      )}
     </div>
   );
 }

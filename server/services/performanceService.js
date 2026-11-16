@@ -1,15 +1,17 @@
 // server/services/performanceService.js
 //
 // FR-10 read side and admin writes: ranked performance, per-employee order
-// drill-down, per-order points, incentive rules and manual point adjustments.
+// drill-down, per-order points, the RM rate and the extra points an admin sets on an order.
 //
 // Points come from the order_point_awards snapshot (see incentiveService.js).
-// Manual adjustments apply to the whole order, so every crew member on the order
+// Extra points apply to the whole order, so every crew member on the order
 // receives them in full. RM = total points x the rm_per_point of the rule in
 // force now (it is a presentation rate, not part of the snapshot).
 
 const prisma = require('../prismaClient');
-const { ruleInForce, itemKey, ensureItemRates } = require('./incentiveService');
+const {
+  ruleInForce, itemKey, ensureItemRates, readItemRates, lineName, computeOrderPoints, resolveCrew, awardOrder, COMPLETED_STATUSES,
+} = require('./incentiveService');
 
 const ROLES = ['driver', 'assistant', 'installer'];
 const MAX_ADJUSTMENT = 10000;
@@ -51,9 +53,8 @@ function orderPointsFor(award, manualPoints) {
   const manual = manualPoints || 0;
   return {
     item_points: award.item_points,
-    bonus_points: award.bonus_points,
     manual_points: manual,
-    total_points: round2(award.item_points + award.bonus_points + manual),
+    total_points: round2(award.item_points + manual),
   };
 }
 
@@ -75,6 +76,58 @@ async function loadAdjustments(orderIds, db = prisma) {
   return adjustmentTotals(await db.order_point_adjustments.findMany({ where: { order_id: { in: orderIds } } }));
 }
 
+// ── Completed deliveries without saved points ────────────────────────────────
+// Points are saved when an order completes. Orders completed before that existed
+// (or whose award failed) have no saved points, so they would not show up at all.
+// They are read from the delivered orders and priced live with the current item
+// points, flagged `estimated`. Nothing is written; the backfill saves them.
+
+const ESTIMATE_LIMIT = 500;
+const crewInclude = {
+  order_products: { include: { products: { select: { product_name: true, points_per_item: true } } } },
+  time_slots: { include: { truck: { select: { driver_id: true, assistant_id: true } }, lorry_trip: { select: { driver_id: true, assistant_id: true } } } },
+  installation_schedules: { include: { team: { include: { assignments: { select: { employee_id: true } } } } } },
+  customers: { select: { full_name: true } },
+};
+const memberSelect = { id: true, name: true, display_name: true, email: true, role: { select: { name: true } }, teamAssignments: { select: { team: { select: { id: true, team_type: true } } } } };
+
+// Rule in force when the order completed (newest effective on or before it), else the newest.
+const ruleAt = (rules, at) => rules.find(rule => rule.effective_from <= at) || rules[0] || null;
+
+/** Award-shaped rows (estimated: true) for delivered orders that have no saved points. */
+async function estimateUnawarded({ range, employeeId } = {}, db = prisma) {
+  const statuses = COMPLETED_STATUSES.flatMap(status => [status, status[0].toUpperCase() + status.slice(1)]);
+  const orders = await db.orders.findMany({
+    where: { order_status: { in: statuses }, order_point_awards: { none: {} }, ...(range && { delivery_end_date_time: range }) },
+    include: crewInclude, orderBy: { delivery_end_date_time: 'desc' }, take: ESTIMATE_LIMIT,
+  });
+  if (!orders.length) return [];
+  const [rates, rules] = await Promise.all([
+    readItemRates(orders.flatMap(order => order.order_products.map(lineName)), db),
+    db.incentive_rules.findMany({ where: { active: true }, orderBy: { effective_from: 'desc' } }),
+  ]);
+  const found = [];
+  for (const order of orders) {
+    const completedAt = order.delivery_end_date_time || order.actual_arrival_date_time || order.updated_at || new Date();
+    const rule = ruleAt(rules, completedAt);
+    if (!rule) continue;
+    const points = computeOrderPoints(order.order_products, rule, rates);
+    if (points.item_points === 0) continue; // same as awardOrder: nothing delivered
+    for (const member of resolveCrew(order)) {
+      if (employeeId && member.employee_id !== employeeId) continue;
+      found.push({
+        order_id: order.id, employee_id: member.employee_id, role: member.role, estimated: true,
+        item_points: points.item_points, item_breakdown: points.item_breakdown, awarded_at: completedAt,
+        orders: { odoo_order_ref: order.odoo_order_ref, odoo_sales_ref: order.odoo_sales_ref, delivery_end_date_time: order.delivery_end_date_time, customers: order.customers },
+      });
+    }
+  }
+  const ids = [...new Set(found.map(award => award.employee_id))];
+  const people = ids.length ? await db.employees.findMany({ where: { id: { in: ids } }, select: memberSelect }) : [];
+  const byId = new Map(people.map(person => [person.id, person]));
+  return found.filter(award => byId.has(award.employee_id)).map(award => ({ ...award, employee: byId.get(award.employee_id) }));
+}
+
 /**
  * Ranked performance, one row per employee with at least one award in range.
  * @param {{ from?:string, to?:string, team?:string, role?:string }} filters
@@ -92,28 +145,31 @@ async function getRanking(filters = {}, db = prisma) {
     },
     include: { employee: { select: { id: true, name: true, display_name: true, email: true, role: { select: { name: true } }, teamAssignments: { select: { team: { select: { id: true, team_type: true } } } } } } },
   });
+  const estimated = (await estimateUnawarded({ range }, db)).filter(award =>
+    (!filters.role || award.role === filters.role)
+    && (!filters.team || award.employee.teamAssignments.some(assignment => assignment.team?.id === filters.team)));
   const manual = await loadAdjustments([...new Set(awards.map(award => award.order_id))], db);
   const rule = await ruleInForce(db);
   const rmPerPoint = rule?.rm_per_point ?? 0;
 
   const byEmployee = new Map();
-  for (const award of awards) {
+  for (const award of [...awards, ...estimated]) {
     const points = orderPointsFor(award, manual.get(award.order_id));
     const row = byEmployee.get(award.employee_id) || {
       employee_id: award.employee_id, name: employeeName(award.employee), job_role: award.employee.role?.name || null,
       award_roles: new Set(), teams: (award.employee.teamAssignments || []).map(a => a.team?.team_type).filter(Boolean),
-      completed_orders: 0, item_points: 0, bonus_points: 0, manual_points: 0, total_points: 0,
+      completed_orders: 0, estimated_orders: 0, item_points: 0, manual_points: 0, total_points: 0,
     };
     row.award_roles.add(award.role);
     row.completed_orders += 1;
+    if (award.estimated) row.estimated_orders += 1;
     row.item_points = round2(row.item_points + points.item_points);
-    row.bonus_points = round2(row.bonus_points + points.bonus_points);
     row.manual_points = round2(row.manual_points + points.manual_points);
     row.total_points = round2(row.total_points + points.total_points);
     byEmployee.set(award.employee_id, row);
   }
   const rows = rankRows([...byEmployee.values()].map(row => ({ ...row, award_roles: [...row.award_roles], incentive_rm: round2(row.total_points * rmPerPoint) })));
-  return { rm_per_point: rmPerPoint, rows };
+  return { rm_per_point: rmPerPoint, estimated_orders: new Set(estimated.map(award => award.order_id)).size, rows };
 }
 
 /** Completed orders and points for one employee, with per-item points. */
@@ -128,13 +184,15 @@ async function getEmployeePerformance(employeeId, filters = {}, db = prisma) {
     include: { orders: { select: { odoo_order_ref: true, odoo_sales_ref: true, delivery_end_date_time: true, customers: { select: { full_name: true } } } } },
     orderBy: { awarded_at: 'desc' },
   });
+  const estimated = await estimateUnawarded({ range, employeeId }, db);
   const orderIds = awards.map(award => award.order_id);
   const adjustments = orderIds.length ? await db.order_point_adjustments.findMany({ where: { order_id: { in: orderIds } }, orderBy: { created_at: 'asc' } }) : [];
   const manual = adjustmentTotals(adjustments);
   const rule = await ruleInForce(db);
   const rmPerPoint = rule?.rm_per_point ?? 0;
 
-  const orders = awards.map(award => ({
+  const orders = [...awards, ...estimated].sort((a, b) => new Date(b.awarded_at) - new Date(a.awarded_at)).map(award => ({
+    estimated: !!award.estimated,
     order_id: award.order_id, do_ref: award.orders?.odoo_order_ref || null, so_ref: award.orders?.odoo_sales_ref || null,
     customer: award.orders?.customers?.full_name || null, completed_at: award.awarded_at, role: award.role,
     ...orderPointsFor(award, manual.get(award.order_id)),
@@ -142,7 +200,7 @@ async function getEmployeePerformance(employeeId, filters = {}, db = prisma) {
     adjustments: adjustments.filter(a => a.order_id === award.order_id).map(a => ({ id: a.id, points: a.points, reason: a.reason, created_at: a.created_at, reverses_id: a.reverses_id })),
   }));
   const sum = key => round2(orders.reduce((total, order) => total + order[key], 0));
-  const summary = { completed_orders: orders.length, item_points: sum('item_points'), bonus_points: sum('bonus_points'), manual_points: sum('manual_points'), total_points: sum('total_points') };
+  const summary = { completed_orders: orders.length, estimated_orders: estimated.length, item_points: sum('item_points'), manual_points: sum('manual_points'), total_points: sum('total_points') };
   return {
     employee: { id: employee.id, name: employeeName(employee), job_role: employee.role?.name || null },
     rm_per_point: rmPerPoint, summary: { ...summary, incentive_rm: round2(summary.total_points * rmPerPoint) }, orders,
@@ -160,44 +218,51 @@ async function getOrderPoints(orderId, db = prisma) {
   const first = awards[0];
   return {
     order_id: orderId, manual_points: manual, items: first?.item_breakdown || [],
-    item_points: first?.item_points ?? 0, bonus_points: first?.bonus_points ?? 0,
-    total_points: round2((first?.item_points ?? 0) + (first?.bonus_points ?? 0) + manual),
+    item_points: first?.item_points ?? 0,
+    total_points: round2((first?.item_points ?? 0) + manual),
     crew: awards.map(award => ({ employee_id: award.employee_id, name: employeeName(award.employee), role: award.role, ...orderPointsFor(award, manual) })),
     adjustments: adjustments.map(a => ({ id: a.id, points: a.points, reason: a.reason, created_by: a.created_by, created_at: a.created_at, reverses_id: a.reverses_id })),
   };
 }
 
-// ── Manual adjustments (append-only) ────────────────────────────────────────
+// ── Extra points (set per order, history kept) ──────────────────────────────
 
-async function addAdjustment(orderId, { points, reason }, adminId, db = prisma) {
+/**
+ * Set the extra points of one order to an exact value (0 clears them). Every
+ * crew member on the order gets them. The change is stored as an append-only
+ * adjustment for the difference, so the history of edits is kept.
+ *
+ * An order that has no saved points yet (delivered before points existed) has
+ * its points saved first, using the current item points, so there is a snapshot
+ * to add the extra to.
+ */
+async function setExtraPoints(orderId, points, adminId, db = prisma) {
   if (!isUuid(orderId)) throw httpError(400, 'INVALID_ORDER', 'Invalid order id.');
   const value = Number(points);
-  if (!Number.isFinite(value) || value === 0 || Math.abs(value) > MAX_ADJUSTMENT) throw httpError(400, 'INVALID_POINTS', `points must be a non-zero number up to ${MAX_ADJUSTMENT} either way.`);
-  const text = typeof reason === 'string' ? reason.trim() : '';
-  if (!text || text.length > 500) throw httpError(400, 'REASON_REQUIRED', 'A reason (max 500 characters) is required.');
-  const awarded = await db.order_point_awards.count({ where: { order_id: orderId } });
-  if (!awarded) throw httpError(409, 'ORDER_HAS_NO_POINTS', 'This order has not earned points (not completed, or no crew), so there is no one to give extra points to.');
-  return db.order_point_adjustments.create({ data: { order_id: orderId, points: round2(value), reason: text, created_by: adminId || null } });
-}
+  if (points === '' || points == null || !Number.isFinite(value) || Math.abs(value) > MAX_ADJUSTMENT) throw httpError(400, 'INVALID_POINTS', `Extra points must be a number from -${MAX_ADJUSTMENT} to ${MAX_ADJUSTMENT}.`);
 
-async function reverseAdjustment(adjustmentId, adminId, db = prisma) {
-  if (!isUuid(adjustmentId)) throw httpError(400, 'INVALID_ADJUSTMENT', 'Invalid adjustment id.');
-  const original = await db.order_point_adjustments.findUnique({ where: { id: adjustmentId } });
-  if (!original) throw httpError(404, 'ADJUSTMENT_NOT_FOUND', 'Adjustment not found.');
-  if (original.reverses_id) throw httpError(409, 'CANNOT_REVERSE_A_REVERSAL', 'A reversal cannot be reversed. Add a new adjustment instead.');
-  try {
-    return await db.order_point_adjustments.create({ data: { order_id: original.order_id, points: round2(-original.points), reason: `Reversal: ${original.reason}`.slice(0, 500), created_by: adminId || null, reverses_id: original.id } });
-  } catch (error) {
-    if (error.code === 'P2002') throw httpError(409, 'ALREADY_REVERSED', 'This adjustment was already reversed.');
-    throw error;
+  let awarded = await db.order_point_awards.count({ where: { order_id: orderId } });
+  if (!awarded) {
+    await awardOrder(orderId, db);
+    awarded = await db.order_point_awards.count({ where: { order_id: orderId } });
   }
+  if (!awarded) throw httpError(409, 'ORDER_HAS_NO_POINTS', 'This order has not earned points (not delivered, or no crew), so it cannot have extra points.');
+
+  const current = adjustmentTotals(await db.order_point_adjustments.findMany({ where: { order_id: orderId } })).get(orderId) || 0;
+  const target = round2(value);
+  const delta = round2(target - current);
+  if (delta !== 0) {
+    await db.order_point_adjustments.create({ data: { order_id: orderId, points: delta, reason: `Extra points set to ${target} (was ${current})`, created_by: adminId || null } });
+  }
+  return { order_id: orderId, manual_points: target };
 }
 
 // ── Rules ───────────────────────────────────────────────────────────────────
 
 function ruleValues(input) {
-  // Points per item now live on each item (Information > Item), not on the rule.
-  const fields = { bonus_points_per_order: 'Bonus points per order', rm_per_point: 'RM per point' };
+  // Points per item live on each item (Information > Item) and there is no per-order
+  // bonus, so the rule only carries the RM rate. The other columns stay at 0.
+  const fields = { rm_per_point: 'RM per point' };
   const out = {};
   for (const [key, label] of Object.entries(fields)) {
     const value = Number(input?.[key]);
@@ -205,6 +270,7 @@ function ruleValues(input) {
     out[key] = round2(value);
   }
   out.points_per_item = 0;
+  out.bonus_points_per_order = 0;
   return out;
 }
 
@@ -295,7 +361,7 @@ async function deleteItem(id, db = prisma) {
 }
 
 module.exports = {
-  ROLES, resetItemSyncThrottle: () => { lastItemSync = 0; }, parseRange, adjustmentTotals, orderPointsFor, rankRows,
+  ROLES, estimateUnawarded, resetItemSyncThrottle: () => { lastItemSync = 0; }, parseRange, adjustmentTotals, orderPointsFor, rankRows,
   getRanking, getEmployeePerformance, getOrderPoints,
-  addAdjustment, reverseAdjustment, getRules, createRule, listItemRates, countPendingItems, createItem, updateItem, deleteItem,
+  setExtraPoints, getRules, createRule, listItemRates, countPendingItems, createItem, updateItem, deleteItem,
 };

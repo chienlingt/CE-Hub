@@ -194,6 +194,7 @@ const Layout = () => {
     },
     my_performance: {
       title: 'My Performance',
+      shortTitle: 'Performance', // label in the phone bottom bar, which keeps only the first word of a title
       icon: TrendingUp,
       route: '/my-performance',
       topNavItems: [
@@ -230,10 +231,19 @@ const Layout = () => {
       ? employeeData?.role?.name || ''
       : employeeData?.role || '';
     const role = normalize(rawRole);
-    if (role === 'admin' || effectivePermissions.includes('admin')) {
+    // A role carrying the literal 'admin' permission still sees every section.
+    if (effectivePermissions.includes('admin')) {
       return orderAdminNavigation(navigationData);
     }
     if (loadingPermissions) return [];
+    // The Admin role follows its saved permissions like any role (editable in Access
+    // Control), except that Access Control itself is always kept, so an admin can
+    // never lock themselves out. My Performance is not offered to admins.
+    if (role === 'admin') {
+      return orderAdminNavigation(Object.fromEntries(
+        Object.entries(navigationData).filter(([key]) => key === 'access' || effectivePermissions.includes(key))
+      ));
+    }
     if (effectivePermissions.length === 0) return [];
     // include entry if its key is in permissions (permission keys must match nav keys)
     return Object.entries(navigationData).filter(([key]) => effectivePermissions.includes(key));

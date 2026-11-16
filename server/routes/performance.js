@@ -35,7 +35,6 @@ router.delete('/items/:id', handle(req => service.deleteItem(req.params.id)));
 router.get('/', handle(req => service.getRanking({ ...range(req), team: req.query.team, role: req.query.role })));
 router.get('/employees/:id', handle(req => service.getEmployeePerformance(req.params.id, range(req))));
 router.get('/orders/:orderId', handle(req => service.getOrderPoints(req.params.orderId)));
-router.post('/orders/:orderId/adjustments', handle(req => service.addAdjustment(req.params.orderId, req.body || {}, req.reviewAdmin.id)));
-router.post('/adjustments/:id/reverse', handle(req => service.reverseAdjustment(req.params.id, req.reviewAdmin.id)));
+router.put('/orders/:orderId/extra', handle(req => service.setExtraPoints(req.params.orderId, req.body?.points, req.reviewAdmin.id)));
 
 module.exports = router;

@@ -7,7 +7,7 @@
 //                  but not yet listed is added at 0 points for admin review;
 //                  the product override / rule default only back up lines
 //                  that have no item name)
-//   order points = sum of item points + the rule per-order bonus
+//   order points = sum of item points (no per-order bonus)
 //   manual points live in order_point_adjustments, apply to the whole order and
 //   are added on top at read time (never written into the snapshot).
 //
@@ -37,7 +37,7 @@ function deliveredUnits(item) {
 /**
  * Pure calculation for one order. No database access.
  * @param {Array}  items  order_products rows (with optional `products`)
- * @param {object} rule   { points_per_item, bonus_points_per_order }
+ * @param {object} rule   { points_per_item } (only backs up lines with no item name)
  * @param {Map<string, number>} [rates] item_key -> points per item (Information > Item)
  * @returns {{ item_points:number, bonus_points:number, item_breakdown:Array }}
  */
@@ -55,11 +55,9 @@ function computeOrderPoints(items, rule, rates = new Map()) {
     };
   });
   const itemPoints = round2(breakdown.reduce((sum, line) => sum + line.points, 0));
-  // Nothing delivered (e.g. a failed order) earns nothing, not even the bonus.
-  const anyDelivered = breakdown.some(line => line.delivered_quantity > 0);
   return {
     item_points: itemPoints,
-    bonus_points: anyDelivered ? round2(rule.bonus_points_per_order || 0) : 0,
+    bonus_points: 0, // kept in the awards table for old rows; no longer awarded
     item_breakdown: breakdown,
   };
 }
@@ -109,6 +107,20 @@ async function ensureItemRates(names, db = prisma) {
   return new Map(rows.map(row => [row.item_key, row.points_per_item]));
 }
 
+/**
+ * Read-only counterpart of ensureItemRates: rates for these item names, with
+ * unlisted names at 0 (what ensureItemRates would add). Never writes, so a
+ * page view cannot create items.
+ */
+async function readItemRates(names, db = prisma) {
+  const rates = new Map();
+  for (const name of names) { const key = itemKey(name); if (key) rates.set(key, 0); }
+  if (!rates.size) return rates;
+  const rows = await db.item_point_rates.findMany({ where: { item_key: { in: [...rates.keys()] } } });
+  rows.forEach(row => rates.set(row.item_key, row.points_per_item));
+  return rates;
+}
+
 // The rule in force at `at`: newest active rule effective on or before it.
 async function ruleInForce(db, at = new Date()) {
   return db.incentive_rules.findFirst({
@@ -147,7 +159,7 @@ async function awardOrder(orderId, db = prisma) {
 
   const rates = await ensureItemRates(order.order_products.map(lineName), db);
   const points = computeOrderPoints(order.order_products, rule, rates);
-  if (points.item_points === 0 && points.bonus_points === 0) return { awarded: 0, reason: 'nothing_delivered' };
+  if (points.item_points === 0) return { awarded: 0, reason: 'nothing_delivered' };
 
   const crew = resolveCrew(order);
   if (!crew.length) return { awarded: 0, reason: 'no_crew' };
@@ -174,4 +186,4 @@ async function awardOrderSafe(orderId, db = prisma) {
   }
 }
 
-module.exports = { awardOrderSafe, itemKey, ensureItemRates, computeOrderPoints, resolveCrew, awardOrder, ruleInForce, deliveredUnits, COMPLETED_STATUSES };
+module.exports = { awardOrderSafe, itemKey, lineName, ensureItemRates, readItemRates, computeOrderPoints, resolveCrew, awardOrder, ruleInForce, deliveredUnits, COMPLETED_STATUSES };

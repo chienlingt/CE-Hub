@@ -39,6 +39,5 @@ export const updateItem = (id, item) => admin({ path: `/items/${encodeURICompone
 export const deleteItem = id => admin({ path: `/items/${encodeURIComponent(id)}`, method: 'DELETE' });
 export const getPerformanceRanking = filters => admin({ path: `/${query(filters)}` });
 export const getEmployeePerformance = (employeeId, range) => admin({ path: `/employees/${encodeURIComponent(employeeId)}${query(range)}` });
-export const addOrderPoints = (orderId, points, reason) => admin({ path: `/orders/${encodeURIComponent(orderId)}/adjustments`, method: 'POST', body: { points, reason } });
-export const reverseOrderPoints = adjustmentId => admin({ path: `/adjustments/${encodeURIComponent(adjustmentId)}/reverse`, method: 'POST' });
+export const setOrderExtra = (orderId, points) => admin({ path: `/orders/${encodeURIComponent(orderId)}/extra`, method: 'PUT', body: { points } });
 export const getMyPerformance = range => request(`/me${query(range)}`, { headers: employeeSessionHeaders() });

@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
-const isAdmin = role => role?.name?.trim().toLowerCase() === 'admin';
+const { isAdminRole: isAdmin, permissionsToStore } = require('../services/rolePermissions');
 const validPermissions = value => Array.isArray(value) && value.length <= 100 && value.every(key => typeof key === 'string' && /^[a-z][a-z_]{0,63}$/.test(key));
 function failure(res, err, message) {
   if (err.code === 'P2025') return res.status(404).json({ error: 'Role not found.' });
@@ -43,10 +43,11 @@ router.put('/:id', requireReviewAdmin, async (req, res) => {
     if (!validPermissions(req.body.permissions) || Object.keys(req.body).some(key => key !== 'permissions')) return res.status(400).json({ error: 'Only a valid permissions list can be updated here.' });
     const existing = await prisma.roles.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: 'Role not found.' });
-    if (isAdmin(existing)) return res.status(409).json({ error: 'Admin always has full access and cannot be restricted here.' });
+    // Admin follows its saved permissions like any role, but always keeps Access Control
+    // (and never gets My Performance): see services/rolePermissions.js.
     const role = await prisma.roles.update({
       where: { id: req.params.id },
-      data: { permissions: [...new Set(req.body.permissions)] }
+      data: { permissions: permissionsToStore(existing, req.body.permissions) }
     });
     res.json(role);
   } catch (err) {
