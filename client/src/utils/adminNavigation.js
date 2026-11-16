@@ -7,6 +7,7 @@ export const ADMIN_NAVIGATION = [
   { key: 'scanning', title: 'Scan Station' },
   { key: 'cases', title: 'Exceptions' },
   { key: 'info', title: 'Information' },
+  { key: 'my_performance', title: 'My Performance' },
   { key: 'access', title: 'Access Control' },
 ];
 

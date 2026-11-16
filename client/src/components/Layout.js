@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-
 import { useAuth } from '../contexts/AuthContext';
 import {
   Home, Users, FileText, Menu, X, ChevronRight, User, Calendar, LogOut, AlertCircle, Truck, Scan,
-  Shield, Boxes
+  Shield, Boxes, TrendingUp
 } from 'lucide-react';
 import ProfileModal from './common/ProfileModal';
 import NotificationBell from './common/NotificationBell';
@@ -38,6 +38,10 @@ import ScheduleApproval from './admin/schedule/ScheduleApproval';
 import SchedulerSettings from './admin/schedule/SchedulerSettings';
 import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
+import MyPerformance from './employee/MyPerformance';
+import ItemPoints from './admin/info/ItemPoints';
+import usePendingItemReviews from '../hooks/usePendingItemReviews';
+import useExceptionCount from '../hooks/useExceptionCount';
 import RoleAccessControl from './admin/access/accessControl';
 import AutoScheduleReview from './admin/schedule/AutoScheduleReview';
 import InstallationSchedule from './installer/InsSchedule';
@@ -79,6 +83,19 @@ const Layout = () => {
   const [moreDrawerOpen, setMoreDrawerOpen] = useState(false);
 
   const isMobile = useIsMobile();
+  // Items from orders waiting for an admin to set points (admins only; 0 otherwise).
+  const pendingItemReviews = usePendingItemReviews();
+  // Open items across the Exceptions tabs (admins only; 0 otherwise).
+  const exceptions = useExceptionCount();
+  const navBadges = { info: pendingItemReviews, cases: exceptions.total }; // keyed by sidebar section
+  // Keyed by top-tab id. Each is the open count for that tab.
+  const tabBadges = {
+    item: pendingItemReviews,
+    'failed-deliveries': exceptions.failed_deliveries,
+    'driver-escalations': exceptions.driver_reports,
+    'system-reports': exceptions.system_reports,
+    'sync-monitor': exceptions.sync_approvals,
+  };
 
   // ==========================
   // Navigation structure
@@ -128,6 +145,7 @@ const Layout = () => {
         { id: 'employee', label: 'Employee', path: '', component: EmployeeInfo },
         { id: 'team', label: 'Team', path: 'team', component: TeamInfo },
         { id: 'building', label: 'Building', path: 'building', component: BuildingInfo },
+        { id: 'item', label: 'Item', path: 'item', component: ItemPoints },
         // { id: 'product', label: 'Product', path: 'product', component: ProductInfo }, // removed — products are not stored in CE Hub
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
         // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
@@ -172,6 +190,14 @@ const Layout = () => {
         { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
+      ],
+    },
+    my_performance: {
+      title: 'My Performance',
+      icon: TrendingUp,
+      route: '/my-performance',
+      topNavItems: [
+        { id: 'my-performance', label: 'My Performance', path: '', component: MyPerformance },
       ],
     },
     access: {
@@ -368,6 +394,7 @@ const Layout = () => {
       <NotificationBell
         key={employeeData?.id || 'guest'}
         userId={employeeData?.id}
+        reviewCount={pendingItemReviews}
         enableToasts={/admin|sales/i.test(typeof employeeData?.role === 'object' ? employeeData?.role?.name || '' : employeeData?.role || '')}
       />
       <button
@@ -422,10 +449,20 @@ const Layout = () => {
                     : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
                     }`}
                 >
-                  <IconComponent size={20} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-blue-600'}`} />
+                  <span className="relative flex-shrink-0">
+                    <IconComponent size={20} className={`${isActive ? 'text-white' : 'text-gray-500 group-hover:text-blue-600'}`} />
+                    {!isSidebarOpen && navBadges[key] > 0 && (
+                      <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" aria-label={`${navBadges[key]} need attention`} />
+                    )}
+                  </span>
                   {isSidebarOpen && (
                     <>
                       <span className="ml-3 font-medium truncate">{item.title}</span>
+                      {navBadges[key] > 0 && (
+                        <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white" aria-label={`${navBadges[key]} need attention`}>
+                          {navBadges[key] > 99 ? '99+' : navBadges[key]}
+                        </span>
+                      )}
                       <ChevronRight
                         size={16}
                         className={`ml-auto flex-shrink-0 transition-transform ${isActive ? 'rotate-90 text-white' : 'text-gray-400 group-hover:text-blue-600'}`}
@@ -492,6 +529,11 @@ const Layout = () => {
                         }`}
                     >
                       {tab.label}
+                      {tabBadges[tab.id] > 0 && (
+                        <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white" aria-label={`${tabBadges[tab.id]} need attention`}>
+                          {tabBadges[tab.id] > 99 ? '99+' : tabBadges[tab.id]}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </nav>
@@ -570,6 +612,7 @@ const Layout = () => {
         activeSection={activeSection}
         onSelect={handleSideNavClick}
         title="Menu"
+        badges={navBadges}
       />
 
       <MobileNavDrawer
@@ -579,6 +622,7 @@ const Layout = () => {
         activeSection={activeSection}
         onSelect={handleSideNavClick}
         title="More"
+        badges={navBadges}
       />
     </div>
   );

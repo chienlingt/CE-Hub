@@ -10,9 +10,11 @@ async function sendRunAlert(id) {
     if (!report.alerts[key]) {
       const admins = await tx.employees.findMany({ where: { active_flag: true, role: { name: { contains: 'admin', mode: 'insensitive' } } }, select: { id: true } });
       if (!admins.length) return; // Retry when an administrator is available.
-      const label = { missed_start: 'missed its scheduled start', needs_correction: 'needs correction', retry_exhausted: 'exhausted its recovery budget' }[report.pending_alert] || 'needs attention';
+      // Short title, then one detail (the bell splits the message on " · ").
+      const title = { missed_start: "5 PM Odoo sync didn't start", needs_correction: '5 PM Odoo sync needs correction', retry_exhausted: '5 PM Odoo sync stopped retrying' }[report.pending_alert] || '5 PM Odoo sync needs attention';
+      const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${row.target_date}T00:00:00Z`));
       await tx.notifications.createMany({ data: admins.map(admin => ({ user_id: admin.id, type: 'error',
-        message: `5 PM Odoo fallback ${label}. Delivery date ${row.target_date}. Open Sync Monitor → Run history.`, is_read: false, created_at: new Date() })) });
+        message: `${title} · Deliveries for ${day}`, is_read: false, created_at: new Date() })) });
       report.alerts[key] = new Date().toISOString();
     }
     report.pending_alert = null;

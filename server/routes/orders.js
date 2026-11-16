@@ -1527,6 +1527,9 @@ router.post('/:id/deliver', upload.fields([
       }).catch(e => console.error('[A2] order_products delivered-status update failed:', e.message));
     }
 
+    // FR-10: snapshot crew points now that every line is marked delivered.
+    await require('../services/incentiveService').awardOrderSafe(updated.id);
+
     let deliveredByName = null;
     if (employee_id) {
       const emp = await prisma.employees.findUnique({

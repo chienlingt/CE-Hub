@@ -1,453 +1,249 @@
-import React, { useEffect, useState } from 'react';
-import ScopeMonthSelector from '../../common/ScopeMonthSelector';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Download, FileText, Trophy } from 'lucide-react';
+import Modal from '../../common/Modal';
+import RulesPanel from '../../performance/RulesPanel';
+import OrderPointsList, { formatPoints } from '../../performance/OrderPointsList';
+import { getAllTeams } from '../../../services/informationService';
 import {
-  getAllEmployees, getAllOrdersSummary, getAllEmployeeTeamAssignments, getAllTeams
-} from '../../../services/informationService';
-import {
-  Users, Star, Phone, Badge, TrendingUp, DollarSign, Search
-} from 'lucide-react';
+  addOrderPoints, getEmployeePerformance, getPerformanceRanking, reverseOrderPoints,
+} from '../../../services/performanceApi';
+import { exportCsv, exportPdf } from '../../../utils/performanceExport';
 
-const FilterBar = ({
-  scope,
-  setScope,
-  selectedMonthDate,
-  prevMonth,
-  nextMonth,
-  formatMonthYear,
-  searchTerm,
-  setSearchTerm,
-  incentivePerOrder,
-  setIncentivePerOrder,
-  helperText
-}) => (
-  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search employee or team"
-          className="w-full sm:w-72 rounded-full border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
-        />
-      </div>
-      <div className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm shadow-sm">
-        <DollarSign className="h-4 w-4 text-emerald-600" />
-        <span className="text-gray-600">RM</span>
-        <input
-          type="number"
-          min="0"
-          value={incentivePerOrder}
-          onChange={e => setIncentivePerOrder(Number(e.target.value))}
-          className="w-16 bg-transparent text-sm font-medium text-gray-900 focus:outline-none"
-        />
-        <span className="text-gray-500">/ order</span>
-      </div>
-      {/* {helperText && <div className="text-sm text-gray-500">{helperText}</div>} */}
-    </div>
+// FR-10-002/003/005: ranked points, filters by team/role/month, CSV + PDF export.
+// FR-10-001: rules panel. Per-order extra points and per-item points are in the
+// expanded employee row.
 
-    <ScopeMonthSelector
-      scope={scope}
-      onScopeChange={setScope}
-      selectedMonthDate={selectedMonthDate}
-      onPrevMonth={prevMonth}
-      onNextMonth={nextMonth}
-      formatMonthYear={formatMonthYear}
-    />
-  </div>
-);
+const pad = n => String(n).padStart(2, '0');
+const isoDate = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const monthRange = (year, month) => ({ from: isoDate(new Date(year, month, 1)), to: isoDate(new Date(year, month + 1, 0)) });
+const monthValue = from => (from ? from.slice(0, 7) : '');
+
+const ROLE_OPTIONS = [
+  { value: '', label: 'All roles' },
+  { value: 'driver', label: 'Driver' },
+  { value: 'assistant', label: 'Assistant' },
+  { value: 'installer', label: 'Installer' },
+];
+
+function Select({ label, value, onChange, children }) {
+  return (
+    <label className="text-xs font-medium text-gray-600">
+      {label}
+      <select value={value} onChange={event => onChange(event.target.value)}
+        className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+        {children}
+      </select>
+    </label>
+  );
+}
+
+function AddPointsModal({ order, onClose, onSubmit }) {
+  const [points, setPoints] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try { await onSubmit(order, points, reason); } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <Modal show={!!order} onClose={onClose} maxWidth="max-w-md">
+      <form onSubmit={submit} className="space-y-4">
+        <h3 className="text-lg font-semibold text-gray-900">Extra points for {order?.do_ref || 'this order'}</h3>
+        <p className="text-xs text-gray-500">Applies to the whole order: every crew member on it receives these points. Use a negative number to deduct.</p>
+        <label className="block text-sm font-medium text-gray-700">Points
+          <input type="number" step="0.01" required autoFocus value={points} onChange={e => setPoints(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+        </label>
+        <label className="block text-sm font-medium text-gray-700">Reason
+          <textarea required maxLength={500} rows={3} value={reason} onChange={e => setReason(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+        </label>
+        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-full px-4 py-2 text-sm text-gray-600">Cancel</button>
+          <button type="submit" disabled={busy} className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+            {busy ? 'Saving...' : 'Add points'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 
 export default function EmployeePerformance() {
-  const [employees, setEmployees] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [teamAssignments, setTeamAssignments] = useState([]);
+  const today = new Date();
+  const [range, setRange] = useState(() => monthRange(today.getFullYear(), today.getMonth()));
+  const [team, setTeam] = useState('');
+  const [role, setRole] = useState('');
+  const [search, setSearch] = useState('');
   const [teams, setTeams] = useState([]);
-  const [incentivePerOrder, setIncentivePerOrder] = useState(5); // 💰 default incentive per order
-  const [scope, setScope] = useState('month');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [ranking, setRanking] = useState({ rows: [], rm_per_point: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showRules, setShowRules] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [detailError, setDetailError] = useState(null);
+  const [addFor, setAddFor] = useState(null);
 
-  // selected month state (focus month). Defaults to current month.
-  const [selectedMonthDate, setSelectedMonthDate] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  useEffect(() => { getAllTeams().then(setTeams).catch(() => setTeams([])); }, []);
 
-  useEffect(() => {
-    getAllEmployees().then(setEmployees).catch(err => console.warn(err));
-    getAllOrdersSummary().then(setOrders).catch(err => console.warn(err));
-    getAllEmployeeTeamAssignments().then(setTeamAssignments).catch(err => console.warn(err));
-    getAllTeams().then(setTeams).catch(err => console.warn(err));
-  }, []);
+  const loadRanking = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return getPerformanceRanking({ ...range, team, role })
+      .then(setRanking)
+      .catch(e => { setError(e.status === 401 || e.status === 403 ? 'Sign in again with an admin account to see performance.' : e.message); setRanking({ rows: [], rm_per_point: 0 }); })
+      .finally(() => setLoading(false));
+  }, [range, team, role]);
+  useEffect(() => { loadRanking(); }, [loadRanking]);
 
-  // Helpers for flexible field access and dates (same approach as Overview)
-  const getOrderId = (order) => order.id || order.order_id || order.OrderID || order.orderId;
-  const getOrderRating = (order) => {
-    const r = order.customer_rating ?? order.CustomerRating ?? order.rating ?? order.Rating ?? null;
-    return (r === '' || r === null || typeof r === 'undefined') ? null : Number(r);
-  };
-  const getOrderFeedback = (order) => order.customer_feedback ?? order.CustomerFeedback ?? order.feedback ?? '';
-  const getOrderStatus = (order) => order.order_status ?? order.orderStatus ?? order.OrderStatus ?? order.status ?? '';
-  const getEmployeeId = (order) => order.employee_id ?? order.EmployeeID ?? order.employeeId;
+  const loadDetail = useCallback(employeeId => {
+    setDetail(null);
+    setDetailError(null);
+    return getEmployeePerformance(employeeId, range).then(setDetail).catch(e => setDetailError(e.message));
+  }, [range]);
+  useEffect(() => { if (expanded) loadDetail(expanded); }, [expanded, loadDetail]);
 
-  const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
-  const isCompletedStatus = (status) => ['completed', 'delivered'].includes(normalizeStatus(status));
+  const rows = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return term ? ranking.rows.filter(r => [r.name, r.job_role, ...(r.teams || [])].some(v => String(v || '').toLowerCase().includes(term))) : ranking.rows;
+  }, [ranking, search]);
+  const totals = useMemo(() => rows.reduce((t, r) => ({ orders: t.orders + r.completed_orders, points: t.points + r.total_points, rm: t.rm + r.incentive_rm }), { orders: 0, points: 0, rm: 0 }), [rows]);
 
-  const getRoleLabel = (employee) => {
-    const role = employee?.role;
-    if (role && typeof role === 'object') return role.name || 'Staff';
-    if (typeof role === 'string') return role;
-    if (employee?.roleName && typeof employee.roleName === 'string') return employee.roleName;
-    if (employee?.roleName && typeof employee.roleName === 'object') return employee.roleName.name || 'Staff';
-    return 'Staff Member';
-  };
-
-  // Robust getOrderCreatedDate: returns Date object or null if no valid date found.
-  const getOrderCreatedDate = (order) => {
-    if (!order) return null;
-    const tryFields = ['created_at', 'createdAt', 'CreatedAt', 'created'];
-    for (const f of tryFields) {
-      const v = order[f];
-      if (!v) continue;
-      // Firestore Timestamp
-      if (typeof v?.toDate === 'function') {
-        const d = v.toDate();
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-      // ISO string or epoch number or Date object
-      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-        const d = v instanceof Date ? v : new Date(v);
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-    }
-    return null;
+  const refresh = async () => { await loadRanking(); if (expanded) await loadDetail(expanded); };
+  const submitPoints = async (order, points, reason) => { await addOrderPoints(order.order_id, points, reason); setAddFor(null); await refresh(); };
+  const reverse = async adjustment => {
+    if (!window.confirm('Reverse these extra points? A reversing entry is added; the original stays in the history.')) return;
+    try { await reverseOrderPoints(adjustment.id); await refresh(); } catch (e) { setDetailError(e.message); }
   };
 
-  const getOrderCompletionDate = (order) => {
-    if (!order) return null;
-    const tryFields = [
-      'install_end_date_time',
-      'InstallEndDateTime',
-      'delivery_end_date_time',
-      'DeliveryEndDateTime',
-      'actual_arrival_date_time',
-      'updated_at',
-      'updatedAt'
-    ];
-    for (const f of tryFields) {
-      const v = order[f];
-      if (!v) continue;
-      if (typeof v?.toDate === 'function') {
-        const d = v.toDate();
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-      if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
-        const d = v instanceof Date ? v : new Date(v);
-        if (d instanceof Date && !isNaN(d.getTime())) return d;
-      }
-    }
-    return null;
-  };
-
-  // Helper: filter orders by month/year safely
-  const ordersCreatedInMonth = (month, year) => orders.filter(order => {
-    const d = getOrderCreatedDate(order);
-    if (!d) return false;
-    return d.getMonth() === month && d.getFullYear() === year;
-  });
-
-  const ordersCompletedInMonth = (month, year) => orders.filter(order => {
-    if (!isCompletedStatus(getOrderStatus(order))) return false;
-    const d = getOrderCompletionDate(order) || getOrderCreatedDate(order);
-    if (!d) return false;
-    return d.getMonth() === month && d.getFullYear() === year;
-  });
-
-  // Month navigation handlers
-  const prevMonth = () => {
-    setSelectedMonthDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
-  };
-  const nextMonth = () => {
-    setSelectedMonthDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
-  };
-
-  // Helper to format selected month for header
-  function formatMonthYear(date) {
-    if (!date) return '';
-    try {
-      return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    } catch {
-      return String(date);
-    }
-  }
-
-  // Derive current month/year and filtered orders for that month
-  const now = selectedMonthDate;
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const filteredOrdersForMonth = ordersCreatedInMonth(currentMonth, currentYear);
-  const filteredCompletedOrdersForMonth = ordersCompletedInMonth(currentMonth, currentYear);
-  const scopedOrders = scope === 'all' ? orders : filteredOrdersForMonth;
-
-  const teamById = teams.reduce((acc, team) => {
-    const id = team.id || team.TeamID || team.teamId;
-    if (id) acc[id] = team;
-    return acc;
-  }, {});
-
-  const assignmentsByEmployee = teamAssignments.reduce((acc, assignment) => {
-    const employeeId = assignment.employee_id || assignment.EmployeeID || assignment.employeeId;
-    if (!employeeId) return acc;
-    const teamId = assignment.team_id || assignment.TeamID || assignment.teamId;
-    if (!acc[employeeId]) acc[employeeId] = [];
-    if (teamId) acc[employeeId].push(teamId);
-    return acc;
-  }, {});
-
-  const getEmployeeTeamNames = (employeeId) => {
-    const teamIds = assignmentsByEmployee[employeeId] || [];
-    const names = teamIds
-      .map(id => teamById[id]?.team_type || teamById[id]?.teamType || teamById[id]?.name)
-      .filter(Boolean);
-    return names.length > 0 ? names : ['No team'];
-  };
-
-  // Calculate stats for each employee using only orders in the selected month
-  const employeeStats = employees.map(employee => {
-    const empId = employee.id || employee.EmployeeID || employee.employeeId;
-    const employeeOrders = scopedOrders.filter(order => getEmployeeId(order) === empId);
-    const completedOrdersForEmployee = scope === 'all'
-      ? employeeOrders.filter(order => isCompletedStatus(getOrderStatus(order)))
-      : filteredCompletedOrdersForMonth.filter(order => getEmployeeId(order) === empId);
-    const ratings = employeeOrders.map(o => getOrderRating(o)).filter(r => typeof r === 'number' && !isNaN(r));
-    const avgRating = ratings.length > 0
-      ? (ratings.reduce((sum, r) => sum + r, 0) / ratings.length)
-      : 0;
-    const totalIncentive = employeeOrders.length * incentivePerOrder;
-    const teamNames = getEmployeeTeamNames(empId);
-
-    return {
-      ...employee,
-      employeeId: empId,
-      orderCount: employeeOrders.length,
-      completedOrderCount: completedOrdersForEmployee.length,
-      avgRating,
-      totalIncentive,
-      orders: employeeOrders,
-      teamNames
-    };
-  });
-
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredEmployeeStats = employeeStats.filter(employee => {
-    if (!normalizedSearch) return true;
-    const name = employee.name || employee.displayName || '';
-    const email = employee.email || '';
-    const teamsText = (employee.teamNames || []).join(' ');
-    return [name, email, teamsText].some(value => String(value || '').toLowerCase().includes(normalizedSearch));
-  });
-
-  const topPerformers = employeeStats
-    .filter(emp => emp.orderCount > 0)
-    .sort((a, b) => (b.avgRating * b.orderCount) - (a.avgRating * a.orderCount))
-    .slice(0, 3);
-
-  const filteredEmployeeIds = new Set(filteredEmployeeStats.map(emp => emp.employeeId));
-  const scopedOrdersForTable = normalizedSearch
-    ? scopedOrders.filter(order => filteredEmployeeIds.has(getEmployeeId(order)))
-    : scopedOrders;
+  const label = `${range.from || 'start'} to ${range.to || 'today'}`;
+  const filenameBase = `employee-performance-${range.from || 'all'}_${range.to || 'all'}`;
+  const setMonth = value => { if (value) { const [y, m] = value.split('-').map(Number); setRange(monthRange(y, m - 1)); } };
+  const teamName = teams.find(t => t.id === team)?.team_type;
+  const subtitle = `Period ${label}${teamName ? ` · Team ${teamName}` : ''}${role ? ` · Role ${role}` : ''} · RM ${ranking.rm_per_point} per point`;
 
   return (
     <div className="space-y-6">
-
-      {/* Scope + search controls */}
-      <FilterBar
-        scope={scope}
-        setScope={setScope}
-        selectedMonthDate={selectedMonthDate}
-        prevMonth={prevMonth}
-        nextMonth={nextMonth}
-        formatMonthYear={formatMonthYear}
-        searchTerm={searchTerm}
-        setSearchTerm={setSearchTerm}
-        incentivePerOrder={incentivePerOrder}
-        setIncentivePerOrder={setIncentivePerOrder}
-        helperText={`${scope === 'all' ? orders.length : filteredOrdersForMonth.length} orders in view`}
-      />
-
-      {/* Top Performers Section */}
-
-      {topPerformers.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <TrendingUp className="h-5 w-5 mr-2 text-green-600" />
-              Top Performers
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {topPerformers.map((employee, index) => (
-                <div key={employee.EmployeeID} className="relative">
-                  {index === 0 && (
-                    <div className="absolute -top-2 -right-2 bg-yellow-400 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
-                      1
-                    </div>
-                  )}
-                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-100">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="font-semibold text-gray-900">{employee.name}</h4>
-                      <div className="flex items-center text-yellow-500">
-                        <Star className="h-4 w-4 fill-current mr-1" />
-                        <span className="text-sm font-medium">{employee.avgRating.toFixed(1)}</span>
-                      </div>
-                    </div>
-                    <p className="text-sm text-gray-600 mb-2">{getRoleLabel(employee)}</p>
-                    <p className="text-lg font-bold text-blue-600">{employee.orderCount} orders</p>
-                    <p className="text-sm text-green-700 mt-1">Incentive: RM {employee.totalIncentive.toFixed(2)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-          </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="text-xs font-medium text-gray-600">Month
+          <input type="month" value={monthValue(range.from)} onChange={e => setMonth(e.target.value)}
+            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
+        </label>
+        <label className="text-xs font-medium text-gray-600">From
+          <input type="date" value={range.from || ''} max={range.to || undefined} onChange={e => setRange(r => ({ ...r, from: e.target.value }))}
+            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
+        </label>
+        <label className="text-xs font-medium text-gray-600">To
+          <input type="date" value={range.to || ''} min={range.from || undefined} onChange={e => setRange(r => ({ ...r, to: e.target.value }))}
+            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
+        </label>
+        <button type="button" onClick={() => setRange({ from: '', to: '' })} className="rounded-full border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">All time</button>
+        <Select label="Team" value={team} onChange={setTeam}>
+          <option value="">All teams</option>
+          {teams.map(t => <option key={t.id} value={t.id}>{t.team_type || t.id}</option>)}
+        </Select>
+        <Select label="Role" value={role} onChange={setRole}>
+          {ROLE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </Select>
+        <label className="text-xs font-medium text-gray-600">Search
+          <input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Employee or team"
+            className="mt-1 block rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900" />
+        </label>
+        <div className="ml-auto flex gap-2">
+          <button type="button" disabled={!rows.length} onClick={() => exportCsv(rows, `${filenameBase}.csv`)}
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <Download className="h-4 w-4" /> CSV
+          </button>
+          <button type="button" disabled={!rows.length}
+            onClick={() => exportPdf(rows, { title: 'Employee Performance and Incentives', subtitle, filename: `${filenameBase}.pdf` })}
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <FileText className="h-4 w-4" /> PDF
+          </button>
         </div>
-      )}
+      </div>
 
+      <div>
+        <button type="button" onClick={() => setShowRules(v => !v)} aria-expanded={showRules}
+          className="text-sm font-medium text-emerald-700 hover:underline">{showRules ? 'Hide' : 'Edit'} incentive rules</button>
+        {showRules && <div className="mt-3"><RulesPanel onSaved={refresh} /></div>}
+      </div>
 
-      {/* Employee Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredEmployeeStats.map((employee) => (
-          <div key={employee.employeeId || employee.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow">
-            <div className="p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <div className="flex items-center mb-2">
-                    <h4 className="font-semibold text-gray-900 text-lg">{employee.name || employee.displayName}</h4>
-                    <span className={`ml-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${(employee.activeFlag ?? employee.ActiveFlag ?? true)
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
-                      }`}>
-                      {(employee.activeFlag ?? employee.ActiveFlag ?? true) ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 flex items-center">
-                    <Badge className="h-4 w-4 mr-1" />
-                    {getRoleLabel(employee)}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Teams: {employee.teamNames.join(', ')}
-                  </p>
-                  {(employee.contactNumber || employee.contact_number) && (
-                    <p className="text-sm text-gray-600 flex items-center mt-1">
-                      <Phone className="h-4 w-4 mr-1" />
-                      {employee.contactNumber || employee.contact_number}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Performance Metrics */}
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <div className="text-center p-3 bg-blue-50 rounded-lg">
-                  <p className="text-xl font-bold text-blue-600">{employee.orderCount}</p>
-                  <p className="text-xs text-gray-600 mt-1">Orders</p>
-                </div>
-                <div className="text-center p-3 bg-yellow-50 rounded-lg">
-                  <p className="text-xl font-bold text-yellow-600">
-                    {employee.avgRating > 0 ? employee.avgRating.toFixed(1) : 'N/A'}
-                  </p>
-                  <p className="text-xs text-gray-600 mt-1">Avg Rating</p>
-                </div>
-                <div className="text-center p-3 bg-green-50 rounded-lg">
-                  <p className="text-xl font-bold text-green-600">{employee.completedOrderCount}</p>
-                  <p className="text-xs text-gray-600 mt-1">Completed</p>
-                </div>
-              </div>
-
-              {/* Employee ID */}
-              <div className="pt-4 border-t border-gray-100">
-                <p className="text-xs text-gray-500">
-                  Employee ID: <span className="font-mono">{employee.employeeId || employee.id}</span>
-                </p>
-              </div>
-            </div>
+      <div className="grid grid-cols-3 gap-3">
+        {[['Employees', rows.length], ['Orders completed', totals.orders], [`Incentive (RM @ ${ranking.rm_per_point}/pt)`, totals.rm.toFixed(2)]].map(([name, value]) => (
+          <div key={name} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+            <div className="text-xs text-gray-500">{name}</div>
+            <div className="text-xl font-bold text-gray-900">{value}</div>
           </div>
         ))}
       </div>
 
-      {/* Orders Table for selected month */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold text-gray-900">
-            Order Details by Employee ({scope === 'all' ? 'All Time' : 'Selected Month'})
-          </h3>
-          <div className="flex items-center text-sm text-gray-500">
-            <Users className="h-4 w-4 mr-1" />
-            {scope === 'all' ? orders.length : filteredOrdersForMonth.length} orders
-          </div>
-        </div>
+      {error && <p role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Ref</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rating</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer Feedback</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {scopedOrdersForTable.map((order) => {
-                const empId = getEmployeeId(order);
-                const employee = employees.find(e => (e.id || e.EmployeeID) === empId);
-                const rating = getOrderRating(order);
-                return (
-                  <tr key={getOrderId(order)} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{order.odoo_order_ref || 'Not Synced'}</td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      <div>
-                        <div className="font-medium">{employee?.name || employee?.displayName || 'Unknown'}</div>
-                        <div className="text-xs text-gray-500">ID: {empId}</div>
-                      </div>
+      <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+            <tr>
+              <th className="w-10 px-3 py-3" />
+              <th className="px-3 py-3 text-left">Rank</th>
+              <th className="px-3 py-3 text-left">Employee</th>
+              <th className="px-3 py-3 text-left">Role</th>
+              <th className="px-3 py-3 text-left">Team</th>
+              <th className="px-3 py-3 text-right">Orders</th>
+              <th className="px-3 py-3 text-right">Item pts</th>
+              <th className="px-3 py-3 text-right">Bonus</th>
+              <th className="px-3 py-3 text-right">Extra</th>
+              <th className="px-3 py-3 text-right">Total pts</th>
+              <th className="px-3 py-3 text-right">RM</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {loading && <tr><td colSpan={11} className="px-3 py-6 text-center text-gray-500">Loading...</td></tr>}
+            {!loading && !rows.length && !error && <tr><td colSpan={11} className="px-3 py-6 text-center text-gray-500">No completed orders with points for these filters.</td></tr>}
+            {!loading && rows.map(row => {
+              const open = expanded === row.employee_id;
+              return (
+                <React.Fragment key={row.employee_id}>
+                  <tr className="hover:bg-gray-50">
+                    <td className="px-3 py-3">
+                      <button type="button" onClick={() => setExpanded(open ? null : row.employee_id)} aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} orders for ${row.name}`}
+                        className="text-gray-500 hover:text-gray-800">
+                        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {rating !== null ? (
-                        <div className="flex items-center">
-                          <Star className="h-4 w-4 text-yellow-400 mr-1 fill-current" />
-                          <span className="font-medium">{rating.toFixed(1)}</span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">No rating</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title={getOrderFeedback(order)}>
-                      {getOrderFeedback(order) || 'No feedback provided'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        isCompletedStatus(getOrderStatus(order)) ? 'bg-green-100 text-green-800'
-                          : normalizeStatus(getOrderStatus(order)) === 'pending'
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {getOrderStatus(order)}
-                      </span>
-                    </td>
+                    <td className="px-3 py-3 font-semibold">{row.rank <= 3 ? <Trophy className="inline h-4 w-4 text-yellow-500" aria-hidden="true" /> : null} {row.rank}</td>
+                    <td className="px-3 py-3 font-medium text-gray-900">{row.name}</td>
+                    <td className="px-3 py-3 capitalize text-gray-600">{(row.award_roles || []).join(' / ')}</td>
+                    <td className="px-3 py-3 text-gray-600">{(row.teams || []).join(', ') || '-'}</td>
+                    <td className="px-3 py-3 text-right">{row.completed_orders}</td>
+                    <td className="px-3 py-3 text-right">{formatPoints(row.item_points)}</td>
+                    <td className="px-3 py-3 text-right">{formatPoints(row.bonus_points)}</td>
+                    <td className="px-3 py-3 text-right">{formatPoints(row.manual_points)}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-emerald-700">{formatPoints(row.total_points)}</td>
+                    <td className="px-3 py-3 text-right">{Number(row.incentive_rm).toFixed(2)}</td>
                   </tr>
-                );
-              })}
-              {scopedOrdersForTable.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="text-center py-8 text-gray-500">
-                    {scope === 'all' ? 'No orders available.' : 'No orders for selected month.'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                  {open && (
+                    <tr>
+                      <td colSpan={11} className="bg-white px-4 py-4">
+                        {detailError && <p role="alert" className="mb-2 text-sm text-red-600">{detailError}</p>}
+                        {!detail && !detailError && <p className="text-sm text-gray-500">Loading orders...</p>}
+                        {detail && <OrderPointsList orders={detail.orders} onAddPoints={setAddFor} onReverse={reverse} />}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      <p className="text-xs text-gray-500">Every crew member on an order receives the full order points. Extra points added to an order go to everyone on it. RM uses the current RM-per-point rate.</p>
+
+      {addFor && <AddPointsModal order={addFor} onClose={() => setAddFor(null)} onSubmit={submitPoints} />}
     </div>
   );
 }

@@ -56,6 +56,7 @@ model employees {
   lorry_trips_driver_idToemployees      lorry_trips[]               @relation("lorry_trips_driver_idToemployees")
   teams_primary_driverToemployees       teams[]                     @relation("teams_primary_driverToemployees")
   teams_assistant_driverToemployees     teams[]                     @relation("teams_assistant_driverToemployees")
+  order_point_awards                    order_point_awards[]
 }
 
 model teams {
@@ -308,6 +309,8 @@ model orders {
   rescheduled_to             orders[]                  @relation("OrderReschedule")
   time_slots                 time_slots?               @relation(fields: [time_slot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rating                     rating[]
+  order_point_awards         order_point_awards[]
+  order_point_adjustments    order_point_adjustments[]
 }
 
 model products {
@@ -325,6 +328,8 @@ model products {
   no_lie_down_flag                Boolean?
   dismantle_required_flag         Boolean?
   available_flag                  Boolean          @default(true)
+  // Optional override of incentive_rules.points_per_item for this product.
+  points_per_item                 Float?
   order_products                  order_products[]
 }
 
@@ -602,4 +607,69 @@ model odoo_change_requests {
 
   @@index([status, created_at])
   @@index([order_id])
+}
+
+// ── Employee performance & incentives (FR-10) ────────────────────────────────
+
+// Versioned rules: a change inserts a new row, so past awards keep their rule.
+model incentive_rules {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  points_per_item        Float                @default(1)
+  bonus_points_per_order Float                @default(0)
+  rm_per_point           Float                @default(1)
+  effective_from         DateTime             @default(now())
+  active                 Boolean              @default(true)
+  created_by             String?              @db.Uuid
+  created_at             DateTime             @default(now())
+  awards                 order_point_awards[]
+
+  @@index([active, effective_from])
+}
+
+// Snapshot written once when an order completes: one row per crew member.
+model order_point_awards {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id       String           @db.Uuid
+  employee_id    String           @db.Uuid
+  role           String           @db.VarChar(20)
+  item_points    Float            @default(0)
+  bonus_points   Float            @default(0)
+  // [{ order_product_id, product_name, quantity, delivered_quantity, points_per_item, points }]
+  item_breakdown Json             @default("[]")
+  rule_id        String?          @db.Uuid
+  awarded_at     DateTime         @default(now())
+  orders         orders           @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  employee       employees        @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  rule           incentive_rules? @relation(fields: [rule_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([order_id, employee_id])
+  @@index([employee_id, awarded_at])
+}
+
+// Manual extra points for a whole order. Append-only; correct by reversing.
+model order_point_adjustments {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id     String   @db.Uuid
+  points       Float
+  reason       String
+  created_by   String?  @db.Uuid
+  reverses_id  String?  @unique @db.Uuid
+  created_at   DateTime @default(now())
+  orders       orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([order_id])
+}
+
+// Points per item, keyed by item name. Odoo order lines carry only a product
+// name (no products row), so this is what actually prices an order line.
+// item_key is the lower-cased, whitespace-collapsed name.
+model item_point_rates {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  item_key        String   @unique @db.VarChar(255)
+  item_name       String   @db.VarChar(255)
+  points_per_item Float
+  // True for items found on order lines and not yet set by an admin (0 points).
+  needs_review    Boolean  @default(false)
+  updated_by      String?  @db.Uuid
+  updated_at      DateTime @default(now()) @updatedAt
 }

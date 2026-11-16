@@ -17,7 +17,8 @@ function InfoTable({
     saving,
     sortKey,
     sortOrder,
-    onSort
+    onSort,
+    rowClassName
 }) {
     return (
         <div className="overflow-x-auto">
@@ -58,7 +59,7 @@ function InfoTable({
                         </tr>
                     ) : (
                         data.map((item, idx) => (
-                            <tr key={item.id} className="hover:bg-gray-50">
+                            <tr key={item.id} className={rowClassName?.(item) || "hover:bg-gray-50"}>
                                 <td className="px-4 py-3 text-sm font-medium text-gray-900">{idx + 1}</td>
                                 {columns.map(col => (
                                     <td className="px-4 py-3 text-sm text-gray-900" key={col.key}>
@@ -190,7 +191,9 @@ export default function InfoPage({
     initialState,
     normalizeData = identity,
     toApiFormatData = identity,
-    customDeleteHandler
+    customDeleteHandler,
+    rowClassName,
+    notice
 }) {
     const [data, setData] = useState([]);
     const [modalOpen, setModalOpen] = useState(false);
@@ -208,7 +211,7 @@ export default function InfoPage({
     const validate = (data) => {
         const errors = {};
         formFields.forEach(field => {
-            if (field.required && (!data[field.key] || data[field.key].toString().trim() === '')) {
+            if (field.required && (data[field.key] === undefined || data[field.key] === null || data[field.key].toString().trim() === '')) {
                 errors[field.key] = `${field.label} is required.`;
             }
         });
@@ -339,6 +342,7 @@ export default function InfoPage({
                     + Add {title}
                 </button>
             </div>
+            {notice?.(data)}
             {successMsg && <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-md text-sm">{successMsg}</div>}
             {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">{error}</div>}
 
@@ -352,6 +356,7 @@ export default function InfoPage({
                 sortKey={sortKey}
                 sortOrder={sortOrder}
                 onSort={handleSort}
+                rowClassName={rowClassName}
             />
 
             <InfoModal

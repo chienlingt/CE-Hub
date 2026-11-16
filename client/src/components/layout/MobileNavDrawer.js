@@ -7,6 +7,7 @@ export default function MobileNavDrawer({
   activeSection,
   onSelect,
   title = 'Navigation',
+  badges = {},
 }) {
   if (!isOpen) return null;
 
@@ -58,6 +59,11 @@ export default function MobileNavDrawer({
                     }`}
                   />
                   <span className="ml-3 font-medium truncate">{item.title}</span>
+                  {badges[key] > 0 && (
+                    <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white" aria-label={`${badges[key]} need attention`}>
+                      {badges[key] > 99 ? '99+' : badges[key]}
+                    </span>
+                  )}
                   <ChevronRight
                     size={16}
                     className={`ml-auto flex-shrink-0 ${

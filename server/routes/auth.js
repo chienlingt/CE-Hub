@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../prismaClient');
 const { sendPasswordResetEmail } = require('../services/emailService');
 const { issueAdminSession, revokeAdminSession } = require('../middleware/odooApprovalAuth');
+const { issueEmployeeSession, revokeEmployeeSession } = require('../middleware/employeeAuth');
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
@@ -47,6 +48,7 @@ router.post('/login', async (req, res) => {
       success: true,
       employee: { ...employee, password: undefined },
       admin_session: issueAdminSession(employee),
+      employee_session: issueEmployeeSession(employee),
       message: 'Login successful'
     });
   } catch (err) {
@@ -55,7 +57,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.post('/logout', (req, res) => { revokeAdminSession(req); res.json({ success: true }); });
+router.post('/logout', (req, res) => { revokeAdminSession(req); revokeEmployeeSession(req); res.json({ success: true }); });
 
 // POST /api/auth/reset-request
 // Body: { email }

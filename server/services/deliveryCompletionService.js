@@ -283,6 +283,9 @@ async function processDeliveryCompletion(orderId, {
  * auto trip close, remaining-route traffic refresh and the customer in-app notification.
  */
 async function runPostDeliverySteps(order, updatedOrder, { employeeId, latitude, longitude } = {}) {
+  // FR-10: snapshot crew points. Items are already marked delivered by both callers.
+  await require('./incentiveService').awardOrderSafe(updatedOrder.id);
+
   // ── Step 7: Auto trip close (A.4.2 + A.4.3) ──────────────────────────────
   let autoEnded    = false;
   let autoDeparted = false;

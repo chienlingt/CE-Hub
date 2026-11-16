@@ -128,6 +128,8 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/driver',        require('./routes/driver'));
 app.use('/api/integration-outbox', require('./routes/integrationOutbox'));
 app.use('/api/odoo-change-requests', require('./routes/odooChangeRequests'));
+app.use('/api/performance', require('./routes/performance'));
+app.use('/api/exceptions', require('./routes/exceptions'));
 
 // Health check
 app.get('/api/health', async (req, res) => {
