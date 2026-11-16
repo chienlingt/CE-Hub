@@ -86,6 +86,8 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   const [loading, setLoading] = useState(Boolean(slotId));
   const [error, setError]     = useState(null);
   const [routeRefreshKey, setRouteRefreshKey] = useState(0);
+  // After "Mark arrived": reload the route and ask the page to reload its jobs, so the time shows.
+  const refreshAfterArrival = () => { setRouteRefreshKey(value => value + 1); onRefresh?.(); };
   const [rerouteMessage, setRerouteMessage] = useState(null);
   const [localArranging, setArranging] = useState(false);
   const arranging = sharedControls ? sharedControls.arranging : localArranging;
@@ -679,6 +681,8 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
               detailBasePath="/driver/delivery"
               compactDesktop={adminView}
               onOpenDetails={openDetails}
+              employeeId={employeeId}
+              onArrived={adminView ? undefined : refreshAfterArrival}
               stop={(arranging ? draftStops : route.stops).find(stop => stop.order_id === job.id) || stopCache.current.get(job.id)}
               arranging={arranging} position={index} first={index === 0} last={index === displayed.length - 1} onMove={moveStop}
               locked={savingOrder || sharedControls?.busy} dragging={draggedStopId === job.id} dropTarget={dropTargetId === job.id}
@@ -692,7 +696,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
           })()}
         </div>
       )}
-      {slotId && !route && !loading && sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} onOpenDetails={openDetails} compactDesktop={adminView} detailBasePath="/driver/delivery" />)}
+      {slotId && !route && !loading && sortDeliveryCards(jobs).map(job => <DriverDeliveryCard key={job.id} job={job} onOpenDetails={openDetails} compactDesktop={adminView} detailBasePath="/driver/delivery" employeeId={employeeId} onArrived={adminView ? undefined : refreshAfterArrival} />)}
       {detail && <ScanDeliveryDialog key={detail.order.id} order={detail.order} stop={detail.stop} scanStation={false} onClose={() => { setDetail(null); setRouteRefreshKey(value => value + 1); onRefresh?.(); }} />}
     </div>
   );

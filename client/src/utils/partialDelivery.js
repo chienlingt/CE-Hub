@@ -1,6 +1,6 @@
 // client/src/utils/partialDelivery.js
 // FRD INT-09 — classify each unit for completion and build the partial-delivery request.
-// A unit is delivered only if it was unload-scanned and the driver did not flip it;
+// A unit is delivered only if it was loaded and the driver did not flip it;
 // every undelivered unit needs a reason. Mirrors server/services/partialDeliveryService.js.
 
 export const UNDELIVERED_REASONS = [
@@ -8,13 +8,13 @@ export const UNDELIVERED_REASONS = [
   'Damaged',
   'Wrong item',
   'No space / access',
-  'Not unloaded',
+  'Not loaded',
   'Other',
 ];
 
 /** Reason text sent to the server; '' when the driver still has to give one. */
-function reasonText(override, scanned) {
-  const choice = override.reason ?? (scanned ? '' : 'Not unloaded');
+function reasonText(override, loaded) {
+  const choice = override.reason ?? (loaded ? '' : 'Not loaded');
   if (choice !== 'Other') return choice;
   const note = (override.otherText || '').trim();
   return note ? `Other: ${note}` : '';
@@ -28,8 +28,9 @@ export function classifyUnits(items, overrides = {}) {
   return (items || []).map(item => {
     const key = String(item.id);
     const override = overrides[key] || {};
-    const scanned = item.handling_status === 'unloaded';
-    const delivered = scanned && !override.undelivered;
+    // 'unloaded' only exists on records from before the unloading step was removed.
+    const loaded = ['loaded', 'unloaded'].includes(item.handling_status);
+    const delivered = loaded && !override.undelivered;
     return {
       key,
       order_product_id: item.order_product_id ?? item.id,
@@ -37,11 +38,11 @@ export function classifyUnits(items, overrides = {}) {
       serial: item.assigned_serial || null,
       tracked: item.serial_tracking !== 'none' && (item.serial_tracking === 'serial' || !!item.assigned_serial),
       name: item.products?.product_name || item.odoo_product_name || `Item ${item.order_product_id ?? item.id}`,
-      scanned,
+      loaded,
       delivered,
-      choice: delivered ? null : (override.reason ?? (scanned ? '' : 'Not unloaded')),
+      choice: delivered ? null : (override.reason ?? (loaded ? '' : 'Not loaded')),
       otherText: override.otherText || '',
-      reason: delivered ? null : reasonText(override, scanned),
+      reason: delivered ? null : reasonText(override, loaded),
     };
   });
 }

@@ -117,11 +117,14 @@ async function markOrderDelivering(orderId, { employeeId, now, latitude, longitu
  */
 async function markOrderDelivered(orderId, { employeeId, now, latitude, longitude } = {}) {
   const ts = now || new Date();
+  // Keep the time the driver marked "arrived"; only fall back to the completion time
+  // for orders that never had one.
+  const existing = await prisma.orders.findUnique({ where: { id: orderId }, select: { actual_arrival_date_time: true } });
   const data = {
     order_status:             'Delivered',
     delivered_by:             employeeId || null,
     delivery_end_date_time:   ts,
-    actual_arrival_date_time: ts,
+    actual_arrival_date_time: existing?.actual_arrival_date_time || ts,
     updated_at:               ts,
   };
   if (latitude  != null) data.delivered_latitude  = latitude;

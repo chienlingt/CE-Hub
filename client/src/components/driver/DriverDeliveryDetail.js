@@ -1,22 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Camera, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
-import { isTerminal } from '../../utils/driverStatusMap';
+import { canMarkArrived } from '../../utils/driverStatusMap';
 import OrderTaskCard from './OrderTaskCard';
 import UpdateOrderModal from './UpdateOrderModal';
 import DeliveryEvidenceModal from './DeliveryEvidenceModal';
 import ContactReportModal from './ContactReportModal';
 import FailDeliveryModal from './FailDeliveryModal';
-import ScannerModal from '../common/ScannerModal';
+import ArriveControl from './ArriveControl';
 import { deliveryTime, navigateToDelivery } from './DriverDeliveryCard';
 import useDeliveryStop from '../../hooks/useDeliveryStop';
 import { enrichJobsWithAppointmentWindow } from '../../utils/driverOrderFilters';
 
 const api = path => `${API_BASE_URL.replace(/\/$/, '')}/api/${path}`;
-const itemColors = { pending: 'bg-gray-100 text-gray-600', loaded: 'bg-green-100 text-green-700', unloaded: 'bg-purple-100 text-purple-700' };
+const itemColors = { pending: 'bg-gray-100 text-gray-600', loaded: 'bg-green-100 text-green-700' };
 
 export default function DriverDeliveryDetail({ detailOrderId, initialOrder, initialStop, onClose }) {
   const { orderId: routeOrderId } = useParams();
@@ -56,7 +56,7 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
     if (!admin) return enrichJobsWithAppointmentWindow(jobs).find(item => item.id === orderId);
     if (scanOrder?.id !== orderId) return null;
     return {
-      ...scanOrder, status: scanOrder.order_status || scanOrder.status, customer_name: scanOrder.customers?.full_name || scanOrder.customer_name,
+      ...scanOrder, status: scanOrder.order_status || scanOrder.status, arrived_at: scanOrder.arrived_at || scanOrder.actual_arrival_date_time || null, customer_name: scanOrder.customers?.full_name || scanOrder.customer_name,
       customer_phone: scanOrder.customers?.phone || scanOrder.customer_phone, time: scanOrder.scheduled_start_date_time || scanOrder.time,
       assigned_date: scanOrder.time_slots?.date || new Date(scanOrder.scheduled_start_date_time).toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }),
       address: [scanOrder.delivery_address, scanOrder.delivery_city, scanOrder.delivery_postcode].filter(Boolean).join(', ') || scanOrder.address,
@@ -65,9 +65,6 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
   const [action, setAction] = useState(null);
   const [data, setData] = useState(null);
   const [itemError, setItemError] = useState(null);
-  const [scanItem, setScanItem] = useState(null);
-  const [scanning, setScanning] = useState(false);
-  const scanningRef = useRef(false);
   const [routeStop, setStop] = useState(initialStop || location.state?.stop || null);
   const stop = useDeliveryStop(job, routeStop);
   const refreshItems = useCallback(async () => {
@@ -99,33 +96,6 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
     return () => { cancelled = true; };
   }, [job?.time_slot_id, employeeId, orderId]);
 
-  async function scan(serial) {
-    if (scanningRef.current || !scanItem || scanItem.handling_status !== 'loaded' || !serial?.trim()) return;
-    scanningRef.current = true;
-    setScanning(true);
-    setItemError(null);
-    try {
-      // Same endpoint, stages and serial checks used by Scan Station.
-      const response = await fetch(api(`order-products/${scanItem.id}/handling-status`), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-        body: JSON.stringify({ employee_id: employeeId, stage: 'unloading', serial_number: serial.trim() }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Scan failed.');
-      setScanItem(null);
-      await refreshItems();
-      await refresh();
-      await fetchAdminOrder();
-    } catch (err) {
-      setScanItem(null);
-      setItemError(err.message);
-    } finally {
-      scanningRef.current = false;
-      setScanning(false);
-    }
-  }
-
   function updated() {
     setAction(null);
     refresh();
@@ -146,14 +116,19 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
           <div><dt className="text-gray-400">Work</dt><dd className="mt-1 text-gray-700">{stop?.work_type || '—'}</dd></div>
           <div><dt className="text-gray-400">Service</dt><dd className="mt-1 text-gray-700">{stop?.work_duration_min != null ? `${stop.work_duration_min} min` : '—'}</dd></div>
         </dl>
+        {(job.arrived_at || (!admin && canMarkArrived(job))) && <div className="flex items-center justify-between gap-3 border-t border-gray-100 pt-3">
+          <p className="text-xs text-gray-400">Arrival</p>
+          <ArriveControl job={job} employeeId={employeeId} onArrived={admin ? undefined : updated} highlight />
+        </div>}
       </OrderTaskCard>
       <section aria-label="Delivery items">
         <h2 className="mb-2 text-sm font-semibold text-gray-800">Items{data ? ` (${data.items.length})` : ''}</h2>
         {itemError && <p role="alert" className="mb-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{itemError} <button type="button" onClick={refreshItems} className="ml-2 underline">Refresh</button></p>}
         {!data ? <p className="text-sm text-gray-400">Loading items…</p> : !data.items.length ? <p className="text-sm text-gray-400">No items</p> : <div className="divide-y divide-gray-100 overflow-hidden rounded-xl border border-gray-200 bg-white">
           {data.items.map(item => {
-            const status = item.handling_status || 'pending';
-            const serial = item.unloaded_serial || item.loaded_serial || item.assigned_serial;
+            // Older records may say 'unloaded'; there is no unloading step any more, so they read as loaded.
+            const status = item.handling_status === 'unloaded' ? 'loaded' : (item.handling_status || 'pending');
+            const serial = item.loaded_serial || item.assigned_serial;
             const name = item.products?.product_name || item.odoo_product_name || `Item ${item.id}`;
             return <article key={item.id} className="p-4">
               <div className="flex items-start justify-between gap-3">
@@ -165,7 +140,6 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
               {item.delivery_outcome === 'undelivered' && item.undelivered_reason && <p className="mt-1 text-xs text-red-600">{item.undelivered_reason}</p>}
               <div className="mt-3 flex items-center justify-between gap-3">
                 <p className="min-w-0 break-all font-mono text-xs text-gray-500">{serial || 'No serial assigned'}</p>
-                {status === 'loaded' && <button type="button" onClick={() => setScanItem({ ...item, handling_status: status })} disabled={scanning || isTerminal(job.status)} aria-label={`Scan ${name}`} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white disabled:bg-gray-100 disabled:text-gray-400">{scanning ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />} Unload</button>}
               </div>
             </article>;
           })}
@@ -175,7 +149,6 @@ export default function DriverDeliveryDetail({ detailOrderId, initialOrder, init
       {action === 'evidence' && <DeliveryEvidenceModal order={job} onClose={() => setAction(null)} onSuccess={updated} />}
       {action === 'report' && <ContactReportModal job={job} employeeId={employeeId} onClose={() => setAction(null)} onSuccess={updated} />}
       {action === 'fail' && <FailDeliveryModal order={job} employeeId={employeeId} onClose={() => setAction(null)} onSuccess={updated} />}
-      {scanItem && <ScannerModal itemName={scanItem.products?.product_name || scanItem.odoo_product_name} productId={scanItem.product_id} onScan={scan} onClose={() => { if (!scanningRef.current) setScanItem(null); }} />}
     </div>}
   </div>;
 }

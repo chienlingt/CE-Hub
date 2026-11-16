@@ -11,7 +11,8 @@
     "seed:scheduler": "node seedSchedulerDemo.js",
     "backfill:incentives": "node backfillIncentivePoints.js",
     "seed:items": "node seedItemPoints.js",
-    "seed:performance": "node seedPerformanceDemo.js"
+    "seed:performance": "node seedPerformanceDemo.js",
+    "seed:arrival": "node seedArrivalDemo.js"
   },
   "keywords": [],
   "author": "",

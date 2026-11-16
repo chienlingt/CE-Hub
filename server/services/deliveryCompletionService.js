@@ -3,10 +3,11 @@
 // A.4 Delivery Completion Processing
 //
 // Called when a driver marks an order as delivered via the driver web dashboard.
-// Enforces the scan/unload gate, captures POD, sets final status to Delivered,
+// Enforces the load + arrival gate, captures POD, sets final status to Delivered,
 // enqueues Odoo sync, and auto-closes the slot trip.
 
 const prisma = require('../prismaClient');
+const { assertDeliverable } = require('./deliveryGates');
 const { optimizeScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('./intelligentRouteOptimizationService');
 const {
   markOrderDelivered,
@@ -136,7 +137,7 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
  * A.4 Delivery Completion — called from POST /api/orders/:id/deliver.
  *
  * Validates:
- *   - All items unloaded (scan gate)
+ *   - All items loaded, and the order marked arrived (deliveryGates.js)
  *   - POD present (FR-04-003): at least one photo file OR signature data-URL
  *
  * Then:
@@ -184,15 +185,8 @@ async function processDeliveryCompletion(orderId, {
     throw err;
   }
 
-  // ── Step 2: Scan gate — all items must be unloaded ────────────────────────
-  const notUnloaded = order.order_products.filter(i => i.handling_status !== 'unloaded');
-  if (notUnloaded.length > 0) {
-    const err = new Error('Cannot complete — not all items have been unloaded.');
-    err.code  = 'ITEMS_NOT_UNLOADED';
-    err.statusCode = 400;
-    err.notUnloaded = notUnloaded.map(i => ({ id: i.id, status: i.handling_status }));
-    throw err;
-  }
+  // ── Step 2: Gate — every item loaded, and the driver marked the order arrived ──
+  assertDeliverable(order.order_products, order.actual_arrival_date_time);
 
   // ── Step 3: FR-04-003 — POD required ─────────────────────────────────────
   const hasPhotos    = photoFiles.length > 0;
@@ -223,7 +217,7 @@ async function processDeliveryCompletion(orderId, {
     order_status:             finalStatus,
     delivered_by:             employeeId || null,
     delivery_end_date_time:   now,
-    actual_arrival_date_time: now,
+    // actual_arrival_date_time is kept: it is the time the driver marked "arrived".
     updated_at:               now,
     delivery_evidence:        [...existingEvidence, ...newPhotoPaths],
     proof_of_delivery_url:    proofUrl,
@@ -241,7 +235,7 @@ async function processDeliveryCompletion(orderId, {
   });
 
   // This path only ever completes a full delivery (Step 2 already gated on every
-  // item being unloaded) — mark every line item delivered at its full ordered
+  // item being loaded) — mark every line item delivered at its full ordered
   // quantity so the Odoo completion payload's order_lines are accurate.
   for (const item of order.order_products) {
     await prisma.order_products.update({

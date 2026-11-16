@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, GripVertical, Navigation } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { statusBadge } from '../../utils/driverStatusMap';
 import useDeliveryStop from '../../hooks/useDeliveryStop';
+import ArriveControl, { actionSize, ACTION_PLAIN } from './ArriveControl';
 
 export function deliveryTime(value) {
   if (!value) return '—';
@@ -22,7 +23,7 @@ export function sortDeliveryCards(jobs, stops = []) {
     (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
 }
 
-export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop = false, arranging = false, position, onMove, first, last, locked = false, dragging = false, dropTarget = false, onTouchDragStart, onTouchDragMove, onTouchDragEnd, onTouchDragCancel, detailBasePath = '/driver/delivery', compactDesktop = false, onOpenDetails, ...dragProps }) {
+export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop = false, arranging = false, position, onMove, first, last, locked = false, dragging = false, dropTarget = false, onTouchDragStart, onTouchDragMove, onTouchDragEnd, onTouchDragCancel, detailBasePath = '/driver/delivery', compactDesktop = false, onOpenDetails, employeeId, onArrived, ...dragProps }) {
   const stop = useDeliveryStop(job, suppliedStop);
   const navigate = useNavigate();
   const badge = statusBadge(job.status);
@@ -65,7 +66,11 @@ export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop =
         {arranging ? <div className="flex gap-2">
           <button type="button" aria-label="Move delivery earlier" title="Move up" disabled={first || locked} onClick={() => onMove(position, position - 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-300"><ArrowUp className="h-4 w-4" /></button>
           <button type="button" aria-label="Move delivery later" title="Move down" disabled={last || locked} onClick={() => onMove(position, position + 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-300"><ArrowDown className="h-4 w-4" /></button>
-        </div> : <button type="button" onClick={() => navigateToDelivery(job, stop)} disabled={!job.address && !stop?.address && stop?.latitude == null} className={`inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold disabled:opacity-40 ${compactDesktop ? 'lg:min-h-9' : ''} ${nextStop ? 'bg-blue-600 text-white' : 'border border-gray-200 text-gray-600 hover:bg-gray-100'}`}><Navigation className="h-3.5 w-3.5" /> Navigate</button>}
+        </div> : <div className={`flex flex-wrap items-start justify-end gap-2 ${compactDesktop ? 'lg:flex-col lg:items-end' : ''}`}>
+          {/* Only the next stop is tinted; every other order keeps plain buttons of the same size. */}
+          <ArriveControl job={job} employeeId={employeeId} onArrived={onArrived} highlight={nextStop} compact={compactDesktop} />
+          <button type="button" onClick={() => navigateToDelivery(job, stop)} disabled={!job.address && !stop?.address && stop?.latitude == null} className={`${actionSize(compactDesktop)} disabled:opacity-40 ${nextStop && !job.arrived_at ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700' : ACTION_PLAIN}`}><Navigation className="h-3.5 w-3.5" /> Navigate</button>
+        </div>}
       </div>
     </article>
   );

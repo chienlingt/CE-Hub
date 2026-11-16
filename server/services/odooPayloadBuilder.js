@@ -182,7 +182,8 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     vehicle_plate:          crew.vehicle_plate,
     scheduled_start:        toMytIso(order.scheduled_start_date_time),
     scheduled_end:          toMytIso(order.scheduled_end_date_time),
-    delivered_time:         toMytIso(order.delivery_end_date_time || order.actual_arrival_date_time),
+    arrived_time:           toMytIso(order.actual_arrival_date_time),
+    delivered_time:         toMytIso(order.delivery_end_date_time),
     timestamp:              toMytIso(new Date()),
   };
 }

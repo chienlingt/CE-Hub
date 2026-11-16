@@ -9,8 +9,9 @@
 //   - Eligible:      order_status Delivering / In Progress; Odoo-managed orders must be DOO Ready
 //   - Outcome:       a true partial only — zero delivered -> failure flow, all delivered -> normal completion
 //   - Serials:       delivered + undelivered split the line's assigned serials exactly
-//   - Unload gate:   only an unload-scanned unit can be delivered; a scanned unit the customer
-//                    refused stays 'unloaded' and is marked undelivered
+//   - Load gate:     only a loaded unit can be delivered; a loaded unit the customer
+//                    refused stays on the van and is marked undelivered
+//   - Arrival gate:  the driver must have marked the order as arrived (deliveryGates.js)
 //   - Reasons:       every undelivered unit carries a reason (unit_scans[i].undelivered_reason);
 //                    they are rolled into delivery_notes, which Odoo receives as `remarks`
 //   - POD:           photo or signature required, same as full completion (FR-04-003)
@@ -24,6 +25,7 @@ const { ELIGIBLE_STATUSES } = require('./deliveryFailureService');
 const { upsertEmployeeLocation } = require('./deliveryLifecycleService');
 const { runPostDeliverySteps } = require('./deliveryCompletionService');
 const { isOdooManaged } = require('./odooPreparation');
+const { ON_VAN, deliveryBlocker } = require('./deliveryGates');
 const { evidenceFilePath } = require('../middleware/upload');
 
 const MAX_REASON_LENGTH = 200;
@@ -96,7 +98,7 @@ function planPartialDelivery(orderProducts, lines) {
     const units = unitsFor(item);
     const quantity = units.length;
     const delivered = new Array(quantity).fill(false);
-    const unloaded = units.map(unit => unit.handling_status === 'unloaded');
+    const loaded = units.map(unit => ON_VAN.includes(unit.handling_status));
     const serialIndex = new Map(units.filter(unit => unit.assigned_serial)
       .map(unit => [norm(unit.assigned_serial), units.indexOf(unit)]));
     const serialTracked = isSerialTracked(item, units);
@@ -114,7 +116,7 @@ function planPartialDelivery(orderProducts, lines) {
           const position = serialIndex.get(norm(serial));
           if (position === undefined) throw fail(400, 'SERIAL_MISMATCH', `Line ${id}: serial ${serial} is not assigned to this line.`);
           if (classified.has(position)) throw fail(400, 'SERIAL_OVERLAP', `Line ${id}: serial ${serial} is listed more than once.`);
-          if (isDelivered && !unloaded[position]) throw fail(400, 'UNIT_NOT_UNLOADED', `Line ${id}: serial ${serial} was not unload-scanned, so it cannot be delivered.`);
+          if (isDelivered && !loaded[position]) throw fail(400, 'UNIT_NOT_LOADED', `Line ${id}: serial ${serial} was not loaded, so it cannot be delivered.`);
           classified.add(position);
           delivered[position] = isDelivered;
         }
@@ -134,10 +136,10 @@ function planPartialDelivery(orderProducts, lines) {
       if (!Number.isInteger(count) || count < 0 || count > quantity) {
         throw fail(400, 'INVALID_DELIVERED_QUANTITY', `Line ${id}: delivered_quantity must be a whole number from 0 to ${quantity}.`);
       }
-      // Units are interchangeable: deliver unloaded units the driver did not give a reason for.
-      const candidates = units.map((_, position) => position).filter(position => unloaded[position] && !reasons.has(position));
-      if (count > unloaded.filter(Boolean).length) {
-        throw fail(400, 'UNIT_NOT_UNLOADED', `Line ${id}: only ${unloaded.filter(Boolean).length} of ${quantity} units were unload-scanned.`);
+      // Units are interchangeable: deliver loaded units the driver did not give a reason for.
+      const candidates = units.map((_, position) => position).filter(position => loaded[position] && !reasons.has(position));
+      if (count > loaded.filter(Boolean).length) {
+        throw fail(400, 'UNIT_NOT_LOADED', `Line ${id}: only ${loaded.filter(Boolean).length} of ${quantity} units were loaded.`);
       }
       if (count > candidates.length) {
         throw fail(400, 'INVALID_REASONS', `Line ${id}: reasons were given for units counted as delivered.`);
@@ -202,7 +204,7 @@ function storedSignature(orderProducts) {
 /**
  * Order-level delivery_notes for a partial: one entry per undelivered unit, then the
  * driver's own remarks. Odoo receives this as `remarks` on the Delivered event.
- * e.g. "Undelivered: Washer (SN-B) - Damaged; Fridge #2 - Not unloaded. Driver: left at guard"
+ * e.g. "Undelivered: Washer (SN-B) - Damaged; Fridge #2 - Customer refused. Driver: left at guard"
  */
 function composePartialRemarks(orderProducts, plannedLines, driverRemarks) {
   const byId = new Map(orderProducts.map(item => [item.id, item]));
@@ -278,6 +280,10 @@ async function completePartialDelivery(orderId, {
   if (odooManaged && order.doo_ready !== true) {
     throw fail(409, 'DOO_NOT_READY', 'This Odoo order is not marked DOO Ready.');
   }
+  // The driver must have marked the order as arrived. (Units are checked unit by unit in
+  // planPartialDelivery, so only the arrival part of the gate applies here.)
+  const gate = deliveryBlocker([], order.actual_arrival_date_time);
+  if (gate) throw fail(gate.statusCode, gate.code, gate.message);
 
   const now = new Date();
   const notes = composePartialRemarks(order.order_products, plan.lines, remarks);
@@ -290,7 +296,7 @@ async function completePartialDelivery(orderId, {
         order_status:             'Delivered',
         delivered_by:             employee_id,
         delivery_end_date_time:   now,
-        actual_arrival_date_time: now,
+        // actual_arrival_date_time is kept: it is the time the driver marked "arrived".
         updated_at:               now,
         delivery_notes:           notes,
         delivery_evidence:        [...(order.delivery_evidence || []), ...photoPaths],

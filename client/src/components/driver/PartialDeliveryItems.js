@@ -1,7 +1,7 @@
 // client/src/components/driver/PartialDeliveryItems.js
 // FRD INT-09 — per-unit outcome review inside the Delivered (POD) step.
-// Unloaded units count as delivered unless the driver flips them; units still on the van
-// are undelivered. Every undelivered unit needs a reason.
+// Loaded units count as delivered unless the driver flips them; a unit that was never
+// loaded is undelivered. Every undelivered unit needs a reason.
 import { UNDELIVERED_REASONS } from '../../utils/partialDelivery';
 
 /**
@@ -15,7 +15,7 @@ export default function PartialDeliveryItems({ units, onChange, disabled = false
   return (
     <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
       {units.map(unit => {
-        const reasons = unit.scanned ? UNDELIVERED_REASONS.filter(r => r !== 'Not unloaded') : UNDELIVERED_REASONS;
+        const reasons = unit.loaded ? UNDELIVERED_REASONS.filter(r => r !== 'Not loaded') : UNDELIVERED_REASONS;
         return (
           <div key={unit.key} className={`p-3 space-y-2 ${unit.delivered ? '' : 'bg-amber-50/60'}`}>
             <div className="flex items-start justify-between gap-2">
@@ -24,10 +24,10 @@ export default function PartialDeliveryItems({ units, onChange, disabled = false
                 <p className="font-mono text-xs text-gray-500 break-all">{unit.serial || `Unit #${unit.unit_number}`}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${unit.scanned ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
-                  {unit.scanned ? 'Unloaded' : 'Still on van'}
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${unit.loaded ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {unit.loaded ? 'Loaded' : 'Not loaded'}
                 </span>
-                {unit.scanned && (
+                {unit.loaded && (
                   <button
                     type="button"
                     disabled={disabled}

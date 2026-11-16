@@ -53,7 +53,6 @@ import DeliveryIssues from './admin/exceptions/DeliveryIssues';
 
 // Scan Station wrappers — stage locked by tab selection
 const ScanStationLoading   = () => <ScanStation forcedStage="driver" />;
-const ScanStationUnloading = () => <ScanStation forcedStage="unloading" />;
 const ScanStationAudit     = () => <ScanStation forcedStage="audit" />;
 
 /**
@@ -188,7 +187,6 @@ const Layout = () => {
       route: '/scanning',
       topNavItems: [
         { id: 'loading',   label: 'Loading',   path: 'loading',   component: ScanStationLoading,   allowedRoles: ['admin', 'delivery', 'driver'] },
-        { id: 'unloading', label: 'Unloading', path: 'unloading', component: ScanStationUnloading, allowedRoles: ['admin', 'delivery', 'driver'] },
         { id: 'audit',     label: 'Audit',     path: 'audit',     component: ScanStationAudit,     allowedRoles: ['admin'] },
       ],
     },
@@ -556,6 +554,8 @@ const Layout = () => {
         <div data-page-scroll className={`min-h-0 flex-1 ${activeSection === 'scanning' && !location.pathname.startsWith('/scanning/delivery/') ? 'flex flex-col overflow-hidden' : 'overflow-auto'} p-2 ${useBottomNav ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
           <Routes>
             <Route path="/driver/route" element={<Navigate to="/driver" replace />} />
+            {/* The Unloading tab was removed: send old links to Loading. */}
+            <Route path="/scanning/unloading" element={<Navigate to="/scanning/loading" replace />} />
             {/* Completed Deliveries moved from Exceptions to Order Management. */}
             <Route path="/exceptions/completed-deliveries" element={<Navigate to="/order/completed-deliveries" replace />} />
             <Route path="/driver/delivery/:orderId" element={<DriverDeliveryDetail />} />

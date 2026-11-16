@@ -18,6 +18,8 @@ const { completePartialDelivery } = require('../services/partialDeliveryService'
 
 const upload = require('../middleware/upload');
 const { processDeliveryCompletion } = require('../services/deliveryCompletionService');
+const { markOrderArrived } = require('../services/deliveryArrivalService');
+const { deliveryBlocker } = require('../services/deliveryGates');
 
 const TRAVEL_FALLBACK_MINUTES = 17;
 
@@ -930,6 +932,7 @@ router.patch('/:id/status', async (req, res) => {
         delivery_end_date_time: true,
         install_start_date_time: true,
         install_end_date_time: true,
+        actual_arrival_date_time: true,
         employee_id: true,
       }
     });
@@ -950,7 +953,7 @@ router.patch('/:id/status', async (req, res) => {
 
     if (canonicalStatus === 'Delivered') {
       data.delivery_end_date_time = now;
-      data.actual_arrival_date_time = now;
+      data.actual_arrival_date_time = existingOrder.actual_arrival_date_time || now; // keep the driver's arrival time
       if (latitude  != null) data.delivered_latitude  = parseFloat(latitude);
       if (longitude != null) data.delivered_longitude = parseFloat(longitude);
     }
@@ -1297,7 +1300,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// GET /:id/loading-status — A2: per-item loading/unloading status for an order
+// GET /:id/loading-status — A2: per-item loading status for an order, and whether it has arrived
 router.get('/:id/loading-status', async (req, res) => {
   try {
     const items = await prisma.order_products.findMany({
@@ -1308,12 +1311,12 @@ router.get('/:id/loading-status', async (req, res) => {
 
     if (!items.length) {
       return res.json({
-        items: [], all_loaded: true, all_unloaded: true,
-        ready_to_dispatch: true, loaded_count: 0, unloaded_count: 0, total: 0,
+        items: [], all_loaded: true,
+        ready_to_dispatch: true, loaded_count: 0, total: 0, arrived_at: null,
       });
     }
 
-    // Resolve employee names for loaded_by / unloaded_by
+    // Resolve employee names for loaded_by (and unloaded_by on older records)
     const empIds = [...new Set([
       ...items.filter(i => i.loaded_by).map(i => i.loaded_by),
       ...items.filter(i => i.unloaded_by).map(i => i.unloaded_by),
@@ -1336,12 +1339,11 @@ router.get('/:id/loading-status', async (req, res) => {
     }));
 
     const all_loaded   = enriched.every(i => ['loaded','unloaded'].includes(i.handling_status));
-    const all_unloaded = enriched.every(i => i.handling_status === 'unloaded');
 
     // Fetch order-level status + delivery info
     const order = await prisma.orders.findUnique({
       where:  { id: req.params.id },
-      select: { order_status: true, delivered_by: true, delivery_end_date_time: true, odoo_picking_id: true, doo_ready: true },
+      select: { order_status: true, delivered_by: true, delivery_end_date_time: true, actual_arrival_date_time: true, odoo_picking_id: true, doo_ready: true },
     });
 
     let deliveredByName = null;
@@ -1356,15 +1358,14 @@ router.get('/:id/loading-status', async (req, res) => {
     res.json({
       items:             enriched,
       all_loaded,
-      all_unloaded,
       ready_to_dispatch: all_loaded && !require('../services/odooPreparation').preparationProblem(order, items),
       doo_ready: order?.doo_ready ?? null,
       serials_assigned: require('../services/odooPreparation').hasCompleteSerialAssignments(items),
       preparation_message: require('../services/odooPreparation').preparationProblem(order, items),
-      ready_to_deliver:  all_unloaded,
+      ready_to_deliver:  all_loaded && !!order?.actual_arrival_date_time,
       loaded_count:   enriched.filter(i => ['loaded','unloaded'].includes(i.handling_status)).length,
-      unloaded_count: enriched.filter(i => i.handling_status === 'unloaded').length,
       total:          enriched.length,
+      arrived_at:     order?.actual_arrival_date_time || null,
       order_status:   order?.order_status || null,
       delivered_by_name: deliveredByName,
       delivered_at:   order?.delivery_end_date_time || null,
@@ -1456,7 +1457,26 @@ router.post('/:id/dispatch', async (req, res) => {
   */
 });
 
-// POST /:id/deliver — driver marks order as Delivered after unloading all items (A2 / A4)
+// POST /:id/arrive — the driver taps "Mark arrived" on an order. Records the arrival time and
+// queues the Odoo "Arrived" status. Required before the delivery can be completed.
+// Body (JSON): { employee_id, latitude?, longitude? }
+router.post('/:id/arrive', async (req, res) => {
+  try {
+    const { employee_id, latitude, longitude } = req.body || {};
+    const result = await markOrderArrived(req.params.id, {
+      employeeId: employee_id,
+      latitude: latitude != null ? parseFloat(latitude) : null,
+      longitude: longitude != null ? parseFloat(longitude) : null,
+    });
+    res.json({ success: true, already_arrived: result.alreadyArrived, arrived_at: result.arrivedAt, order: result.order });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, code: err.code });
+    console.error('POST /api/orders/:id/arrive error', err);
+    res.status(500).json({ error: 'Failed to mark the order as arrived' });
+  }
+});
+
+// POST /:id/deliver — driver marks order as Delivered once every item is loaded and the order is marked arrived (A2 / A4)
 // Accepts multipart/form-data for POD photos (field: photos) and optional signature (field: signature).
 // Falls back to JSON body (employee_id only) for backwards compatibility with warehouse tablets.
 router.post('/:id/deliver', upload.fields([
@@ -1504,21 +1524,18 @@ router.post('/:id/deliver', upload.fields([
       where:   { order_id: req.params.id },
       include: { products: { select: { product_name: true } } },
     });
+    const arrival = await prisma.orders.findUnique({ where: { id: req.params.id }, select: { actual_arrival_date_time: true } });
 
-    const notUnloaded = items.filter(i => i.handling_status !== 'unloaded');
-    if (notUnloaded.length > 0) {
-      return res.status(400).json({
-        error:        'Cannot mark as delivered — not all items have been unloaded.',
-        code:         'ITEMS_NOT_UNLOADED',
-        not_unloaded: notUnloaded.map(i => ({ id: i.id, product_name: i.products?.product_name, status: i.handling_status })),
-      });
+    const blocker = deliveryBlocker(items, arrival?.actual_arrival_date_time);
+    if (blocker) {
+      return res.status(blocker.statusCode).json({ error: blocker.message, code: blocker.code, items: blocker.items });
     }
 
     const now     = new Date();
     const updated = await markOrderDelivered(req.params.id, { employeeId: employee_id, now, latitude: lat, longitude: lng });
 
-    // This path is already gated on every item being unloaded (see notUnloaded
-    // check above) — mark every line item delivered at its full ordered quantity
+    // This path is already gated on every item being loaded and the order arrived (see
+    // deliveryBlocker above) — mark every line item delivered at its full ordered quantity
     // so the Odoo completion payload's order_lines are accurate.
     for (const item of items) {
       await prisma.order_products.update({

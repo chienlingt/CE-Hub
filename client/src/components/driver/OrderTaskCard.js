@@ -1,6 +1,6 @@
 // client/src/components/driver/OrderTaskCard.js
 import { Phone, MessageCircle, Flag, MapPin, User, Clock, Package, Navigation } from 'lucide-react';
-import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus, DELIVERING_STATUSES } from '../../utils/driverStatusMap';
+import { statusBadge, isTerminal, isCompletedEvidenceMode, isScheduledStatus, canMarkArrived, DELIVERING_STATUSES } from '../../utils/driverStatusMap';
 import { callCustomer, openWhatsApp } from '../../utils/phoneHelpers';
 import { onTheWayTemplate } from '../../utils/templateMessages';
 import IconActionButton from './IconActionButton';
@@ -24,6 +24,8 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
   const canFail = DELIVERING_STATUSES.includes(job.status);
   // Hide Update button on Scheduled/Loaded; Update only useful while Delivering/In Progress
   const showUpdate = !isScheduled && !terminal && !showEvidence;
+  // Completing a delivery needs the order to be marked arrived first (failing does not).
+  const waitingForArrival = canMarkArrived(job);
 
   // Option A: loading badge — only shown on Scheduled-tab orders
   const showLoadingBadge = isScheduledStatus(job.status) && job.loading_total > 0;
@@ -133,7 +135,7 @@ export default function OrderTaskCard({ job, onUpdate, onReport, onViewEvidence,
           {canFail && <button type="button" onClick={() => onFail(job)} title="Mark as failed delivery" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 hover:bg-red-100">Failed</button>}
           {showEvidence
             ? <button type="button" onClick={() => onViewEvidence(job)} title="View or edit proof of delivery" className="min-h-9 rounded-lg bg-green-600 px-2 text-[11px] font-semibold text-white hover:bg-green-700 sm:px-3 sm:text-xs">POD</button>
-            : showUpdate ? <button type="button" onClick={() => onUpdate(job)} title="Update status" className="inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700">Update</button> : null}
+            : showUpdate ? <button type="button" onClick={() => onUpdate(job)} disabled={waitingForArrival} title={waitingForArrival ? 'Mark arrived first' : 'Update status'} className="inline-flex min-h-10 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:bg-gray-100 disabled:text-gray-400">{waitingForArrival ? 'Mark arrived first' : 'Update'}</button> : null}
         </div>
       </div>}
     </div>

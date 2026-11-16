@@ -128,7 +128,12 @@ async function preprocessImage(file) {
   });
 }
 
-export default function ScannerModal({ itemName, productId, onScan, onClose }) {
+/**
+ * `editBeforeConfirm`: after a scan, the serial number is put in the manual-entry
+ * box so the driver can fix it, then mark the item done (Enter works too). Without
+ * it the scanned value is shown read-only with a Confirm button, as before.
+ */
+export default function ScannerModal({ itemName, productId, onScan, onClose, editBeforeConfirm = false }) {
   const galleryInputRef = useRef(null);
   const html5QrRef      = useRef(null); // live-scan instance, while status === 'live'
   const [status,       setStatus]       = useState('idle'); // idle | live | processing | success | error
@@ -136,6 +141,13 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
   const [errorMsg,     setErrorMsg]     = useState('');
   const [preview,      setPreview]      = useState(null);
   const [manualSerial, setManualSerial] = useState('');
+
+  // A barcode was read (live camera or photo). In edit mode the serial also lands in the manual box.
+  const finishScan = (text) => {
+    setScanned(text);
+    if (editBeforeConfirm) setManualSerial(String(text ?? '').trim());
+    setStatus('success');
+  };
 
   const stopLiveScan = async () => {
     if (html5QrRef.current) {
@@ -174,8 +186,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
           { facingMode: 'environment' },
           { fps: 12, qrbox: { width: 280, height: 130 } },
           (decodedText) => {
-            setScanned(decodedText);
-            setStatus('success');
+            finishScan(decodedText);
             stopLiveScan();
           },
           () => { /* per-frame decode miss while aiming — expected, ignore */ }
@@ -223,8 +234,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
       const scanner   = new Html5Qrcode('qr-file-container');
       const result    = await scanner.scanFile(processed, false);
       scanner.clear();
-      setScanned(result);
-      setStatus('success');
+      finishScan(result);
     } catch {
       setStatus('error');
       setErrorMsg('No QR code or barcode detected. Make sure the QR code fills most of the frame and try again.');
@@ -236,6 +246,7 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
   const handleRetry = () => {
     setStatus('idle');
     setScanned(null);
+    if (editBeforeConfirm) setManualSerial(''); // start the next scan with an empty box
     setPreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
   };
 
@@ -353,16 +364,34 @@ export default function ScannerModal({ itemName, productId, onScan, onClose }) {
 
           {status === 'success' && (
             <>
-              <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-600">
-                <span className="font-medium">Scanned: </span>
-                <span className="font-mono text-blue-700">{scanned}</span>
-              </div>
+              {editBeforeConfirm ? (
+                <div>
+                  <label htmlFor="scanned-serial" className="mb-1 block text-xs font-medium text-gray-500">
+                    Serial number <span className="font-normal text-gray-400">· edit if it is wrong</span>
+                  </label>
+                  <input
+                    id="scanned-serial"
+                    type="text"
+                    value={manualSerial}
+                    onChange={e => setManualSerial(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && submitManual()}
+                    placeholder="Enter serial number…"
+                    className="w-full px-3 py-2 text-sm font-mono border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                </div>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-600">
+                  <span className="font-medium">Scanned: </span>
+                  <span className="font-mono text-blue-700">{scanned}</span>
+                </div>
+              )}
               <button
-                onClick={() => onScan(scanned)}
-                className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm rounded-xl transition-colors"
+                onClick={() => (editBeforeConfirm ? submitManual() : onScan(scanned))}
+                disabled={editBeforeConfirm && !manualSerial.trim()}
+                className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm rounded-xl transition-colors disabled:opacity-40"
               >
                 <CheckCircle size={15} className="inline mr-2" />
-                Confirm & Mark Item
+                {editBeforeConfirm ? 'Mark as done' : 'Confirm & Mark Item'}
               </button>
               <button
                 onClick={handleRetry}

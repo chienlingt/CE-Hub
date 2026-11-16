@@ -152,6 +152,7 @@ router.get('/jobs', async (req, res) => {
         delivery_evidence:        o.delivery_evidence || [],
         proof_of_delivery_url:    o.proof_of_delivery_url || null,
         delivery_notes:           o.delivery_notes || null,
+        arrived_at:               o.actual_arrival_date_time ? o.actual_arrival_date_time.toISOString() : null,
         time_slot_id:             o.time_slot_id || null,
         slot_status:              o.time_slots?.slot_status || null,
         odoo_order_ref:           o.odoo_order_ref || null,

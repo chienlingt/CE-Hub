@@ -35,7 +35,7 @@ const mockNavItems = [
   { key: 'access', name: 'Access Control', description: 'Role changes require an Admin login', icon: '🛡️' },
   // Hidden from sidebar — kept for easy re-enable.
   // { key: 'installation', name: 'Installation Schedule', description: 'Installation schedule management', icon: '🔧' },
-  { key: 'scanning',  name: 'Scan Station',  description: 'Item loading and unloading scan confirmation', icon: '📷' },
+  { key: 'scanning',  name: 'Scan Station',  description: 'Item loading scan confirmation', icon: '📷' },
   { key: 'driver',    name: 'Deliveries', description: 'Delivery teams, orders, and routes', icon: '🚛' },
 ];
 

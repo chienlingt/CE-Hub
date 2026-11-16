@@ -82,6 +82,16 @@ export function isCompletedEvidenceMode(orderStatus) {
   return orderStatus === 'Delivered';
 }
 
+/** The driver marked this order as arrived (job.arrived_at is the time the server saved). */
+export function hasArrived(job) {
+  return Boolean(job?.arrived_at);
+}
+
+/** Out for delivery and not yet marked arrived: the driver can tap "Mark arrived". */
+export function canMarkArrived(job) {
+  return DELIVERING_STATUSES.includes(job?.status) && !hasArrived(job);
+}
+
 /** Whether the order is in the Scheduled tab (used for loading badge visibility). */
 export function isScheduledStatus(orderStatus) {
   return SCHEDULED_STATUSES.includes(orderStatus);

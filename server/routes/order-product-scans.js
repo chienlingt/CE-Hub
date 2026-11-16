@@ -53,25 +53,24 @@ router.use(async (req, res, next) => {
         if (['loaded', 'unloaded'].includes(unit.handling_status)) unit.loaded_serial = serial;
         if (unit.handling_status === 'unloaded') unit.unloaded_serial = serial;
       } else if (action === 'scan' || action === 'cancel-scan') {
-        if (action === 'cancel-scan' && !['loading', 'unloading'].includes(stage)) fail(400, 'stage must be loading or unloading');
-        if (action === 'cancel-scan' && unit.handling_status !== (stage === 'loading' ? 'loaded' : 'unloaded')) fail(400, 'This scan cannot be cancelled at its current stage.');
-        if (action === 'scan' || stage === 'loading') Object.assign(unit, { handling_status: 'pending', loaded_serial: null, loaded_at: null, loaded_by: null, unloaded_serial: null, unloaded_at: null, unloaded_by: null });
-        else Object.assign(unit, { handling_status: 'loaded', unloaded_serial: null, unloaded_at: null, unloaded_by: null });
+        if (action === 'cancel-scan' && stage !== 'loading') fail(400, 'stage must be loading');
+        if (action === 'cancel-scan' && unit.handling_status !== 'loaded') fail(400, 'This scan cannot be cancelled at its current stage.');
+        // Cancelling a load and resetting an item both put it back to pending.
+        Object.assign(unit, { handling_status: 'pending', loaded_serial: null, loaded_at: null, loaded_by: null, unloaded_serial: null, unloaded_at: null, unloaded_by: null });
       } else {
-        if (!['loading', 'unloading'].includes(stage)) fail(400, 'stage must be loading or unloading');
-        if (stage === 'loading' && unit.handling_status !== 'pending') fail(409, `Serial "${serial}" is duplicated.`, 'SERIAL_DUPLICATE');
-        if (stage === 'unloading' && unit.handling_status !== 'loaded') fail(400, 'Item must be loaded before it can be unloaded.', 'NOT_LOADED');
-        const expected = stage === 'loading' ? unit.assigned_serial : unit.loaded_serial;
-        if (managed && stage === 'loading' && item.serial_tracking !== 'none' && !expected) fail(409, 'This unit has no Odoo-assigned serial.', 'ODOO_SERIAL_MISSING');
+        // Loading is the only scan stage. Arrival is marked by the driver (POST /orders/:id/arrive).
+        if (stage !== 'loading') fail(400, 'stage must be loading', 'STAGE_NOT_SUPPORTED');
+        if (unit.handling_status !== 'pending') fail(409, `Serial "${serial}" is duplicated.`, 'SERIAL_DUPLICATE');
+        const expected = unit.assigned_serial;
+        if (managed && item.serial_tracking !== 'none' && !expected) fail(409, 'This unit has no Odoo-assigned serial.', 'ODOO_SERIAL_MISSING');
         if (expected && expected.trim().toLowerCase() !== serial.toLowerCase()) fail(400, `Serial mismatch. Expected: ${expected}`, 'SERIAL_MISMATCH');
-        const prefix = stage === 'loading' ? 'loaded' : 'unloaded';
-        Object.assign(unit, { handling_status: prefix, [`${prefix}_serial`]: serial, [`${prefix}_at`]: new Date().toISOString(), [`${prefix}_by`]: employee_id || null });
-        milestone = stage === 'loading' ? 'Loaded' : 'Arrived';
+        Object.assign(unit, { handling_status: 'loaded', loaded_serial: serial, loaded_at: new Date().toISOString(), loaded_by: employee_id || null });
+        milestone = 'Loaded';
       }
       const updated = await tx.order_products.update({ where: { id: item.id }, data: summarizeUnits(units), include: { products: true } });
       if (milestone) {
         const siblings = await tx.order_products.findMany({ where: { order_id: item.order_id } });
-        if (!siblings.flatMap(unitsFor).every(other => milestone === 'Loaded' ? ['loaded', 'unloaded'].includes(other.handling_status) : other.handling_status === 'unloaded')) milestone = null;
+        if (!siblings.flatMap(unitsFor).every(other => ['loaded', 'unloaded'].includes(other.handling_status))) milestone = null;
       }
       return { updated: expandUnits(updated)[index], orderId: item.order_id, milestone };
     }, { timeout: 15000 });
