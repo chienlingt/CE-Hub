@@ -57,7 +57,7 @@ async function incomingOrders(query) {
   const where = `WHERE ($1 = '' OR source = $1) AND ($2 = '' OR sync_status = $2 OR ($2 = 'attention' AND sync_status IN ('failed','retrying','rejected')))
     AND ($3 = '' OR do_ref ILIKE '%' || $3 || '%' OR customer_name ILIKE '%' || $3 || '%')`;
   const [rows, count, summary] = await Promise.all([
-    prisma.$queryRawUnsafe(BASE + `SELECT * FROM rows ${where} ORDER BY activity_at DESC NULLS LAST, do_ref LIMIT 25 OFFSET $4`, source, status, search, offset),
+    prisma.$queryRawUnsafe(BASE + `SELECT * FROM rows ${where} ORDER BY activity_at DESC NULLS LAST, do_ref LIMIT 10 OFFSET $4`, source, status, search, offset),
     prisma.$queryRawUnsafe(BASE + `SELECT COUNT(*)::int AS total FROM rows ${where}`, source, status, search),
     prisma.$queryRawUnsafe(BASE + `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE sync_status IN ('failed','retrying','rejected'))::int AS attention,
       COUNT(*) FILTER (WHERE source = 'odoo_webhook')::int AS webhook, COUNT(*) FILTER (WHERE source = 'fallback_5pm')::int AS fallback FROM rows`),
@@ -69,7 +69,7 @@ async function outgoingJobs(query) {
   if (!['', 'pending', 'processed', 'dead'].includes(status) || !Number.isInteger(offset) || offset < 0) throw Object.assign(new Error('Invalid outgoing filter.'), { status: 400 });
   const where = { target: 'odoo', ...(status ? { status } : {}) };
   const [rows, total, pending, dead, processed, approvals, runIssues] = await Promise.all([
-    prisma.integration_outbox.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 25 }),
+    prisma.integration_outbox.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 10 }),
     prisma.integration_outbox.count({ where }), prisma.integration_outbox.count({ where: { target: 'odoo', status: 'pending' } }),
     prisma.integration_outbox.count({ where: { target: 'odoo', status: 'dead' } }), prisma.integration_outbox.count({ where: { target: 'odoo', status: 'processed' } }),
     prisma.odoo_change_requests.count({ where: { status: 'pending' } }),

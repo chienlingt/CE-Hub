@@ -19,7 +19,7 @@ router.get('/sync-runs', async (req, res) => {
       (status && !['queued', 'running', 'retry_wait', 'retry_exhausted', 'needs_correction', 'completed', 'pending_approval', 'sender_retry_required'].includes(status))) return res.status(400).json({ error: 'Invalid run filter.' });
   const where = { ...(source ? { source } : {}), ...(status ? { status } : {}) };
   try {
-    const [rows, total] = await Promise.all([prisma.odoo_sync_runs.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 25 }), prisma.odoo_sync_runs.count({ where })]);
+    const [rows, total] = await Promise.all([prisma.odoo_sync_runs.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 10 }), prisma.odoo_sync_runs.count({ where })]);
     res.json({ rows, total });
   } catch { res.status(503).json({ error: 'Unable to load sync run history. Check database migration and connection.' }); }
 });
@@ -40,7 +40,7 @@ router.get('/', async (req, res) => {
   try {
     const where = status === 'all' ? {} : { status };
     const [rows, total, pending] = await Promise.all([
-      prisma.odoo_change_requests.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 50,
+      prisma.odoo_change_requests.findMany({ where, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], skip: offset, take: 10,
         select: { id: true, order_id: true, do_ref: true, request_kind: true, changes: true, status: true, created_at: true, reviewed_by_name: true, reviewed_at: true, review_note: true } }),
       prisma.odoo_change_requests.count({ where }), prisma.odoo_change_requests.count({ where: { status: 'pending' } }),
     ]);

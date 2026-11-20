@@ -89,7 +89,7 @@ export default function OdooChangeReview({ token, refreshVersion = 0, onChanged 
   };
   return <section aria-label="Odoo changes needing approval" className="overflow-hidden rounded-xl border border-gray-200 bg-white">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-gray-50 px-4 py-3">
-      <div><h2 className="flex items-center gap-2 text-sm font-semibold text-gray-900"><ShieldCheck size={17} />Needs approval</h2><p className="mt-1 text-xs text-gray-500">Compare changes before accepting. Scans and delivery outcomes stay protected.</p></div>
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-900"><ShieldCheck size={17} />Needs approval</h2>
       <select aria-label="Approval status" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }} className="rounded-lg border bg-white p-2 text-xs"><option value="pending">Pending</option><option value="all">All decisions</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
     </div>
     {error && <p role="alert" className="p-4 text-sm text-red-700">{error}</p>}
@@ -97,7 +97,7 @@ export default function OdooChangeReview({ token, refreshVersion = 0, onChanged 
       <div><p className="text-sm font-semibold text-gray-900">{request.do_ref}<span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-normal text-amber-800">{request.status}</span></p><p className="mt-1 text-xs text-gray-500">{kindLabel(request.request_kind)} · {request.changes?.length || 0} changes ·{new Date(request.created_at).toLocaleString('en-MY')}{request.reviewed_by_name ? ` · ${request.reviewed_by_name}` : ''}</p></div><ChevronRight size={17} />
     </button>)}</div>
     {!rows.length && !error && <p className="px-4 py-10 text-center text-sm text-gray-500">{loading ? 'Loading…' : 'No requests to review.'}</p>}
-    {total > 50 && <div className="flex justify-between border-t px-4 py-2 text-xs"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button><span>{offset + 1}–{Math.min(offset + 50, total)} of {total}</span><button type="button" disabled={offset + 50 >= total} onClick={() => setOffset(offset + 50)}>Next</button></div>}
+    {total > 10 && <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-gray-500"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 10))} className="rounded-lg border px-3 py-1.5 font-medium text-gray-700 disabled:opacity-30">Previous</button><span>Page {Math.floor(offset / 10) + 1} of {Math.ceil(total / 10)} · {total} total</span><button type="button" disabled={offset + 10 >= total} onClick={() => setOffset(offset + 10)} className="rounded-lg border px-3 py-1.5 font-medium text-gray-700 disabled:opacity-30">Next</button></div>}
     {selected && <ReviewDialog request={selected} busy={busy} error={decisionError} onClose={() => { if (!busy) setSelected(null); }} onDecision={decide} />}
   </section>;
 }
