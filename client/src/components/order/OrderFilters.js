@@ -11,13 +11,13 @@ export default function OrderFilters({ filters, onChange, teams, areas, statuses
   const active = Object.entries(filters).some(([key, value]) => value !== (key === 'date' ? 'all' : ORDER_FILTER_DEFAULTS[key]));
   return <div className="mb-4 space-y-3">
     <div className="flex flex-wrap gap-2" aria-label="Order views">
-      {[['all', 'All orders', counts.all], ['scheduling', 'Needs scheduling', counts.scheduling], ['attention', 'Needs attention', counts.attention]].map(([key, label, count]) => <button key={key} aria-pressed={filters.view === key} onClick={() => update('view', key)} className={`rounded-lg px-3 py-2 text-sm ${filters.view === key ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>{label} <span className="ml-1 opacity-75">{count}</span></button>)}
+      {[['all', 'All', counts.all], ['scheduling', 'To schedule', counts.scheduling], ['attention', 'Attention', counts.attention]].map(([key, label, count]) => <button key={key} aria-pressed={filters.view === key} onClick={() => update('view', key)} className={`rounded-lg px-3 py-2 text-sm ${filters.view === key ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>{label} <span className="ml-1 opacity-75">{count}</span></button>)}
     </div>
     <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-3">
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative w-full lg:w-auto lg:flex-1">
           <Search aria-hidden="true" className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-          <input aria-label="Search orders" placeholder="Search DO, customer, phone, address or serial…" value={filters.search} onChange={event => update('search', event.target.value)} className={`${selectClass} pl-9`} />
+          <input aria-label="Search orders" placeholder="Search orders" value={filters.search} onChange={event => update('search', event.target.value)} className={`${selectClass} pl-9`} />
         </div>
         <select aria-label="Delivery date" value={filters.date} onChange={event => update('date', event.target.value)} className={`${selectClass} !w-auto flex-1 lg:flex-none`}>
           <option value="today">Today</option><option value="tomorrow">Tomorrow</option><option value="custom">Date range</option><option value="all">All dates</option>
@@ -37,6 +37,6 @@ export default function OrderFilters({ filters, onChange, teams, areas, statuses
         <select aria-label="Sort orders" value={filters.sort} onChange={event => update('sort', event.target.value)} className={selectClass}><option value="created_desc">Latest first</option><option value="created_asc">Oldest first</option><option value="scheduled_asc">Delivery: earliest</option><option value="scheduled_desc">Delivery: latest</option><option value="customer">Customer name</option></select>
       </div>}
     </div>
-    <div className="flex justify-between items-center text-sm text-gray-500"><span aria-live="polite">{total} {total === 1 ? 'order' : 'orders'} · Delivery date (MYT)</span>{active && <button onClick={() => onChange({ ...ORDER_FILTER_DEFAULTS, date: 'all' })} className="text-blue-600">Clear filters</button>}</div>
+    <div className="flex justify-between items-center text-sm text-gray-500"><span aria-live="polite">{total} {total === 1 ? 'order' : 'orders'}</span>{active && <button onClick={() => onChange({ ...ORDER_FILTER_DEFAULTS, date: 'all' })} className="text-blue-600">Clear filters</button>}</div>
   </div>;
 }

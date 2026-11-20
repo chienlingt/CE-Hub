@@ -30,7 +30,6 @@ export function attentionReasons(order) {
   const status = (order.order_status || '').toLowerCase();
   const reasons = [];
   if (['failed', 'issue'].includes(status)) reasons.push('Delivery issue');
-  if (!['delivered', 'completed', 'cancelled', 'failed'].includes(status) && order.odoo_picking_id && !preparationReady(order)) reasons.push('Preparation incomplete');
   if (['dead', 'failed', 'error'].includes(order.odoo_sync?.status || order.odoo_sync_status)) reasons.push('Sync error');
   return reasons;
 }

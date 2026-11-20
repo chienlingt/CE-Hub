@@ -10,7 +10,6 @@ import {
   Loader2,
   Mail,
   MapPin,
-  Package,
   Phone,
   Sparkles,
   User,
@@ -33,9 +32,29 @@ import { ORDER_FILTER_DEFAULTS, ORDER_FILTER_STORAGE, filterAdminOrders, attenti
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 
+// How many table columns fit: 4 on phone/tablet, 6 from 1024px, 8 from 1280px. Columns are not rendered
+// when they do not fit (instead of hidden with CSS), so the detail row can span exactly the columns shown.
+const COLUMN_QUERIES = ['(min-width: 1024px)', '(min-width: 1280px)'];
+function visibleColumns() {
+  if (typeof window === 'undefined' || !window.matchMedia) return 8;
+  return 4 + 2 * COLUMN_QUERIES.filter(query => window.matchMedia(query).matches).length;
+}
+function useVisibleColumns() {
+  const [columns, setColumns] = useState(visibleColumns);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+    const lists = COLUMN_QUERIES.map(query => window.matchMedia(query));
+    const update = () => setColumns(visibleColumns());
+    lists.forEach(list => list.addEventListener('change', update));
+    return () => lists.forEach(list => list.removeEventListener('change', update));
+  }, []);
+  return columns;
+}
+
 export default function ManageOrders() {
   const [searchParams] = useSearchParams();
   const expandRowRefs = useRef({});
+  const columns = useVisibleColumns();
 
   // State management
   const [orders, setOrders] = useState([]);
@@ -309,49 +328,23 @@ export default function ManageOrders() {
 
       {/* Orders Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-        <table className="w-full min-w-[960px] table-fixed">
-          <colgroup>
-            <col className="w-36" />
-            <col />
-            <col className="w-16" />
-            <col className="w-24" />
-            <col className="w-24" />
-            <col className="w-28" />
-            <col className="w-44" />
-            <col className="w-28" />
-          </colgroup>
+        <table className="w-full table-fixed">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Order #
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Customer
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Items
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Created
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Preferred
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Scheduled (MYT)
-              </th>
-              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
+              <th className="w-36 lg:w-44 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order #</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+              {columns >= 6 && <th className="w-16 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>}
+              <th className="w-24 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              {columns >= 8 && <th className="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>}
+              {columns >= 8 && <th className="w-28 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preferred</th>}
+              {columns >= 6 && <th className="w-44 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Scheduled</th>}
+              <th className="w-32 px-2 sm:px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredOrders.length === 0 ? (
               <tr>
-                <td colSpan="8" className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={columns} className="px-4 py-8 text-center text-gray-500">
                   No orders found
                 </td>
               </tr>
@@ -360,6 +353,7 @@ export default function ManageOrders() {
                   <OrderRow
                     key={order.id}
                     order={order}
+                    columns={columns}
                     allOrders={orders}
                     isExpanded={expandedOrderId === order.id}
                     rowRef={el => { expandRowRefs.current[order.id] = el; }}
@@ -403,7 +397,7 @@ export default function ManageOrders() {
 }
 
 // Order Row Component (with expandable details)
-function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssignTimeslot, onOrderParsed, editDeadlineHours }) {
+function OrderRow({ order, columns, allOrders, isExpanded, rowRef, onView, onEdit, onAssignTimeslot, onOrderParsed, editDeadlineHours }) {
   const statusBadge = getOrderStatusBadge(order.order_status);
   const editCheck = isOrderEditable(order, editDeadlineHours);
   const productCount = getTotalProductCount(order.order_products);
@@ -416,10 +410,10 @@ function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssi
 
   return (
     <>
-      <tr ref={rowRef} className="hover:bg-gray-50 transition-colors">
+      <tr ref={rowRef} onClick={() => onView(order.id)} className={`cursor-pointer transition-colors hover:bg-gray-50 ${isExpanded ? 'bg-gray-50' : ''}`}>
         <td className="px-4 py-3 text-sm font-medium text-gray-900 truncate" title={order.odoo_order_ref || 'Not Synced'}>
           <div className="truncate">{order.odoo_order_ref || 'Not Synced'}</div>
-          {attentionReasons(order).map(reason => <span key={reason} className="mt-1 block text-xs font-normal text-amber-700 whitespace-normal">{reason}</span>)}
+          {attentionReasons(order).map(reason => <span key={reason} className="mt-1 inline-flex rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">{reason}</span>)}
           {siblingDOs.length > 0 && (
             <div className="flex items-center gap-1 mt-0.5 text-xs text-indigo-500">
               <GitBranch className="w-3 h-3" />
@@ -432,64 +426,72 @@ function OrderRow({ order, allOrders, isExpanded, rowRef, onView, onEdit, onAssi
             {order.customers?.full_name || 'N/A'}
           </div>
           <div className="text-xs text-gray-400 truncate">{order.customers?.phone || ''}</div>
+          {/* the Items and Scheduled columns are hidden below lg, so show them here instead */}
+          <div className={`text-xs text-gray-400 truncate ${columns >= 6 ? 'hidden' : ''}`}>
+            {productCount} {productCount === 1 ? 'item' : 'items'}
+            {order.scheduled_start_date_time ? ` · ${formatDateTime(order.scheduled_start_date_time)}` : ''}
+          </div>
         </td>
-        <td className="px-4 py-3 text-sm text-gray-500">
+        {columns >= 6 && <td className="px-4 py-3 text-sm text-gray-500">
           {productCount}
-        </td>
+        </td>}
         <td className="px-4 py-3">
           <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${statusBadge.bgColor} ${statusBadge.color}`}>
             {statusBadge.label}
           </span>
         </td>
-        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+        {columns >= 8 && <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
           {formatDate(order.created_at)}
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+        </td>}
+        {columns >= 8 && <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
           {order.preferred_delivery_time_start
             ? `${order.preferred_delivery_time_start}–${order.preferred_delivery_time_end || ''}`
             : '-'}
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+        </td>}
+        {columns >= 6 && <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
           {order.scheduled_start_date_time ? formatDateTime(order.scheduled_start_date_time) : '-'}
-        </td>
-        <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+        </td>}
+        <td className="px-2 sm:px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
           <button
-            onClick={() => onView(order.id)}
-            className="text-blue-600 hover:text-blue-900 mr-3"
+            onClick={event => { event.stopPropagation(); onView(order.id); }}
+            className="text-blue-600 hover:text-blue-900 inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-blue-50"
+            aria-label="View details"
             title="View Details"
           >
             {isExpanded ? <ChevronUp className="w-5 h-5 inline" /> : <ChevronDown className="w-5 h-5 inline" />}
           </button>
           {isPending && (
             <button
-              onClick={() => onAssignTimeslot(order)}
-              className="text-purple-600 hover:text-purple-900 mr-3"
+              onClick={event => { event.stopPropagation(); onAssignTimeslot(order); }}
+              className="text-purple-600 hover:text-purple-900 inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-purple-50"
+              aria-label="Assign to timeslot"
               title="Assign to Timeslot"
             >
               <Calendar className="w-5 h-5 inline" />
             </button>
           )}
           <button
-            onClick={() => onEdit(order)}
+            onClick={event => { event.stopPropagation(); onEdit(order); }}
             disabled={!editCheck.editable}
-            className={`${
+            className={`inline-flex h-9 w-9 items-center justify-center rounded-md ${
               editCheck.editable
-                ? 'text-green-600 hover:text-green-900'
+                ? 'text-green-600 hover:text-green-900 hover:bg-green-50'
                 : 'text-gray-400 cursor-not-allowed'
             }`}
+            aria-label="Edit order"
             title={editCheck.editable ? 'Edit Order' : editCheck.reason}
           >
             <Edit2 className="w-5 h-5 inline" />
           </button>
         </td>
       </tr>
-      {isExpanded && <ExpandedOrderDetails order={order} siblingDOs={siblingDOs} onOrderParsed={onOrderParsed} />}
+      {isExpanded && <ExpandedOrderDetails order={order} columns={columns} siblingDOs={siblingDOs} onOrderParsed={onOrderParsed} />}
     </>
   );
 }
 
 // Expanded Order Details Component
-function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
+function ExpandedOrderDetails({ order, columns, siblingDOs = [], onOrderParsed }) {
   const [showSiblings, setShowSiblings] = useState(false);
   const [parseStatus, setParseStatus] = useState('idle'); // 'idle' | 'parsing' | 'done' | 'error'
 
@@ -540,17 +542,10 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
 
   return (
     <tr>
-      <td colSpan="8" className="px-5 py-4 bg-gray-50 border-t border-gray-100">
+      <td colSpan={columns} className="px-3 sm:px-5 py-4 bg-gray-50 border-t border-gray-100">
 
         {/* ── Chips row ── */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          {order.odoo_order_ref && (
-            <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-1 text-xs font-mono font-semibold">
-              <Package className="w-3 h-3" />
-              {order.odoo_order_ref}
-            </span>
-          )}
-
           {/* SO chip — clickable when siblings exist */}
           {order.odoo_sales_ref && (
             <button
@@ -565,7 +560,7 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
               {siblingDOs.length > 0 && (
                 <>
                   <span className="bg-indigo-200 text-indigo-800 rounded-full px-1.5 py-0.5 text-xs font-sans">
-                    {siblingDOs.length + 1} DOs
+                    {[order, ...siblingDOs].filter(o => ['delivered', 'completed'].includes((o.order_status || '').toLowerCase())).length} of {siblingDOs.length + 1} delivered
                   </span>
                   {showSiblings
                     ? <ChevronUp className="w-3 h-3" />
@@ -605,12 +600,13 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
 
         {/* ── Sibling DOs table (toggled by SO chip) ── */}
         {showSiblings && (
-          <div className="mb-4 overflow-x-auto rounded border border-indigo-100">
+          <div className="mb-4 overflow-x-auto rounded-lg border border-indigo-100 bg-white">
+            <h4 className="px-3 pt-2.5 text-xs font-semibold uppercase tracking-wide text-indigo-400">Linked DOs ({siblingDOs.length + 1})</h4>
             <table className="w-full text-sm">
               <thead className="bg-indigo-50 text-indigo-600 text-xs">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">DO</th>
-                  <th className="px-3 py-2 text-left font-medium">Customer</th>
+                  <th className="hidden px-3 py-2 text-left font-medium sm:table-cell">Customer</th>
                   <th className="px-3 py-2 text-center font-medium w-14">Items</th>
                   <th className="px-3 py-2 text-left font-medium">Status</th>
                   <th className="px-3 py-2 text-left font-medium">Scheduled</th>
@@ -623,7 +619,7 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
                     {order.odoo_order_ref || 'Not Synced'}
                     <span className="ml-1.5 text-xs bg-indigo-200 text-indigo-700 px-1.5 py-0.5 rounded font-sans">this</span>
                   </td>
-                  <td className="px-3 py-1.5 text-gray-700">{order.customers?.full_name || '—'}</td>
+                  <td className="hidden px-3 py-1.5 text-gray-700 sm:table-cell">{order.customers?.full_name || '—'}</td>
                   <td className="px-3 py-1.5 text-center text-gray-700">{getTotalProductCount(order.order_products)}</td>
                   <td className="px-3 py-1.5">
                     {(() => { const b = getOrderStatusBadge(order.order_status); return (
@@ -647,7 +643,7 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
                           {sib.odoo_order_ref || 'Not Synced'}
                         </Link>
                       </td>
-                      <td className="px-3 py-1.5 text-gray-700">{sib.customers?.full_name || '—'}</td>
+                      <td className="hidden px-3 py-1.5 text-gray-700 sm:table-cell">{sib.customers?.full_name || '—'}</td>
                       <td className="px-3 py-1.5 text-center text-gray-700">{getTotalProductCount(sib.order_products)}</td>
                       <td className="px-3 py-1.5">
                         <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${b.bgColor} ${b.color}`}>{b.label}</span>
@@ -663,130 +659,99 @@ function ExpandedOrderDetails({ order, siblingDOs = [], onOrderParsed }) {
           </div>
         )}
 
-        {/* ── Customer / Address ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-sm">
+        {/* ── Customer and delivery ── */}
+        <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
 
-          {/* Customer */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-              <span className="font-semibold text-gray-900">{order.customers?.full_name || '—'}</span>
-            </div>
-            {order.customers?.email && (
+          <section className="rounded-lg border border-gray-200 bg-white p-3">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Customer</h4>
+            <div className="space-y-1.5">
               <div className="flex items-center gap-2">
-                <Mail className="w-3.5 h-3.5 text-gray-300 shrink-0" />
-                <span className="text-gray-500">{order.customers.email}</span>
+                <User className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                <span className="font-semibold text-gray-900">{order.customers?.full_name || '—'}</span>
               </div>
-            )}
-            {order.customers?.phone && (
-              <div className="flex items-center gap-2">
-                <Phone className="w-3.5 h-3.5 text-gray-300 shrink-0" />
-                <span className="text-gray-500">{order.customers.phone}</span>
-              </div>
-            )}
-
-            {/* Parsed site contact — visually separated from customer's own phone */}
-            {order.remarks_contact_phone && (
-              <div className="mt-2 pt-2 border-t border-violet-100">
-                <div className="flex items-center gap-2">
-                  <Phone className="w-3.5 h-3.5 text-violet-500 shrink-0" />
-                  <span className="font-semibold text-gray-900">{order.remarks_contact_phone}</span>
-                  {order.remarks_contact_name && (
-                    <span className="text-gray-600">· {order.remarks_contact_name}</span>
-                  )}
+              {order.customers?.phone && (
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Phone className="h-3.5 w-3.5 shrink-0 text-gray-300" />{order.customers.phone}
                 </div>
-                <p className="text-xs text-violet-500 mt-0.5 ml-5 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" /> site contact from remarks
+              )}
+              {order.customers?.email && (
+                <div className="flex items-center gap-2 break-all text-gray-600">
+                  <Mail className="h-3.5 w-3.5 shrink-0 text-gray-300" />{order.customers.email}
+                </div>
+              )}
+              {/* Site contact found in the remarks, kept apart from the customer's own phone */}
+              {order.remarks_contact_phone && (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md bg-violet-50 px-2 py-1.5">
+                  <Phone className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                  <span className="font-semibold text-gray-900">{order.remarks_contact_phone}</span>
+                  {order.remarks_contact_name && <span className="text-gray-600">· {order.remarks_contact_name}</span>}
+                  <span className="ml-auto inline-flex items-center gap-1 text-xs text-violet-600"><Sparkles className="h-3 w-3" />Site contact</span>
+                </div>
+              )}
+              {(order.salesperson_name || order.salesperson_phone) && (
+                <p className="pt-1 text-xs text-gray-400">
+                  Sales: {[order.salesperson_name, order.salesperson_phone].filter(Boolean).join(' · ')}
                 </p>
-              </div>
-            )}
+              )}
+            </div>
+          </section>
 
-            {(order.salesperson_name || order.salesperson_phone) && (
-              <div className="pt-2 mt-1 border-t border-gray-100 space-y-1">
-                {order.salesperson_name && (
-                  <div className="flex items-center gap-2">
-                    <User className="w-3.5 h-3.5 text-gray-200 shrink-0" />
-                    <span className="text-gray-400 text-xs">{order.salesperson_name}</span>
-                    <span className="text-xs text-gray-300">· sales</span>
-                  </div>
-                )}
-                {order.salesperson_phone && (
-                  <div className="flex items-center gap-2">
-                    <Phone className="w-3.5 h-3.5 text-gray-200 shrink-0" />
-                    <span className="text-gray-400 text-xs">{order.salesperson_phone}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Address */}
-          <div className="space-y-2 text-sm">
-            {parseStatus === 'parsing' ? (
-              <div className="flex items-center gap-2 text-violet-400">
-                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                <span className="text-xs">Extracting address from remarks…</span>
-              </div>
-            ) : order.remarks_delivery_address && order.original_delivery_address &&
-                order.original_delivery_address !== order.remarks_delivery_address ? (
-              /* ── Overridden: parsed card + struck original ── */
-              <>
-                <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 space-y-0.5">
+          <section className="rounded-lg border border-gray-200 bg-white p-3">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Delivery address</h4>
+            <div className="space-y-2">
+              {parseStatus === 'parsing' ? (
+                <div className="flex items-center gap-2 text-violet-500">
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span className="text-xs">Reading remarks…</span>
+                </div>
+              ) : order.remarks_delivery_address && order.original_delivery_address &&
+                  order.original_delivery_address !== order.remarks_delivery_address ? (
+                /* Address came from the remarks: show it, with the original SO address struck through */
+                <div className="space-y-1 rounded-md bg-violet-50 px-2 py-1.5">
                   <div className="flex items-start gap-2">
-                    <MapPin className="w-3.5 h-3.5 text-violet-500 shrink-0 mt-0.5" />
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-500" />
                     <div>
                       <p className="font-medium text-gray-900">{order.remarks_delivery_address}</p>
-                      {cityLine && <p className="text-gray-500 text-xs">{cityLine}</p>}
+                      {cityLine && <p className="text-xs text-gray-500">{cityLine}</p>}
                     </div>
                   </div>
-                  <p className="text-gray-600 line-through text-xs ml-5 leading-snug">
-                    {order.original_delivery_address}
-                  </p>
+                  <p className="ml-5 text-xs leading-snug text-gray-400 line-through">{order.original_delivery_address}</p>
                 </div>
-                {order.delivery_remarks && (
-                  <p className="text-gray-400 text-xs italic ml-1">{order.delivery_remarks}</p>
-                )}
-              </>
-            ) : (
-              /* ── Not overridden: plain address ── */
-              <>
-                {activeAddress && (
-                  <div className="flex items-start gap-2">
-                    <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-gray-900">{activeAddress}</p>
-                      {cityLine && <p className="text-gray-500 text-xs">{cityLine}</p>}
-                    </div>
+              ) : activeAddress && (
+                <div className="flex items-start gap-2">
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
+                  <div>
+                    <p className="text-gray-900">{activeAddress}</p>
+                    {cityLine && <p className="text-xs text-gray-500">{cityLine}</p>}
                   </div>
-                )}
-                {order.delivery_remarks && (
-                  <div className="flex items-start gap-2">
-                    <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0 mt-0.5" />
-                    <p className="text-gray-400 text-xs italic">{order.delivery_remarks}</p>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                </div>
+              )}
+              {order.delivery_remarks && (
+                <p className="flex items-start gap-1.5 text-xs text-gray-500">
+                  <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-violet-300" />
+                  <span>{order.delivery_remarks}</span>
+                </p>
+              )}
+            </div>
+          </section>
         </div>
 
         {/* ── Items ── */}
         {order.order_products?.length > 0 && (
-          <div className="overflow-x-auto rounded border border-gray-200">
+          <section className="mt-3 overflow-x-auto rounded-lg border border-gray-200 bg-white">
+            <h4 className="px-3 pt-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400">Items ({getTotalProductCount(order.order_products)})</h4>
             <table className="w-full text-sm">
-              <tbody className="bg-white divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100">
                 {order.order_products.map((op, idx) => (
-                  <tr key={idx} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 text-gray-800">
-                      {op.products?.product_name || op.odoo_product_name || '—'}
-                    </td>
-                    <td className="px-3 py-2 text-gray-400 text-right w-12 shrink-0">×{op.quantity}</td>
-                    <td className="px-3 py-2 font-mono text-gray-400 text-right">{op.assigned_serial || ''}</td>
+                  <tr key={idx}>
+                    <td className="px-3 py-2 text-gray-800">{op.products?.product_name || op.odoo_product_name || '—'}</td>
+                    <td className="w-12 px-3 py-2 text-right text-gray-500">×{op.quantity}</td>
+                    <td className="hidden px-3 py-2 text-right font-mono text-xs text-gray-400 sm:table-cell">{op.assigned_serial || ''}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </section>
         )}
 
       </td>
@@ -913,9 +878,9 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-full w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
+        <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
           <div>
             <h2 className="text-xl font-bold text-gray-800">Edit Order</h2>
             {order.odoo_order_ref ? (
@@ -940,7 +905,7 @@ function EditOrderModal({ order, onClose, onSave, editDeadlineHours }) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6">
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-2">
               <AlertCircle className="w-5 h-5 text-red-600" />

@@ -67,3 +67,4 @@ graphify-out
 /server/seedItemPoints.js
 /server/seedPerformanceDemo.js
 /server/seedArrivalDemo.js
+/server/seedSyncDemo.js
