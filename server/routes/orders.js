@@ -1679,7 +1679,7 @@ router.post('/:id/apply-parsed', async (req, res) => {
 
     // NOTE: customers.phone is NOT updated here.
     // remarks_contact_phone is stored separately on the order for the driver's reference.
-    // WhatsApp notifications always go to customers.phone (the customer who placed the order).
+    // customers.phone stays the customer's own number; the site contact is kept separately above.
 
     console.log(`[LLM Parser] Applied parsed remarks to order ${req.params.id}`);
     res.json({ success: true, message: 'Parsed data applied to order.' });
@@ -1938,67 +1938,6 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
   } catch (err) {
     console.error('PATCH /api/orders/:id/issue error', err);
     res.status(500).json({ error: 'Failed to update order issue', details: err.message });
-  }
-});
-
-// POST /:id/remind-driver — Admin manually triggers a WhatsApp reminder to the driver
-// for an overdue order (still Delivering past the current day's end-of-day cut-off).
-router.post('/:id/remind-driver', async (req, res) => {
-  try {
-    const order = await prisma.orders.findUnique({
-      where:   { id: req.params.id },
-      include: {
-        employees:  { select: { name: true, display_name: true, contact_number: true } },
-        time_slots: { select: { date: true } },
-        customers:  { select: { full_name: true } },
-      },
-    });
-
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    if (order.order_status !== 'Delivering') {
-      return res.status(400).json({
-        error: `Cannot remind driver — order status is "${order.order_status}", expected "Delivering".`,
-        code:  'NOT_DELIVERING',
-      });
-    }
-
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    if (order.time_slots?.date && order.time_slots.date >= today) {
-      return res.status(400).json({
-        error: 'Cannot remind driver — delivery slot is not overdue yet.',
-        code:  'NOT_OVERDUE',
-      });
-    }
-
-    const driverPhone = order.employees?.contact_number;
-    if (!driverPhone) {
-      return res.status(400).json({
-        error: 'Driver has no contact number on record — cannot send WhatsApp reminder.',
-        code:  'NO_DRIVER_PHONE',
-      });
-    }
-
-    const driverName   = order.employees?.display_name || order.employees?.name || 'Driver';
-    const customerName = order.customers?.full_name || 'customer';
-    const orderRef     = order.odoo_order_ref || 'Not Synced';
-    const address      = order.delivery_address || '';
-
-    const message = `Hi ${driverName}, please update the delivery status for order #${orderRef} (${customerName} — ${address}). If the delivery could not be completed, mark it as Failed Delivery before end of day.`;
-
-    const { sendWhatsAppDirect } = require('../services/whatsappService');
-    await sendWhatsAppDirect(driverPhone, message);
-
-    const updatedOrder = await prisma.orders.update({
-      where: { id: req.params.id },
-      data:  { overdue_reminder_sent_at: new Date() },
-    });
-
-    console.log(`[Overdue] Reminder sent to driver ${driverName} for order ${req.params.id}`);
-    return res.json({ success: true, order: updatedOrder });
-  } catch (err) {
-    console.error('POST /api/orders/:id/remind-driver error', err);
-    res.status(500).json({ error: 'Failed to send driver reminder', details: err.message });
   }
 });
 

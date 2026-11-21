@@ -17,7 +17,7 @@
 //                             (both legacy — no longer enqueued; kept so queued rows drain)
 //                             APPOINTMENT_CONFIRMATION    → writeOdooAppointmentResult (FRD INT-04)
 //                             APPOINTMENT_CHANGE_DECISION → writeOdooAppointmentDecision (FRD INT-11)
-//   target: 'notification'  — CUSTOMER_ON_THE_WAY → WhatsApp only
+//   target: 'notification'  — CUSTOMER_ON_THE_WAY / CUSTOMER_D1_REMINDER → no-op (Odoo messages customers)
 //   target: 'internal'      — SLOT_DEPARTED / SLOT_ENDED → no-op (logging only)
 
 const {
@@ -31,38 +31,9 @@ const {
   markProcessed,
   recordFailure,
 } = require('./services/integrationOutboxService');
-const { sendWhatsAppMessage } = require('./services/whatsappService');
-const {
-  DEFAULT_BRAND_NAME,
-  TEMPLATE_ON_THE_WAY,
-  TEMPLATE_D1_REMINDER,
-} = require('./notificationTemplateDefaults');
-
 const prisma = require('./prismaClient');
 
 let _running = false; // prevent overlapping runs
-const DEFAULT_FROM_NAME = DEFAULT_BRAND_NAME;
-
-function formatTimeWindow(start, end) {
-  if (!start || !end) return 'your scheduled time window';
-  return `${start} - ${end}`;
-}
-
-function applyTemplate(template, vars) {
-  if (!template) return '';
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] || '');
-}
-
-async function getSettingMap(settingKeys) {
-  const rows = await prisma.system_settings.findMany({
-    where: { setting_key: { in: settingKeys } },
-  });
-  return rows.reduce((acc, row) => {
-    acc[row.setting_key] = row.setting_value;
-    return acc;
-  }, {});
-}
-
 // ── Odoo handler ─────────────────────────────────────────────────────────────
 
 async function handleOdoo(row) {
@@ -177,129 +148,11 @@ async function handleAppointmentChangeDecision(row) {
   if (written !== true) throw new Error('Odoo did not acknowledge appointment decision.');
 }
 
-// ── Customer notification handler ─────────────────────────────────────────────
-
-async function handleCustomerOnTheWay(row) {
-  const {
-    orderId,
-    phone,
-    customerName,
-    slotDate,
-    timeWindowStart,
-    timeWindowEnd,
-    orderRef,
-    address,
-  } = row.payload || {};
-  const now = new Date();
-  const settings = await getSettingMap([
-    'customer_on_the_way_notification_enabled',
-    'template_on_the_way',
-    'notification_from_name',
-  ]);
-
-  if (settings.customer_on_the_way_notification_enabled === 'false') {
-    console.log('[OutboxWorker] CUSTOMER_ON_THE_WAY disabled via settings - skipping send.');
-    return;
-  }
-
-  if (!phone) {
-    console.warn(`[OutboxWorker] CUSTOMER_ON_THE_WAY skipped — no phone for order ${orderId}`);
-    return;
-  }
-
-  const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
-  const vars = {
-    customerName: customerName || 'Customer',
-    orderRef: orderRef || 'your order',
-    slotDate: slotDate || 'today',
-    timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
-    address: address || 'your delivery address',
-    brandName,
-  };
-
-  const message = applyTemplate(settings.template_on_the_way || TEMPLATE_ON_THE_WAY, vars);
-
-  try {
-    await sendWhatsAppMessage(phone, message);
-    console.log(`[OutboxWorker] On-the-way WhatsApp sent → ${phone}`);
-  } catch (e) {
-    console.warn(`[OutboxWorker] On-the-way WhatsApp failed for ${phone}:`, e.message);
-    throw e;
-  }
-
-  // Stamp notified_on_the_way_at
-  if (orderId) {
-    try {
-      await prisma.orders.update({
-        where: { id: orderId },
-        data:  { notified_on_the_way_at: now },
-      });
-    } catch (e) {
-      console.warn('[OutboxWorker] Failed to stamp notified_on_the_way_at:', e.message);
-    }
-  }
-}
-
-// ── D-1 reminder handler ──────────────────────────────────────────────────────
-
-async function handleD1Reminder(row) {
-  const {
-    orderId,
-    phone,
-    customerName,
-    slotDate,
-    timeWindowStart,
-    timeWindowEnd,
-    orderRef,
-    address,
-  } = row.payload || {};
-  const now = new Date();
-  const settings = await getSettingMap([
-    'customer_d1_reminder_notification_enabled',
-    'template_d1_reminder',
-    'notification_from_name',
-  ]);
-
-  if (settings.customer_d1_reminder_notification_enabled === 'false') {
-    console.log('[OutboxWorker] CUSTOMER_D1_REMINDER disabled via settings - skipping send.');
-    return;
-  }
-
-  if (!phone) {
-    console.warn(`[OutboxWorker] CUSTOMER_D1_REMINDER skipped — no phone for order ${orderId}`);
-    return;
-  }
-
-  const brandName = settings.notification_from_name || DEFAULT_FROM_NAME;
-  const vars = {
-    customerName: customerName || 'Customer',
-    orderRef: orderRef || 'your order',
-    slotDate: slotDate || 'tomorrow',
-    timeWindow: formatTimeWindow(timeWindowStart, timeWindowEnd),
-    address: address || 'your delivery address',
-    brandName,
-  };
-
-  const message = applyTemplate(settings.template_d1_reminder || TEMPLATE_D1_REMINDER, vars);
-
-  try {
-    await sendWhatsAppMessage(phone, message);
-    console.log(`[OutboxWorker] D-1 WhatsApp sent → ${phone}`);
-  } catch (e) {
-    console.warn(`[OutboxWorker] D-1 WhatsApp failed for ${phone}:`, e.message);
-    throw e;
-  }
-
-  if (orderId) {
-    try {
-      await prisma.orders.update({
-        where: { id: orderId },
-        data:  { notified_d1_at: now },
-      });
-    } catch (e) {
-      console.warn('[OutboxWorker] Failed to stamp notified_d1_at:', e.message);
-    }
-  }
+// ── Customer messages ─────────────────────────────────────────────────────────
+// CE Hub no longer messages customers. Odoo does, from the status updates it receives. Old queued
+// CUSTOMER_ON_THE_WAY / CUSTOMER_D1_REMINDER rows are marked processed without sending anything.
+async function handleCustomerMessageRetired(row) {
+  console.log(`[OutboxWorker] ${row.event_type} skipped: customer messages are handled by Odoo.`);
 }
 
 // ── FALLBACK_POLL_COMPLETE handler ────────────────────────────────────────────
@@ -334,9 +187,8 @@ async function dispatchRow(row) {
     case 'APPOINTMENT_CHANGE_DECISION':
       return handleAppointmentChangeDecision(row);
     case 'CUSTOMER_ON_THE_WAY':
-      return handleCustomerOnTheWay(row);
     case 'CUSTOMER_D1_REMINDER':
-      return handleD1Reminder(row);
+      return handleCustomerMessageRetired(row);
     case 'FALLBACK_POLL_COMPLETE':
       return handleFallbackPollComplete(row);
     case 'SLOT_DEPARTED':

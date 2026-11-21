@@ -178,14 +178,6 @@ app.listen(port, async () => {
   // console.log('  /api/scheduler');
   // console.log('  /api/health\n');
 
-  // Seed default WhatsApp notification settings
-  try {
-    const { seedWhatsAppSettings } = require('./services/whatsappService');
-    await seedWhatsAppSettings();
-  } catch (e) {
-    console.warn('[Startup] seedWhatsAppSettings skipped — DB unreachable:', e.message);
-  }
-
   // Seed notification message templates (idempotent — never overwrites existing)
   try {
     const { seedA3Templates } = require('./seedNotificationTemplates');
@@ -233,15 +225,6 @@ app.listen(port, async () => {
     const { runOutboxWorker } = require('./integrationOutboxCron');
     cron.schedule('* * * * *', () => { runOutboxWorker(); }, { timezone: 'Asia/Kuala_Lumpur' });
     console.log('[OutboxWorker] Cron registered — every minute.');
-  }
-
-  // A.3.3: D-1 delivery reminder — nightly at 07:00 MYT (configurable via D1_REMINDER_CRON)
-  {
-    const cron = require('node-cron');
-    const { runD1ReminderCron } = require('./d1ReminderCron');
-    const reminderSchedule = process.env.D1_REMINDER_CRON || '0 19 * * *';
-    cron.schedule(reminderSchedule, () => { runD1ReminderCron(); }, { timezone: 'Asia/Kuala_Lumpur' });
-    console.log(`[D1Reminder] Cron registered — ${reminderSchedule} MYT.`);
   }
 
   // Daily overdue delivery check — 23:59 MYT

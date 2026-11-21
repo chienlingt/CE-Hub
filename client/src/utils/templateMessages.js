@@ -1,6 +1,5 @@
 // client/src/utils/templateMessages.js
-// WhatsApp message templates for the driver dashboard.
-// Keep proactive copy in sync with server/notificationTemplateDefaults.js
+// Message text the driver can send from their own phone (opens a WhatsApp chat; nothing is sent by the server).
 
 const DEFAULT_BRAND_NAME = 'TBM Delivery';
 

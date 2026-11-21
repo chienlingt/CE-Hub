@@ -4,7 +4,7 @@
 //
 // Runs at 23:59 MYT every day (59 23 * * *).
 // Logs all orders still in 'Delivering' status for today's slots.
-// No auto-notification is sent — admin must manually trigger remind-driver per order.
+// No notification is sent; the admin follows up with the driver directly.
 
 const prisma = require('./prismaClient');
 const dayjs = require('dayjs');

@@ -86,11 +86,6 @@ router.patch('/read-all', async (req, res) => {
   }
 });
 
-// Retired direct failure sender: keep an explicit response for older clients.
-router.post('/whatsapp/:orderId', (req, res) => {
-  res.status(410).json({ error: 'Direct failure WhatsApp sending is retired. Customer messages are handled by Odoo after failure synchronization.' });
-});
-
 // DELETE /api/notifications/:id — dismiss a single notification
 router.delete('/:id', async (req, res) => {
   try {

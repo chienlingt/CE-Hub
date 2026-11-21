@@ -1085,8 +1085,6 @@ async function main() {
   await prisma.system_settings.createMany({ data: [
     { setting_key: 'failure_require_photo', setting_value: 'true', description: 'Require at least one evidence photo when confirming a delivery failure' },
     { setting_key: 'failure_require_remark', setting_value: 'true', description: 'Require a written remark when confirming a delivery failure' },
-    { setting_key: 'whatsapp_admin_recipients', setting_value: JSON.stringify([admin.contact_number, dispatcher.contact_number]), description: 'Admin phone numbers notified on delivery failure' },
-    { setting_key: 'whatsapp_admin_notification_enabled', setting_value: 'true', description: 'Send WhatsApp alerts to admins on delivery failure' },
   ]});
   await prisma.scheduler_config.create({ data: {
     warehouse_address: 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor', warehouse_postal: '40000',

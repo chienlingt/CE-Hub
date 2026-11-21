@@ -243,7 +243,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
               <p className="text-sm font-semibold text-red-800">This action cannot be undone.</p>
               <p className="text-xs text-red-600">
-                Order will be marked as <strong>Failed</strong> and admins notified. This action will also send Whatsapp message to customer automatically.
+                Order will be marked as <strong>Failed</strong> and admins notified.
               </p>
               <div className="flex gap-2">
                 <button

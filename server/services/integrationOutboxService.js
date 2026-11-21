@@ -10,8 +10,7 @@
 //   slot:{timeSlotId}:depart         — slot-level departure
 //   slot:{timeSlotId}:end_trip       — slot-level trip completion
 //   order:{orderId}:odoo:{status}    — per-order Odoo status write-back
-//   order:{orderId}:on_the_way       — customer on-the-way WhatsApp/email
-//   order:{orderId}:d1_reminder      — customer D-1 reminder
+//   order:{orderId}:on_the_way       — customer on-the-way event (message sent by Odoo, not CE Hub)
 //   order:{orderId}:odoo:appointment:{status}:{suffix} — FRD INT-04 confirmation result
 //   odoo-change:{requestId}:decision — FRD INT-11 edit/cancel decision
 //

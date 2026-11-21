@@ -44,8 +44,7 @@ router.get('/active', async (req, res) => {
   try {
     const { date: dateParam } = req.query;
 
-    // Resolve today in Asia/Kuala_Lumpur (same convention as d1ReminderCron)
-    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }); // 'YYYY-MM-DD'
+    // Resolve today in Asia/Kuala_Lumpur    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }); // 'YYYY-MM-DD'
 
     const where = { slot_status: 'out_for_delivery' };
     if (!dateParam || dateParam === 'today') {
