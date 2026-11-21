@@ -308,22 +308,24 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     return { applied: false, reason: 'ACTIVE_STOP_IN_PROGRESS' };
   }
   const { warehouseAddress = DEFAULT_WAREHOUSE_ADDRESS, warehouseCoords, originCoords, departureAt, dynamic = false,
-    reason = 'initial_optimisation', allowAccessWindowViolation = false } = options;
+    reason = 'initial_optimisation', allowAccessWindowViolation = false, preview = false } = options;
+  // A preview only estimates a manual order: it never stores a plan or flags the run for review.
+  const review = (why, issues) => preview ? { applied: false, preview: true, needs_review: true, reason: why, issues } : markNeedsReview(slot, why, issues);
   // Admin-configurable gap after each stop (Schedule > Settings); callers may inject it (tests, batches).
   const graceSeconds = options.graceSeconds ?? await loadGraceSeconds();
   const slotStart = slotDateTime(slot.date, slot.time_window_start).getTime();
   const onRoad = Boolean(slot.departed_at) || reason === 'departure_traffic_check';
   const departureMs = onRoad ? (departureAt ? new Date(departureAt).getTime() : Date.now()) : slotStart;
   if (!Number.isFinite(departureMs) || (!onRoad && slotStart < Date.now())) {
-    return markNeedsReview(slot, 'PAST_OR_INVALID_SESSION', []);
+    return review('PAST_OR_INVALID_SESSION', []);
   }
   if (onRoad && reason !== 'departure_traffic_check' && !originCoords) {
-    return markNeedsReview(slot, 'CURRENT_LOCATION_REQUIRED', []);
+    return review('CURRENT_LOCATION_REQUIRED', []);
   }
   let origin;
   try { origin = (onRoad && originCoords) || warehouseCoords || await geocodeAddress(warehouseAddress); }
-  catch { return markNeedsReview(slot, 'WAREHOUSE_COORDINATES_UNAVAILABLE', []); }
-  if (!validCoords(origin)) return markNeedsReview(slot, 'INVALID_ORIGIN_COORDINATES', []);
+  catch { return review('WAREHOUSE_COORDINATES_UNAVAILABLE', []); }
+  if (!validCoords(origin)) return review('INVALID_ORIGIN_COORDINATES', []);
   const resolved = [], unresolved = [];
   for (const order of orders) {
     try {
@@ -333,7 +335,7 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     }
     catch { unresolved.push({ order_id: order.id, reason: 'UNRESOLVED_ADDRESS' }); }
   }
-  if (unresolved.length) return markNeedsReview(slot, 'UNRESOLVED_ADDRESS', unresolved);
+  if (unresolved.length) return review('UNRESOLVED_ADDRESS', unresolved);
   let matrix;
   try { matrix = await buildTravelMetricsMatrix([origin, ...resolved.map(order => order.coords)], departureMs); }
   catch { matrix = { durations: Array.from({ length: orders.length + 1 }, () => Array(orders.length + 1).fill(null)),
@@ -344,6 +346,12 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     ? requestedIds.map(id => resolved.findIndex(order => order.id === id))
     : selectBestSequence(resolved, slot, matrix, departureMs, graceSeconds).sequence;
   const cache = new Map();
+  if (preview && requestedIds) {
+    const estimate = await finalEvaluation(proposedSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
+    return { applied: false, preview: true, used_fallback: Boolean(matrix.usedFallback || estimate.usedFallback),
+      total_distance_m: estimate.distanceMeters, total_travel_time_s: estimate.travelSeconds,
+      violations: reviewDetails(estimate), stops: estimate.stops, segments: estimate.segments };
+  }
   const baseline = await finalEvaluation(baselineSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
   let best = JSON.stringify(baselineSequence) === JSON.stringify(proposedSequence) ? baseline
     : await finalEvaluation(proposedSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
@@ -353,7 +361,7 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
   if (violations.length && requestedIds && !allowAccessWindowViolation) {
     return { applied: false, requires_confirmation: true, needs_review: true, violations };
   }
-  if (violations.length && !requestedIds) return markNeedsReview(slot, 'NO_FEASIBLE_SEQUENCE', violations);
+  if (violations.length && !requestedIds) return review('NO_FEASIBLE_SEQUENCE', violations);
   const savedSeconds = baseline.travelSeconds - best.travelSeconds;
   const savedRatio = baseline.travelSeconds > 0 ? savedSeconds / baseline.travelSeconds : 0;
   const preventsViolation = baseline.hardViolationSeconds + baseline.slotViolationSeconds > best.hardViolationSeconds + best.slotViolationSeconds;

@@ -5,7 +5,7 @@
 // everything here was already computed once by the scheduler and is just
 // being displayed (see server/services/googleRoutingService.js).
 
-import { useState, useEffect, useMemo, useRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useMemo, useRef, useImperativeHandle, useSyncExternalStore } from 'react';
 import { MapPin, Navigation, RefreshCw, AlertTriangle, Package, Clock, Wrench, GripVertical, ArrowUp, ArrowDown, Check, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDriverJobs } from '../../hooks/useDriverJobs';
@@ -15,6 +15,38 @@ import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 import DriverDeliveryCard, { sortDeliveryCards } from './DriverDeliveryCard';
 import ScanDeliveryDialog from '../common/ScanDeliveryDialog';
 
+const PAST_SESSION = 'PAST_OR_INVALID_SESSION'; // server reason for a run whose start time has passed
+
+// Several runs on one page can all be past, and would each print the same note. The runs share one note per kind:
+// the first run that has it shows it and the others stay quiet. Closing the "unchanged" note hides it for all
+// runs until Optimal is pressed again.
+const noteWanted = { review: [], unchanged: [] };
+const noteDismissed = { review: false, unchanged: false };
+const noteListeners = new Set();
+const notifyNotes = () => noteListeners.forEach(listener => listener());
+const subscribeNotes = listener => { noteListeners.add(listener); return () => noteListeners.delete(listener); };
+function setNoteWanted(kind, owner, wanted) {
+  const list = noteWanted[kind];
+  const index = list.indexOf(owner);
+  if (wanted && index < 0) list.push(owner);
+  else if (!wanted && index >= 0) list.splice(index, 1);
+  else return;
+  notifyNotes();
+}
+export function setNoteDismissed(kind, dismissed) {
+  if (noteDismissed[kind] === dismissed) return;
+  noteDismissed[kind] = dismissed;
+  notifyNotes();
+}
+export function useSharedNote(kind, wanted) {
+  const owner = useRef(Symbol(kind)).current;
+  useEffect(() => {
+    setNoteWanted(kind, owner, wanted);
+    return () => setNoteWanted(kind, owner, false);
+  }, [kind, owner, wanted]);
+  return useSyncExternalStore(subscribeNotes, () => noteWanted[kind][0] === owner && !noteDismissed[kind]);
+}
+
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
 }
@@ -22,6 +54,12 @@ function apiUrl(path) {
 function fmtEta(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtDrive(s) {
+  if (s == null) return '—';
+  const minutes = Math.round(s / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes} min`;
 }
 
 function fmtDistance(m) {
@@ -89,6 +127,10 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   // After "Mark arrived": reload the route and ask the page to reload its jobs, so the time shows.
   const refreshAfterArrival = () => { setRouteRefreshKey(value => value + 1); onRefresh?.(); };
   const [rerouteMessage, setRerouteMessage] = useState(null);
+  const pastUnchanged = /past or invalid session/i.test(rerouteMessage || '');
+  const pastReview = route?.route_plan?.feasibility === 'needs_review' && route.route_plan.review?.reason === PAST_SESSION;
+  const showPastUnchanged = useSharedNote('unchanged', pastUnchanged);
+  const showPastReview = useSharedNote('review', pastReview);
   const [localArranging, setArranging] = useState(false);
   const arranging = sharedControls ? sharedControls.arranging : localArranging;
   const [draftStops, setDraftStops] = useState([]);
@@ -112,6 +154,43 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
   useEffect(() => {
     if (!arranging) setDraftStops((route?.stops || []).filter(stop => !filteredOnly || visibleIds.has(stop.order_id)));
   }, [route, arranging, visibleIds, filteredOnly]);
+
+  // While arranging, estimate the new order (distance and driving time) without saving it.
+  const [preview, setPreview] = useState(null);
+  const arrangedKey = (sharedControls ? mergeFilteredStops(route?.stops || [], draftStops) : draftStops).map(stop => stop.order_id).join(',');
+  const savedKey = (route?.stops || []).map(stop => stop.order_id).join(',');
+  const orderChanged = arranging && arrangedKey.includes(',') && arrangedKey !== savedKey;
+  useEffect(() => {
+    if (!orderChanged || !selectedSlotId || !employeeId) { setPreview(null); return undefined; }
+    const controller = new AbortController();
+    setPreview(previous => ({ ...previous, loading: true }));
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(apiUrl(`driver/route/${selectedSlotId}/reorder`), {
+          method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          body: JSON.stringify({ employee_id: employeeId, ordered_order_ids: arrangedKey.split(','), preview: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.details || data.error || `HTTP ${res.status}`);
+        setPreview(data.preview
+          ? { distance: data.total_distance_m, seconds: data.total_travel_time_s, violations: data.violations || [], fallback: Boolean(data.used_fallback), stops: data.stops || [], segments: data.segments || [] }
+          : { unavailable: String(data.reason || 'unavailable').replaceAll('_', ' ').toLowerCase() });
+      } catch (error) {
+        if (!controller.signal.aborted) setPreview({ unavailable: 'could not be estimated' });
+      }
+    }, 600);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [orderChanged, arrangedKey, selectedSlotId, employeeId]);
+
+  // While arranging, a card shows the estimated ETA and leg for its new place instead of the saved ones.
+  const withPreview = stop => {
+    if (!stop || !orderChanged || !preview?.stops) return stop;
+    const planned = preview.stops.find(item => item.order_id === stop.order_id);
+    if (!planned) return stop;
+    return { ...stop, eta: planned.eta, service_end_at: planned.service_end_at, segment: preview.segments?.find(item => item.to_order_id === stop.order_id) || null };
+  };
+  const estimating = orderChanged && Boolean(preview?.loading);
 
   useEffect(() => {
     if (!showMap || !filteredOnly || !route) return;
@@ -173,6 +252,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
     if (!selectedSlotId || resettingRoute) return;
     setResettingRoute(true);
     setRerouteMessage(null);
+    setNoteDismissed('unchanged', false);
     try {
       const res = await fetch(apiUrl(`driver/route/${selectedSlotId}/reoptimize`), {
         method: 'POST',
@@ -459,7 +539,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
         <div className={slotId ? '' : 'max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 pb-6'}>
           <section className={slotId ? 'border-b border-gray-100 px-3 py-2' : 'mb-3 rounded-xl border border-gray-200 bg-white px-3 py-3 sm:px-4'}>
             <div className={`${adminView ? 'hidden' : 'flex'} flex-wrap items-center justify-between gap-x-3 gap-y-1.5`}>
-              {slotId ? <p className="text-sm tabular-nums text-gray-600">Total <span className="font-semibold text-gray-800">{fmtDuration(route.route_duration_s) || '—'} drive</span> · {fmtDistance(route.route_distance_m) || '—'}</p> : <div className="flex items-center divide-x divide-gray-200 text-sm">
+              {slotId ? <p className="text-sm tabular-nums text-gray-600">Total <span className="font-semibold text-gray-800">{fmtDrive(route.route_duration_s)} drive</span> · {fmtDistance(route.route_distance_m) || '—'}</p> : <div className="flex items-center divide-x divide-gray-200 text-sm">
                 {!slotId && <div className="pr-3">
                   <p className="text-[10px] uppercase tracking-wide text-gray-400">Stops</p>
                   <p className="font-semibold text-gray-800">{route.stops.length}</p>
@@ -514,15 +594,54 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
                 {slotId && <button type="button" onClick={() => setShowMap(value => !value)} aria-expanded={showMap} className="min-h-10 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700">{showMap ? 'Hide map' : 'Map'}</button>}
               </div>}
             </div>
-            {rerouteMessage && (
+            {rerouteMessage && (!pastUnchanged || showPastUnchanged) && (
               <div className="mt-2 flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs text-gray-600">
                 <p>{rerouteMessage}</p>
-                <button onClick={() => setRerouteMessage(null)} aria-label="Close message" className="shrink-0 rounded p-0.5 hover:bg-gray-100">
+                <button onClick={() => { if (pastUnchanged) setNoteDismissed('unchanged', true); setRerouteMessage(null); }} aria-label="Close message" className="shrink-0 rounded p-0.5 hover:bg-gray-100">
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
             )}
-            {route.route_plan?.feasibility === 'needs_review' && <p role="alert" className="mt-2 text-xs text-amber-700">Route needs review: {String(route.route_plan.review?.reason || 'delivery session or access window exceeded').replaceAll('_', ' ').toLowerCase()}.</p>}
+            {orderChanged && (() => {
+              const ready = preview && !preview.unavailable && preview.seconds != null;
+              const compare = ready && route.route_duration_s != null && route.route_distance_m != null;
+              const minutes = compare ? Math.round((preview.seconds - route.route_duration_s) / 60) : 0;
+              const km = compare ? (preview.distance - route.route_distance_m) / 1000 : 0;
+              const sign = value => value > 0 ? '+' : value < 0 ? '−' : '±';
+              const tone = value => value > 0 ? 'text-amber-700' : value < 0 ? 'text-emerald-700' : 'text-gray-500';
+              const order = arrangedKey.split(',');
+              const problems = (ready ? preview.violations : []).map(violation => {
+                const stop = route.stops.find(item => item.order_id === violation.order_id) || draftStops.find(item => item.order_id === violation.order_id);
+                const late = violation.access_window_violation_s > 0
+                  ? `${violation.minutes_late} min late for its access window (${fmtAccessWindow(stop || {})})`
+                  : `${violation.minutes_late} min past the end of the run`;
+                return { id: violation.order_id, position: order.indexOf(violation.order_id) + 1, name: stop?.customer_name || stop?.odoo_order_ref || 'Stop', late };
+              }).sort((a, b) => a.position - b.position);
+              return (
+                <div role="status" aria-live="polite" className="mt-2 border-t border-gray-100 pt-2 text-xs">
+                  <p className="font-semibold text-gray-700">New order <span className="font-normal text-gray-400">· not saved</span></p>
+                  {!preview || (preview.loading && !ready && !preview.unavailable) ? <p className="mt-1 text-gray-500">Calculating…</p>
+                    : preview.unavailable ? <p className="mt-1 text-amber-700">Can&apos;t estimate: {preview.unavailable}.</p>
+                    : <div className={preview.loading ? 'opacity-60' : ''}>
+                      <div className="mt-1 grid grid-cols-2 gap-3 tabular-nums">
+                        {[['Drive time', fmtDrive(preview.seconds), fmtDrive(route.route_duration_s), minutes, `${sign(minutes)}${Math.abs(minutes)} min`],
+                          ['Distance', fmtDistance(preview.distance), fmtDistance(route.route_distance_m), km, `${sign(km)}${Math.abs(km).toFixed(1)} km`]].map(([label, value, saved, change, changeText]) => (
+                          <div key={label}>
+                            <p className="text-[10px] uppercase tracking-wide text-gray-400">{label}</p>
+                            <p className="text-sm font-semibold text-gray-900">{value} {compare && <span className={`text-xs font-medium ${tone(change)}`}>{changeText}</span>}</p>
+                            {compare && <p className="text-[11px] text-gray-400">saved {saved}</p>}
+                          </div>
+                        ))}
+                      </div>
+                      {problems.length > 0 && <ul className="mt-2 space-y-0.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-amber-800">
+                        {problems.map(problem => <li key={problem.id}><span className="font-semibold">Stop {problem.position} · {problem.name}</span>: {problem.late}</li>)}
+                      </ul>}
+                      {preview.fallback && <p className="mt-1 text-[11px] text-amber-700">Straight-line estimate</p>}
+                    </div>}
+                </div>
+              );
+            })()}
+            {route.route_plan?.feasibility === 'needs_review' && (!pastReview || showPastReview) && <p role="alert" className="mt-2 text-xs text-amber-700">Route needs review: {String(route.route_plan.review?.reason || 'delivery session or access window exceeded').replaceAll('_', ' ').toLowerCase()}.</p>}
             {route.route_plan?.used_fallback && showFallbackNotice && (
               <div className="mt-2 flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs text-amber-700">
                 <p>Road service unavailable — using straight-line estimates.</p>
@@ -683,7 +802,7 @@ export default function DriverRoute({ slotId, jobs = [], allJobs = jobs, refresh
               onOpenDetails={openDetails}
               employeeId={employeeId}
               onArrived={adminView ? undefined : refreshAfterArrival}
-              stop={(arranging ? draftStops : route.stops).find(stop => stop.order_id === job.id) || stopCache.current.get(job.id)}
+              stop={withPreview((arranging ? draftStops : route.stops).find(stop => stop.order_id === job.id) || stopCache.current.get(job.id))} estimating={estimating}
               arranging={arranging} position={index} first={index === 0} last={index === displayed.length - 1} onMove={moveStop}
               locked={savingOrder || sharedControls?.busy} dragging={draggedStopId === job.id} dropTarget={dropTargetId === job.id}
               onTouchDragStart={event => startTouchDrag(event, job.id)} onTouchDragMove={moveTouchDrag} onTouchDragEnd={endTouchDrag} onTouchDragCancel={clearDrag}

@@ -70,6 +70,14 @@ function DriverDeliveries() {
   const [showMap, setShowMap] = useState(false);
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeMessage, setRouteMessage] = useState('');
+  // Success messages fade after 10 seconds. The timer only clears its own message, never a newer one.
+  const flashTimer = useRef(null);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const flash = message => {
+    clearTimeout(flashTimer.current);
+    setRouteMessage(message);
+    flashTimer.current = setTimeout(() => setRouteMessage(current => current === message ? '' : current), 10000);
+  };
   const routeControls = useRef(new Map());
 
   const { jobs, slots, loading, error, refresh } = useDriverJobs(employeeId);
@@ -131,7 +139,7 @@ function DriverDeliveries() {
     try {
       let success = true;
       for (const control of controls) if (!await control[action]()) { success = false; break; }
-      if (success) { setArranging(false); setRouteMessage(action === 'optimal' ? 'Optimal routes restored.' : 'Arrangement saved.'); }
+      if (success) { setArranging(false); flash(action === 'optimal' ? 'Optimal routes restored.' : 'Arrangement saved.'); }
       else setRouteMessage('Not all routes were saved. Review the message below the affected slot.');
       await refresh();
     } finally { setRouteBusy(false); }

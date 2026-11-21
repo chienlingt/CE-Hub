@@ -23,7 +23,7 @@ export function sortDeliveryCards(jobs, stops = []) {
     (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
 }
 
-export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop = false, arranging = false, position, onMove, first, last, locked = false, dragging = false, dropTarget = false, onTouchDragStart, onTouchDragMove, onTouchDragEnd, onTouchDragCancel, detailBasePath = '/driver/delivery', compactDesktop = false, onOpenDetails, employeeId, onArrived, ...dragProps }) {
+export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop = false, arranging = false, position, onMove, first, last, locked = false, dragging = false, dropTarget = false, onTouchDragStart, onTouchDragMove, onTouchDragEnd, onTouchDragCancel, detailBasePath = '/driver/delivery', compactDesktop = false, onOpenDetails, employeeId, onArrived, estimating = false, ...dragProps }) {
   const stop = useDeliveryStop(job, suppliedStop);
   const navigate = useNavigate();
   const badge = statusBadge(job.status);
@@ -54,7 +54,7 @@ export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop =
           <p title={job.address || stop?.address} className={`mt-1 text-sm leading-5 text-gray-500 ${compactDesktop ? 'lg:line-clamp-2 lg:text-xs lg:leading-4' : ''}`}>{job.address || stop?.address || 'Address unavailable'}</p>
           </div>
           <dl className={`mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4 ${compactDesktop ? 'lg:mt-0 lg:grid-cols-2 lg:gap-x-3 lg:gap-y-1.5 lg:border-l lg:border-slate-100 lg:pl-4 xl:grid-cols-4' : ''}`}>
-            <div><dt className="text-gray-400">ETA</dt><dd className="mt-0.5 font-medium text-blue-700">{deliveryTime(stop?.eta || job.time)}</dd></div>
+            <div><dt className="text-gray-400">ETA</dt><dd className={`mt-0.5 font-medium text-blue-700 ${estimating ? 'opacity-40' : ''}`}>{deliveryTime(stop?.eta || job.time)}</dd></div>
             <div><dt className="text-gray-400">Access</dt><dd className="mt-0.5 text-gray-700">{stop?.access_window_start || stop?.access_window_end ? `${stop.access_window_start || '—'}–${stop.access_window_end || '—'}` : '—'}</dd></div>
             <div><dt className="text-gray-400">Work</dt><dd className="mt-0.5 text-gray-700">{stop?.work_type || '—'}</dd></div>
             <div><dt className="text-gray-400">Service</dt><dd className="mt-0.5 text-gray-700">{workDuration != null ? `${workDuration} min` : '—'}</dd></div>
@@ -62,7 +62,7 @@ export default function DriverDeliveryCard({ job, stop: suppliedStop, nextStop =
         </Content>
       </div>
       <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 ${compactDesktop ? 'lg:mt-0 lg:flex-col lg:items-end lg:justify-end lg:gap-2 lg:pt-8' : ''}`}>
-        <p className={`text-xs text-gray-400 ${compactDesktop ? 'lg:text-right lg:text-[11px]' : ''}`}>{stop?.segment ? `${Math.round(stop.segment.travel_time_s / 60)} min drive · ${(stop.segment.distance_m / 1000).toFixed(1)} km` : ''}</p>
+        <p className={`text-xs text-gray-400 ${estimating ? 'opacity-40' : ''} ${compactDesktop ? 'lg:text-right lg:text-[11px]' : ''}`}>{stop?.segment ? `${Math.round(stop.segment.travel_time_s / 60)} min drive · ${(stop.segment.distance_m / 1000).toFixed(1)} km` : ''}</p>
         {arranging ? <div className="flex gap-2">
           <button type="button" aria-label="Move delivery earlier" title="Move up" disabled={first || locked} onClick={() => onMove(position, position - 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-300"><ArrowUp className="h-4 w-4" /></button>
           <button type="button" aria-label="Move delivery later" title="Move down" disabled={last || locked} onClick={() => onMove(position, position + 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-300"><ArrowDown className="h-4 w-4" /></button>

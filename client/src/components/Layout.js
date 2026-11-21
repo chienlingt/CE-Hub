@@ -385,9 +385,8 @@ const Layout = () => {
   }
 
   const currentSection = navigationData[activeSection] || filteredNavigation[0][1];
-  const showTopTabs = currentSection?.topNavItems && (
-    !useBottomNav || currentSection.topNavItems.length > 1
-  );
+  // A section with a single tab (e.g. Deliveries) has nothing to switch between.
+  const showTopTabs = currentSection?.topNavItems && currentSection.topNavItems.length > 1;
 
   const headerActions = (
     <>

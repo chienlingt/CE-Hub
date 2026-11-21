@@ -380,30 +380,6 @@ router.post('/jobs/:orderId/admin-escalation', async (req, res) => {
       admins.map(admin => createInAppNotification(admin.id, notifMessage, 'error', orderId))
     );
 
-    // Optionally WhatsApp admins
-    try {
-      const { isSettingEnabled, sendDeliveryFailureAdminWhatsApp } = require('../services/whatsappService');
-      const enabled = await isSettingEnabled('whatsapp_admin_notification_enabled');
-      if (enabled) {
-        for (const admin of admins) {
-          const phone = admin.contact_number || null;
-          if (!phone) continue;
-          await sendDeliveryFailureAdminWhatsApp(phone, {
-            adminName:        admin.display_name || admin.name || 'Admin',
-            customerName,
-            orderRef,
-            reason:           displayReason || 'Driver Report',
-            driverName,
-            address:          order.delivery_address || '',
-            salespersonName:  order.salesperson_name  || 'N/A',
-            salespersonPhone: order.salesperson_phone || 'N/A',
-          }).catch(() => {});
-        }
-      }
-    } catch {
-      // WhatsApp failure is non-fatal
-    }
-
     const dataToUpdate = {
       is_complaint_submitted:     true,
       is_escalation_acknowledged: false,
@@ -610,7 +586,7 @@ router.post('/route/:timeSlotId/reoptimize', async (req, res) => {
 router.post('/route/:timeSlotId/reorder', async (req, res) => {
   try {
     const { timeSlotId } = req.params;
-    const { employee_id, ordered_order_ids, latitude, longitude, confirm_access_window_violations = false } = req.body || {};
+    const { employee_id, ordered_order_ids, latitude, longitude, confirm_access_window_violations = false, preview = false } = req.body || {};
     if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
     if (!Array.isArray(ordered_order_ids)) {
       return res.status(400).json({ error: 'ordered_order_ids must be an array' });
@@ -644,6 +620,7 @@ router.post('/route/:timeSlotId/reorder', async (req, res) => {
       departureAt: slot.departed_at ? new Date() : null,
       reason: 'driver_manual_reorder',
       allowAccessWindowViolation: confirm_access_window_violations === true,
+      preview: preview === true, // estimate only: nothing is saved
     });
     if (result.requires_confirmation) {
       return res.status(409).json({

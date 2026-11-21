@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MapPin, Map as MapIcon, RefreshCw, Truck, Users, ChevronDown, GripVertical, Check, X, Search } from 'lucide-react';
+import { Map as MapIcon, RefreshCw, ChevronDown, GripVertical, Check, X, Search } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_BASE_URL } from '../../utils/apiBaseUrl';
 import { useGoogleMapsScript } from '../../hooks/useGoogleMapsScript';
@@ -8,6 +8,7 @@ import DriverRoute from './DriverRoute';
 import { DRIVER_TABS } from '../../utils/driverStatusMap';
 import { adminSlotOptions, filterAdminTeamRoutes } from '../../utils/adminDeliveryFilters';
 
+const VISIBLE_TEAM_ROWS = 3;
 const api = path => `${API_BASE_URL.replace(/\/$/, '')}/api/${path}`;
 const duration = seconds => seconds == null ? '—' : Math.round(seconds / 60) >= 60 ? `${Math.floor(Math.round(seconds / 60) / 60)}h ${Math.round(seconds / 60) % 60}m` : `${Math.round(seconds / 60)} min`;
 const distance = meters => meters == null ? '—' : `${(meters / 1000).toFixed(1)} km`;
@@ -80,6 +81,14 @@ export default function AdminDeliveryOverview() {
   const [arranging, setArranging] = useState(false);
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeMessage, setRouteMessage] = useState('');
+  // Success messages fade after 10 seconds. The timer only clears its own message, never a newer one.
+  const flashTimer = useRef(null);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const flash = message => {
+    clearTimeout(flashTimer.current);
+    setRouteMessage(message);
+    flashTimer.current = setTimeout(() => setRouteMessage(current => current === message ? '' : current), 10000);
+  };
   const routeRefs = useRef(new Map());
   const requestNumber = useRef(0);
   const cancelRequests = useCallback(() => { requestNumber.current++; }, []);
@@ -105,12 +114,31 @@ export default function AdminDeliveryOverview() {
   const teamRows = useMemo(() => {
     const q = teamSearch.trim().toLowerCase();
     return teams.filter(team => !q || `${team.name} ${team.truck_plates.join(' ')} ${team.pairs.join(' ')} ${team.areas.map(area => area.name).join(' ')}`.toLowerCase().includes(q)).sort((a, b) => {
+      // Teams with deliveries always stay above idle teams; the chosen column sorts within each group.
+      const withOrders = Number(b.total_do > 0) - Number(a.total_do > 0);
+      if (withOrders) return withOrders;
       const first = a[sort.field]; const second = b[sort.field];
       if (first == null) return second == null ? 0 : 1;
       if (second == null) return -1;
       return (typeof first === 'number' ? first - second : String(first).localeCompare(String(second), undefined, { numeric: true })) * sort.direction;
     });
   }, [teams, teamSearch, sort]);
+  // The team table shows this many rows; the rest scroll. Measured from the real rows, so it stays right at any zoom or text wrap.
+  const teamTableRef = useRef(null);
+  const [teamTableMax, setTeamTableMax] = useState(null);
+  useLayoutEffect(() => {
+    const box = teamTableRef.current;
+    if (!box) return undefined;
+    const measure = () => {
+      const head = box.querySelector('thead');
+      const rows = [...box.querySelectorAll('tbody tr')];
+      setTeamTableMax(!head || rows.length <= VISIBLE_TEAM_ROWS ? null
+        : head.offsetHeight + rows.slice(0, VISIBLE_TEAM_ROWS).reduce((sum, row) => sum + row.offsetHeight, 0) + VISIBLE_TEAM_ROWS + (box.offsetHeight - box.clientHeight));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [teamRows]);
   const sortBy = field => setSort(current => ({ field, direction: current.field === field ? -current.direction : 1 }));
   const slotOptions = useMemo(() => adminSlotOptions(teams, selectedTeam), [teams, selectedTeam]);
   useEffect(() => { setSlotFilter('all'); }, [date]);
@@ -123,6 +151,32 @@ export default function AdminDeliveryOverview() {
   const editableRuns = visible.flatMap(team => team.runs).filter(run => run.orders.some(order => active(order.status)));
   useEffect(() => { setArranging(false); setRouteMessage(''); }, [selectedTeam, search, date, slotFilter, statusFilter]);
   const selectTeam = id => { if (!routeBusy) setSelected(id); };
+  // Clicking a team in the table also brings its orders into view. The orders load after the click and make the
+  // page taller, so the section is kept at the top until the page settles (or the user scrolls). A short page just
+  // scrolls to its end.
+  const ordersRef = useRef(null);
+  const stopFollowRef = useRef(null);
+  useEffect(() => () => stopFollowRef.current?.(), []);
+  const pickTeam = id => {
+    if (routeBusy) return;
+    setSelected(id);
+    stopFollowRef.current?.();
+    const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    const go = () => ordersRef.current?.scrollIntoView({ behavior, block: 'start' });
+    requestAnimationFrame(go);
+    const observer = typeof ResizeObserver === 'function' && ordersRef.current ? new ResizeObserver(go) : null;
+    if (observer) observer.observe(ordersRef.current);
+    const userEvents = ['wheel', 'touchstart', 'keydown', 'pointerdown'];
+    const stop = () => {
+      clearTimeout(timer);
+      observer?.disconnect();
+      userEvents.forEach(name => window.removeEventListener(name, stop));
+      stopFollowRef.current = null;
+    };
+    const timer = setTimeout(stop, 2000);
+    userEvents.forEach(name => window.addEventListener(name, stop, { passive: true }));
+    stopFollowRef.current = stop;
+  };
   function beginArrange() {
     if (!editableRuns.length || editableRuns.some(run => !routeRefs.current.get(run.id)?.current?.ready)) {
       setRouteMessage('Routes are still loading. Please try again.'); return;
@@ -136,7 +190,7 @@ export default function AdminDeliveryOverview() {
     try {
       let success = true;
       for (const controller of controllers) if (!await controller[action]()) { success = false; break; }
-      if (success) { setArranging(false); setRouteMessage(action === 'optimal' ? 'Optimal routes restored.' : 'Delivery sequence saved.'); }
+      if (success) { setArranging(false); flash(action === 'optimal' ? 'Optimal routes restored.' : 'Delivery sequence saved.'); }
       else setRouteMessage('Some changes were not saved. Review the affected slot.');
       await refresh(true);
     } finally { setRouteBusy(false); }
@@ -149,14 +203,13 @@ export default function AdminDeliveryOverview() {
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
     {loading && !data && <p className="p-4 text-sm text-gray-500">Loading delivery teams…</p>}
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-xs text-gray-500">{teamRows.length} teams · select a team for its deliveries</p>
-      <div className="relative w-full sm:w-72">
+      <div className="relative w-full">
         <Search aria-hidden="true" size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input aria-label="Find delivery team" value={teamSearch} onChange={event => setTeamSearch(event.target.value)} placeholder="Find team, plate, pair or area" className="min-h-10 w-full rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-xs" />
       </div>
     </div>
-    <div className="hidden overflow-hidden rounded-xl border border-gray-200 bg-white lg:block">
-      <div className="max-h-[52vh] overflow-auto">
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+      <div ref={teamTableRef} style={teamTableMax ? { maxHeight: teamTableMax } : undefined} className="overflow-auto">
         <table className="w-full min-w-[880px] text-left text-xs">
           <caption className="sr-only">Delivery team comparison for {date}</caption>
           <thead className="sticky top-0 z-10 bg-gray-100 text-[11px] text-gray-500"><tr>
@@ -164,30 +217,22 @@ export default function AdminDeliveryOverview() {
               {field ? <button type="button" onClick={() => sortBy(field)} className="inline-flex min-h-8 items-center gap-1 hover:text-blue-700">{label}<span aria-hidden="true" className="text-gray-400">{sort.field === field ? sort.direction === 1 ? '↑' : '↓' : '↕'}</span></button> : label}
             </th>)}
           </tr></thead>
-          <tbody className="divide-y divide-gray-100">{teamRows.map(team => <tr key={team.id} onClick={() => selectTeam(team.id)} className={`cursor-pointer transition-colors ${selectedTeam === team.id ? 'bg-blue-50' : 'hover:bg-gray-50'} ${!team.total_do ? 'text-gray-400' : 'text-gray-700'}`}>
-            <th scope="row" className={`sticky left-0 z-0 border-l-2 px-3 py-2.5 font-normal ${selectedTeam === team.id ? 'border-blue-500 bg-blue-50' : 'border-transparent bg-white'}`}><button type="button" disabled={routeBusy} onClick={() => selectTeam(team.id)} aria-pressed={selectedTeam === team.id} className="text-left font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">{team.name}</button><p className="mt-1 text-[10px] text-gray-400">{team.delivered}/{team.total_do} delivered{team.failed ? ` · ${team.failed} failed` : ''}</p></th>
+          <tbody className="divide-y divide-gray-100">{teamRows.map(team => <tr key={team.id} onClick={() => pickTeam(team.id)} className={`cursor-pointer transition-colors ${selectedTeam === team.id ? 'bg-blue-50' : 'hover:bg-gray-50'} ${!team.total_do ? 'text-gray-400' : 'text-gray-700'}`}>
+            <th scope="row" className={`sticky left-0 z-0 border-l-2 px-3 py-2.5 font-normal ${selectedTeam === team.id ? 'border-blue-500 bg-blue-50' : 'border-transparent bg-white'}`}><button type="button" disabled={routeBusy} onClick={() => pickTeam(team.id)} aria-pressed={selectedTeam === team.id} className="text-left font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">{team.name}</button><p className="mt-1 text-[10px] text-gray-400">{team.delivered}/{team.total_do} delivered{team.failed ? ` · ${team.failed} failed` : ''}</p></th>
             <td className="max-w-32 px-3 py-2.5 font-medium">{team.truck_plates.join(' / ') || '—'}</td>
             <td className="max-w-44 px-3 py-2.5"><span className="line-clamp-2" title={team.pairs.join(' / ')}>{team.pairs.join(' / ') || '—'}</span></td>
             <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{team.total_do}</td>
             <td className="px-3 py-2.5 text-right tabular-nums">{team.total_items}</td>
             <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums" title={team.distance_incomplete ? 'Incomplete route estimates' : 'Planned distance'}>{distance(team.distance_m)}{team.distance_m != null && team.distance_incomplete ? '+' : ''}</td>
             <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums" title={team.drive_time_incomplete ? 'Incomplete route estimates' : 'Planned driving time'}>{duration(team.drive_seconds)}{team.drive_seconds != null && team.drive_time_incomplete ? '+' : ''}</td>
-            <td className="max-w-48 px-3 py-2.5 text-[11px] text-gray-500"><span className="line-clamp-2" title={team.areas.map(area => area.name).join(' · ')}>{team.areas.slice(0, 2).map(area => area.name).join(' · ') || (team.total_do ? 'Unavailable' : 'No deliveries')}{team.areas.length > 2 ? ` +${team.areas.length - 2}` : ''}</span></td>
+            <td className="min-w-48 px-3 py-2.5 text-[11px] leading-4 text-gray-500">{team.areas.map(area => area.name).join(' · ') || (team.total_do ? 'Unavailable' : 'No deliveries')}</td>
           </tr>)}</tbody>
         </table>
       </div>
     </div>
     {teams.length > 0 && !teamRows.length && <p className="p-3 text-sm text-gray-500">No teams match your search.</p>}
-    <div className="grid gap-3 md:grid-cols-2 lg:hidden">{teamRows.map(team => <button type="button" key={team.id} disabled={routeBusy} onClick={() => selectTeam(team.id)} aria-pressed={selectedTeam === team.id} className={`rounded-xl border bg-white p-4 text-left ${selectedTeam === team.id ? 'border-blue-400 ring-1 ring-blue-100' : 'border-gray-200'}`}>
-      <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-gray-800">{team.name}</h2><span className="text-xs text-gray-500">{team.delivered}/{team.total_do} delivered</span></div>
-      <p className="mt-2 flex items-start gap-2 text-sm font-semibold text-gray-700"><Truck size={15} className="mt-0.5 shrink-0" />{team.truck_plates.join(' · ') || 'Truck unassigned'}</p>
-      <p className="mt-1 flex items-start gap-2 text-xs text-gray-500"><Users size={14} className="shrink-0" />{team.pairs.join(' / ') || 'Pair unassigned'}</p>
-      <dl className="mt-3 grid grid-cols-4 gap-2 border-t border-gray-100 pt-3 text-xs">{[['DO', team.total_do], ['Items', team.total_items], ['Distance', `${distance(team.distance_m)}${team.distance_m != null && team.distance_incomplete ? '+' : ''}`], ['Drive time', `${duration(team.drive_seconds)}${team.drive_seconds != null && team.drive_time_incomplete ? '+' : ''}`]].map(([label, value]) => <div key={label}><dt className="text-[10px] text-gray-400">{label}</dt><dd className="mt-1 font-semibold tabular-nums text-gray-800">{value}</dd></div>)}</dl>
-      <p className="mt-3 flex items-start gap-1.5 text-xs text-gray-500"><MapPin size={13} className="shrink-0" /><span>{team.areas.length ? `${team.areas.slice(0, 3).map(area => area.name).join(' · ')}${team.areas.length > 3 ? ` +${team.areas.length - 3}` : ''}` : team.total_do ? 'Area unavailable' : 'No deliveries'}</span></p>
-      {team.metrics_incomplete && <p className="mt-2 text-[10px] text-amber-700">Some route estimates are not calculated yet.</p>}
-    </button>)}</div>
     {!loading && !teams.length && !error && <p className="p-4 text-sm text-gray-500">No delivery teams found.</p>}
-    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div ref={ordersRef} className="scroll-mt-3 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
     <div className="grid grid-cols-2 gap-2 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,0.75fr)_minmax(0,2.55fr)]">
       <select disabled={routeBusy} aria-label="Delivery team" value={selectedTeam} onChange={event => selectTeam(event.target.value)} className="min-h-10 min-w-0 rounded-lg border border-gray-200 bg-white px-3 text-sm lg:order-1"><option value="all">All teams</option>{teams.map(team => <option key={team.id} value={team.id}>{team.name}</option>)}</select>
       <div className="relative min-w-0 lg:order-4">
@@ -207,7 +252,6 @@ export default function AdminDeliveryOverview() {
     </div>
     {routeMessage && <p role="status" className="text-xs text-gray-600">{routeMessage}</p>}
     </div>
-    <p className="text-[10px] text-gray-400">Latest saved estimates · driving time only · cancelled DOs excluded. Replanned routes may cover remaining stops only.</p>
     {showMap && <TeamMap teams={visible} filtered={Boolean(search.trim()) || statusFilter !== 'all'} />}
     {visible.map(team => <section key={team.id} aria-label={`${team.name} routes`} className="space-y-2">
       <h2 className="flex items-center gap-2 border-t border-slate-200 px-1 pb-1 pt-4 text-sm font-semibold text-slate-700"><span aria-hidden="true" className="h-4 w-1 rounded-full bg-blue-500" />{team.name}</h2>
