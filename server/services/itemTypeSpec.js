@@ -151,5 +151,5 @@ module.exports = {
   NAME_MAX, MINUTES, POINTS,
   httpError, round2,
   normalizeText, parseKeywords, matchItemType,
-  itemTypeInput, pointsField, itemTypeRow,
+  itemTypeInput, pointsField, minutesField, itemTypeRow,
 };

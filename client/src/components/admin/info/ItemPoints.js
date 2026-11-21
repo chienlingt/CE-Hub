@@ -11,7 +11,8 @@ import { ITEM_REVIEW_CHANGED } from '../../../hooks/usePendingItemReviews';
 
 // Information > Item. One row per product name found on Odoo order lines,
 // assigned to an item type. The type supplies the install time, dismantle time
-// and installer flag the scheduler uses; each order's service time is base
+// and installer flag the scheduler uses; a product can have its own install or
+// dismantle time (null = follow the type). Each order's service time is base
 // delivery + install + dismantle (server/services/serviceTime.js).
 //
 // A new product starts unclassified ("Needs review"): the scheduler uses the
@@ -22,7 +23,6 @@ import { ITEM_REVIEW_CHANGED } from '../../../hooks/usePendingItemReviews';
 // on; points already earned never change.
 
 const control = `rounded-md border border-gray-300 bg-white px-2 py-1 text-sm ${FOCUS_RING} disabled:bg-gray-100`;
-const minutes = value => (value === null || value === undefined ? null : `${value} min`);
 const Blank = () => <span className="text-gray-400">—</span>;
 const notifyChanged = () => window.dispatchEvent(new Event(ITEM_REVIEW_CHANGED));
 
@@ -108,6 +108,48 @@ function PointsInput({ item, onSave, disabled }) {
   );
 }
 
+// A product's own install or dismantle time. Shows the item type's value until
+// the admin types a different one; that row then keeps its own ("custom"), and
+// the reset button (or clearing the box) goes back to following the type.
+function MinutesInput({ item, field, typeValue, onSave, disabled }) {
+  const own = item[field] ?? null;
+  const shown = own ?? typeValue;
+  const [value, setValue] = useState(shown ?? '');
+  useEffect(() => { setValue(shown ?? ''); }, [shown]);
+  const label = field === 'install_minutes' ? 'Install' : 'Dismantle';
+
+  const commit = () => {
+    const text = String(value).trim();
+    if (text === '') {
+      if (own !== null) onSave(item, field, null);
+      else setValue(shown ?? '');
+      return;
+    }
+    const n = Number(text);
+    if (n === shown) return;
+    onSave(item, field, n === typeValue ? null : n);
+  };
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <input type="number" min="0" max="480" step="1" placeholder="—" id={`${field}-${item.id}`}
+        aria-label={`${label} minutes for ${item.item_name}`} className={`${control} w-16 tabular-nums`}
+        value={value} disabled={disabled}
+        onChange={e => setValue(e.target.value)} onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setValue(shown ?? ''); }} />
+      {own !== null && (
+        <span className="flex items-center gap-0.5 text-xs text-blue-700">
+          custom
+          <button type="button" disabled={disabled} onClick={() => onSave(item, field, null)}
+            aria-label={`Use the item type's ${label.toLowerCase()} time for ${item.item_name}`}
+            title={`Use the item type's time (${typeValue ?? 'fallback'}${typeValue != null ? ' min' : ''})`}
+            className={`rounded px-1 text-gray-500 hover:bg-gray-100 hover:text-gray-800 ${FOCUS_RING}`}>↺</button>
+        </span>
+      )}
+    </span>
+  );
+}
+
 function TypePicker({ item, activeTypes, onChange, disabled }) {
   const current = item.item_type;
   const options = current && !current.active ? [current, ...activeTypes] : activeTypes;
@@ -172,6 +214,10 @@ export default function ItemPoints() {
 
   const assign = (item, typeId) => run(() => updateItem(item.id, { item_type_id: typeId }), `"${item.item_name}" classified.`);
   const savePoints = (item, value) => run(() => updateItem(item.id, { points_per_item: Number(value) }), `Points saved for "${item.item_name}".`);
+  const saveMinutes = (item, field, value) => run(
+    () => updateItem(item.id, { [field]: value }),
+    `${field === 'install_minutes' ? 'Install' : 'Dismantle'} time ${value === null ? 'now follows the item type' : 'saved'} for "${item.item_name}".`,
+  );
   const accept = item => run(() => acceptItemSuggestions([item.id]), `"${item.item_name}" classified as ${item.suggested_item_type.name}.`);
   const acceptAll = () => run(() => acceptItemSuggestions(), r => `${r.accepted} product${r.accepted === 1 ? '' : 's'} classified.`);
   const disabled = busy || !canEdit;
@@ -181,7 +227,7 @@ export default function ItemPoints() {
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 px-4 py-4">
         <div>
           <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-800">
-            Item
+            Item Management
             {pending > 0 && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badgeClass('amber')}`}>{pending} need review</span>}
           </h2>
         </div>
@@ -245,8 +291,16 @@ export default function ItemPoints() {
                       {item.needs_review && !item.suggested_item_type && <span className="text-xs text-gray-500">no match</span>}
                     </div>
                   </td>
-                  <td className="border-l border-gray-100 px-4 py-2 tabular-nums">{minutes(type?.install_minutes) ?? <Blank />}</td>
-                  <td className="px-4 py-2 tabular-nums">{minutes(type?.dismantle_minutes) ?? <Blank />}</td>
+                  <td className="border-l border-gray-100 px-4 py-2 tabular-nums">
+                    {type
+                      ? <MinutesInput item={item} field="install_minutes" typeValue={type.install_minutes} onSave={saveMinutes} disabled={disabled} />
+                      : <Blank />}
+                  </td>
+                  <td className="px-4 py-2 tabular-nums">
+                    {type
+                      ? <MinutesInput item={item} field="dismantle_minutes" typeValue={type.dismantle_minutes} onSave={saveMinutes} disabled={disabled} />
+                      : <Blank />}
+                  </td>
                   <td className="px-4 py-2">{type ? (type.requires_installer ? 'Required' : 'No') : <Blank />}</td>
                   <td className="border-l border-gray-100 px-4 py-2 tabular-nums">
                     {type
@@ -260,8 +314,9 @@ export default function ItemPoints() {
         </table>
       </div>
       {/* <p className="border-t border-gray-200 px-4 py-3 text-xs text-gray-500">
-        Install, Dismantle and Installer come from the item type and are edited in Manage item types. A blank install time means the
-        scheduler uses the fallback install time. Giving a product a type fills in the type's default points if it has none yet.
+        Install and Dismantle follow the item type until you change them on a product (marked custom; ↺ goes back to the type).
+        Installer comes from the item type. A blank install time means the scheduler uses the fallback install time. Dismantle
+        counts only when the order asks for it. Giving a product a type fills in the type's default points if it has none yet.
         Points changes apply to orders completed from now on.
       </p> */}
 

@@ -12,7 +12,7 @@ const prisma = require('../prismaClient');
 const {
   ruleInForce, itemKey, ensureItemRates, readItemRates, lineName, computeOrderPoints, resolveCrew, awardOrder, COMPLETED_STATUSES,
 } = require('./incentiveService');
-const { matchItemType, itemTypeInput, itemTypeRow, pointsField } = require('./itemTypeSpec');
+const { matchItemType, itemTypeInput, itemTypeRow, pointsField, minutesField } = require('./itemTypeSpec');
 
 const ROLES = ['driver', 'assistant', 'installer'];
 const MAX_ADJUSTMENT = 10000;
@@ -288,8 +288,10 @@ async function createRule(input, adminId, db = prisma) {
 // ── Items (Information > Item): one row per product name found on order lines,
 // assigned to an item type. The list fills itself from order lines: a new name
 // starts unclassified (needs review) at 0 points, with a keyword suggestion an
-// admin can accept. Unclassified names cannot have their points edited; giving
-// a name a type fills in the type's default points if it has none yet.
+// admin can accept. Unclassified names cannot have their points or times
+// edited; giving a name a type fills in the type's default points if it has
+// none yet. A product's own install/dismantle time (null = follow its type)
+// is for one-off products; moving it to another type clears them.
 // Earned points never change.
 
 const ITEM_TYPE_SELECT = { id: true, name: true, install_minutes: true, dismantle_minutes: true, requires_installer: true, default_points: true, active: true };
@@ -298,6 +300,9 @@ const itemRow = row => ({
   id: row.id,
   item_name: row.item_name,
   points_per_item: row.points_per_item,
+  // The product's own times; null = follow the item type.
+  install_minutes: row.install_minutes ?? null,
+  dismantle_minutes: row.dismantle_minutes ?? null,
   needs_review: !row.item_type_id,
   item_type_id: row.item_type_id ?? null,
   item_type: row.item_type ?? null,
@@ -397,9 +402,10 @@ async function itemById(id, db) {
 }
 
 /**
- * Change a product's item type and/or points.
- * Body: { item_type_id?, points_per_item? }. A new type must be active. Points
- * can only be set on a classified product.
+ * Change a product's item type, points and/or own times.
+ * Body: { item_type_id?, points_per_item?, install_minutes?, dismantle_minutes? }.
+ * A new type must be active. Points and times can only be set on a classified
+ * product; a time of null (or blank) goes back to following the type.
  */
 async function updateItem(id, input, adminId, db = prisma) {
   const row = await findItem(id, db);
@@ -411,12 +417,20 @@ async function updateItem(id, input, adminId, db = prisma) {
     const type = await findItemType(input.item_type_id, db);
     if (!type.active) throw httpError(409, 'ITEM_TYPE_INACTIVE', `"${type.name}" is inactive. Reactivate it in Manage item types first.`);
     typeId = type.id;
-    Object.assign(data, { item_type_id: type.id, suggested_item_type_id: null, classification_source: 'admin' });
+    Object.assign(data, {
+      item_type_id: type.id, suggested_item_type_id: null, classification_source: 'admin',
+      install_minutes: null, dismantle_minutes: null,
+    });
     if (!has('points_per_item') && !(row.points_per_item > 0)) data.points_per_item = type.default_points;
   }
   if (has('points_per_item')) {
     if (!typeId) throw httpError(409, 'ITEM_NOT_CLASSIFIED', 'Choose an item type before setting points.');
     data.points_per_item = pointsField(input.points_per_item);
+  }
+  for (const [key, label] of [['install_minutes', 'Install time'], ['dismantle_minutes', 'Dismantle time']]) {
+    if (!has(key)) continue;
+    if (!typeId) throw httpError(409, 'ITEM_NOT_CLASSIFIED', 'Choose an item type before setting times.');
+    data[key] = minutesField(input[key], label);
   }
   if (!Object.keys(data).length) return itemById(id, db);
   await db.item_point_rates.update({ where: { id }, data: { ...data, updated_by: adminId || null } });

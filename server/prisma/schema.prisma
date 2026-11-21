@@ -681,6 +681,9 @@ model item_point_rates {
   item_type_id           String?     @db.Uuid
   // Keyword match waiting for an admin to accept it. Never used for timing.
   suggested_item_type_id String?     @db.Uuid
+  // This product's own times. null = follow the item type (then the fallback).
+  install_minutes        Int?
+  dismantle_minutes      Int?
   // How item_type_id was set: admin | suggestion | odoo (reserved for the GCA push).
   classification_source  String?     @db.VarChar(20)
   updated_by             String?     @db.Uuid

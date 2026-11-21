@@ -6,11 +6,11 @@
 //   + install x qty per line
 //   + dismantle x qty, only on lines with dismantle_required
 //
-// Install per unit: the line's own custom install time (midpoint of min/max)
-// if set, else the item type's install_minutes, else the fallback install
-// time (unclassified product, or a type whose install time is blank).
-// Dismantle per unit: the line's dismantle_time (midpoint) if set, else the
-// type's dismantle_minutes, else 0.
+// Install per unit, first that is set: the order line's custom install time
+// (midpoint of min/max), the product's own install time (Information > Item),
+// the item type's install time, else the fallback install time.
+// Dismantle per unit, first that is set: the line's dismantle_time (midpoint),
+// the product's own, the type's, else 0.
 // The item type decides whether installation counts, whatever service_type
 // the line carries (Odoo ingest always sends 'delivery').
 // Inactive types still apply to products already assigned to them.
@@ -31,7 +31,9 @@ function midpoint(min, max) {
 
 /**
  * Pure calculation. No database access.
- * @param {Array<{line: object, itemType: object|null}>} lines  order_products rows with their item type (null = unclassified)
+ * @param {Array<{line: object, itemType: object|null, product?: object}>} lines
+ *   order_products rows with their item type (null = unclassified) and their
+ *   item_point_rates row (`product`, for the product's own times)
  * @param {{base_delivery_minutes:number, fallback_install_minutes:number}} settings
  */
 function computeServiceMinutes(lines = [], settings = {}) {
@@ -41,15 +43,17 @@ function computeServiceMinutes(lines = [], settings = {}) {
   let requiresInstaller = false;
   const breakdown = [];
 
-  for (const { line = {}, itemType = null } of lines) {
+  for (const { line = {}, itemType = null, product = null } of lines) {
     const qty = Math.max(1, Number(line.quantity) || 1);
-    const custom = midpoint(line.custom_installation_time_min, line.custom_installation_time_max);
-    const usedFallback = custom === null && (itemType?.install_minutes ?? null) === null;
-    const install = (custom ?? itemType?.install_minutes ?? fallback) * qty;
+    const perUnit = midpoint(line.custom_installation_time_min, line.custom_installation_time_max)
+      ?? product?.install_minutes ?? itemType?.install_minutes ?? null;
+    const usedFallback = perUnit === null;
+    const install = (perUnit ?? fallback) * qty;
 
     let dismantle = 0;
     if (line.dismantle_required) {
-      dismantle = (midpoint(line.dismantle_time_min, line.dismantle_time_max) ?? itemType?.dismantle_minutes ?? 0) * qty;
+      dismantle = (midpoint(line.dismantle_time_min, line.dismantle_time_max)
+        ?? product?.dismantle_minutes ?? itemType?.dismantle_minutes ?? 0) * qty;
     }
 
     installMinutes += install;
@@ -93,9 +97,12 @@ async function serviceMinutes(order, { settings, db = prisma } = {}) {
   const rows = keys.length
     ? await db.item_point_rates.findMany({ where: { item_key: { in: keys } }, include: { item_type: true } })
     : [];
-  const typeByKey = new Map(rows.map(row => [row.item_key, row.item_type ?? null]));
+  const rowByKey = new Map(rows.map(row => [row.item_key, row]));
   return computeServiceMinutes(
-    lines.map(line => ({ line, itemType: typeByKey.get(itemKey(lineName(line))) ?? null })),
+    lines.map(line => {
+      const product = rowByKey.get(itemKey(lineName(line))) ?? null;
+      return { line, product, itemType: product?.item_type ?? null };
+    }),
     resolvedSettings,
   );
 }
