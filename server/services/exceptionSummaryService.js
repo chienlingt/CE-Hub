@@ -10,11 +10,14 @@
 //   System Reports      the "Pending" card: staff reports with status pending
 //                       (an empty status counts as pending, as on that tab)
 //   Sync Monitor        "Needs approval": Odoo change requests awaiting a decision
+//   Fleet Blocked       open orders from today on a truck or team that a block-off
+//                       now covers (B.4 Fleet Availability), counted once per order
 //
 // The two order groups are disjoint (the failed-deliveries filter excludes driver
 // reports), so nothing is counted twice.
 
 const prisma = require('../prismaClient');
+const { countFleetBlocked } = require('./fleetAvailabilityService');
 
 // Same value as routes/orders.js.
 const DRIVER_ESCALATION_REASON = 'Driver Escalation';
@@ -46,6 +49,7 @@ async function getExceptionSummary(db = prisma, log = console) {
     driver_reports: () => db.orders.count({ where: where.openDriverReports }),
     system_reports: () => db.reports.count({ where: where.pendingSystemReports }),
     sync_approvals: () => db.odoo_change_requests.count({ where: where.pendingApprovals }),
+    fleet_blocked: () => countFleetBlocked(db),
   };
   const names = Object.keys(sources);
   const results = await Promise.allSettled(names.map(name => sources[name]()));

@@ -20,6 +20,7 @@ import { windowLabel, getSlotWindowId } from './slotWindows';
 import { evaluateAccessWindow, projectStopTimes } from './accessWindowRules';
 import { teamCanServe, requiresInstaller } from './skillRules';
 import { truckAvailableOn, teamAvailableOn } from './availabilityRules';
+import { sessionForStart } from '../fleet/fleetRules';
 import { isSlotLocked, isSlotCompleted, lockReason } from './lockRules';
 import { withDefaults } from './gracePeriod';
 import { ISSUE, makeIssue } from './issueCodes';
@@ -95,12 +96,13 @@ export function validateAssignment({
     }
   }
 
-  // --- 4 & 6. Resource availability on this date.
-  const truckAvail = truckAvailableOn(truck, targetSlot.dateKey, cfg);
+  // --- 4 & 6. Resource availability on this date and session.
+  const targetSession = sessionForStart(targetSlot.start) ?? undefined;
+  const truckAvail = truckAvailableOn(truck, targetSlot.dateKey, cfg, targetSession);
   if (!truckAvail.available) {
     issues.push(makeIssue(ISSUE.TRUCK_OFF_DAY, { detail: truckAvail.reason ?? undefined }));
   }
-  const teamAvail = teamAvailableOn(team, targetSlot.dateKey, cfg);
+  const teamAvail = teamAvailableOn(team, targetSlot.dateKey, cfg, targetSession);
   if (!teamAvail.available) {
     issues.push(makeIssue(ISSUE.TEAM_UNAVAILABLE, { detail: teamAvail.reason ?? undefined }));
   }
@@ -228,8 +230,9 @@ export function evaluateSlotFeasibility({
     order => !teamCanServe(team, order, { productsById, employeesById }).ok,
   );
 
-  const truckAvail = truckAvailableOn(truck, slot?.dateKey, cfg);
-  const teamAvail = teamAvailableOn(team, slot?.dateKey, cfg);
+  const slotSession = sessionForStart(slot?.start) ?? undefined;
+  const truckAvail = truckAvailableOn(truck, slot?.dateKey, cfg, slotSession);
+  const teamAvail = teamAvailableOn(team, slot?.dateKey, cfg, slotSession);
   const locked = isSlotLocked(slot, orders);
 
   return [

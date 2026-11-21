@@ -40,6 +40,8 @@ import EmployeePerformance from './admin/dashboard/EmployeePerformance';
 import OrderPerformance from './admin/dashboard/OrderPerformance';
 import MyPerformance from './employee/MyPerformance';
 import ItemPoints from './admin/info/ItemPoints';
+import FleetAvailability from './admin/info/FleetAvailability';
+import FleetBlocked from './admin/exceptions/FleetBlocked';
 import usePendingItemReviews from '../hooks/usePendingItemReviews';
 import useExceptionCount from '../hooks/useExceptionCount';
 import RoleAccessControl from './admin/access/accessControl';
@@ -94,6 +96,7 @@ const Layout = () => {
     'driver-escalations': exceptions.driver_reports,
     'system-reports': exceptions.system_reports,
     'sync-monitor': exceptions.sync_approvals,
+    'fleet-blocked': exceptions.fleet_blocked,
   };
 
   // ==========================
@@ -147,6 +150,7 @@ const Layout = () => {
         { id: 'item', label: 'Item', path: 'item', component: ItemPoints },
         // { id: 'product', label: 'Product', path: 'product', component: ProductInfo }, // removed — products are not stored in CE Hub
         { id: 'truck', label: 'Truck', path: 'truck', component: TruckInfo },
+        { id: 'fleet', label: 'Fleet Availability', path: 'fleet-availability', component: FleetAvailability },
         // { id: 'truckzone', label: 'TruckZone', path: 'truckzone', component: TruckZoneInfo },
       ],
     },
@@ -161,6 +165,7 @@ const Layout = () => {
         { id: 'driver-escalations',   label: 'Driver Escalations',    path: 'driver-escalations',  component: DeliveryIssues      },
         { id: 'system-reports',       label: 'System Reports',        path: 'system-reports',      component: Cases               },
         { id: 'sync-monitor',         label: 'Sync Monitor',          path: 'sync-monitor',        component: SyncMonitor         },
+        { id: 'fleet-blocked',        label: 'Fleet Blocked',         path: 'fleet-blocked',       component: FleetBlocked        },
       ],
     },
     // Hidden from sidebar — kept for easy re-enable.

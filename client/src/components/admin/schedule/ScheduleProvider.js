@@ -135,18 +135,6 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
       return config;
     },
 
-    addBlockoff: async (blockoff) => {
-      await gateway.addBlockoff(blockoff);
-      const config = await gateway.loadConfig();
-      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
-    },
-
-    removeBlockoff: async (id) => {
-      await gateway.removeBlockoff(id);
-      const config = await gateway.loadConfig();
-      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
-    },
-
     runAutoSchedule: async () => {
       const result = await gateway.runAutoSchedule();
       dispatch({ type: ACTIONS.APPLY_AUTO_RUN, payload: result });

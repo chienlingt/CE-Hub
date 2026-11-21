@@ -4,13 +4,11 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const { scheduleOrders } = require('../services/scheduler');
 const { getSchedulerSettings, getSettingsView, updateSchedulerSettings, SettingsValidationError } = require('../services/schedulerSettings');
-const { validateBlockoff } = require('../services/schedulerSettingsSpec');
+const { rowToApi, klDateSession, teamBlock } = require('../services/fleetAvailabilitySpec');
 const { geocodeAddress } = require('../services/googleRoutingService');
 const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 const { updateSchedulerCron } = require('../schedulerCron');
 
-const dateKey = d => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
-const blockoffToApi = row => ({ ...row, start_date: dateKey(row.start_date), end_date: dateKey(row.end_date) });
 
 /**
  * POST /api/scheduler/run
@@ -94,8 +92,9 @@ router.put('/config', requireReviewAdmin, async (req, res) => {
 });
 
 /**
- * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=truck|team
- * Truck/team unavailability overlapping the range (all when no range given).
+ * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=fleet|truck_type|truck|team
+ * Block-off rows overlapping the range (all when no range given), for the
+ * schedule board. They are created and removed under /api/fleet-availability.
  */
 router.get('/blockoffs', async (req, res) => {
   try {
@@ -106,56 +105,10 @@ router.get('/blockoffs', async (req, res) => {
     if (isDate(to)) where.start_date = { lte: new Date(`${to}T00:00:00Z`) };
     if (isDate(from)) where.end_date = { gte: new Date(`${from}T00:00:00Z`) };
     const rows = await prisma.resource_blockoffs.findMany({ where, orderBy: [{ start_date: 'asc' }] });
-    res.json({ success: true, blockoffs: rows.map(blockoffToApi) });
+    res.json({ success: true, blockoffs: rows.map(rowToApi) });
   } catch (error) {
     console.error('GET /api/scheduler/blockoffs error', error);
     res.status(500).json({ success: false, error: 'Failed to fetch block-offs', details: error.message });
-  }
-});
-
-/**
- * POST /api/scheduler/blockoffs
- * Admin session required. The truck or team must exist.
- */
-router.post('/blockoffs', requireReviewAdmin, async (req, res) => {
-  try {
-    const { value, errors } = validateBlockoff(req.body ?? {});
-    if (Object.keys(errors).length) {
-      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF', errors });
-    }
-    const model = value.resource_type === 'truck' ? prisma.trucks : prisma.teams;
-    const exists = await model.findUnique({ where: { id: value.resource_id }, select: { id: true } });
-    if (!exists) {
-      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF',
-        errors: { resource_id: `no ${value.resource_type} with this id` } });
-    }
-    const row = await prisma.resource_blockoffs.create({
-      data: {
-        ...value,
-        start_date: new Date(`${value.start_date}T00:00:00Z`),
-        end_date: new Date(`${value.end_date}T00:00:00Z`),
-        created_by: req.reviewAdmin?.id ?? null,
-      },
-    });
-    res.status(201).json({ success: true, blockoff: blockoffToApi(row) });
-  } catch (error) {
-    console.error('POST /api/scheduler/blockoffs error', error);
-    res.status(500).json({ success: false, error: 'Failed to create block-off', details: error.message });
-  }
-});
-
-/**
- * DELETE /api/scheduler/blockoffs/:id
- * Admin session required.
- */
-router.delete('/blockoffs/:id', requireReviewAdmin, async (req, res) => {
-  try {
-    const { count } = await prisma.resource_blockoffs.deleteMany({ where: { id: req.params.id } });
-    if (!count) return res.status(404).json({ success: false, error: 'Block-off not found' });
-    res.json({ success: true });
-  } catch (error) {
-    console.error('DELETE /api/scheduler/blockoffs error', error);
-    res.status(500).json({ success: false, error: 'Failed to delete block-off', details: error.message });
   }
 });
 
@@ -301,6 +254,24 @@ router.put('/installation-schedules/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { status, estimated_arrival_time, installation_team_id } = req.body;
+
+    // B.4: an installer team blocked for that date and session cannot be assigned.
+    if (installation_team_id) {
+      const current = await prisma.installation_schedules.findUnique({ where: { id }, select: { estimated_arrival_time: true } });
+      const when = klDateSession(estimated_arrival_time || current?.estimated_arrival_time);
+      if (when) {
+        const rows = await prisma.resource_blockoffs.findMany({
+          where: { start_date: { lte: new Date(`${when.date}T00:00:00Z`) }, end_date: { gte: new Date(`${when.date}T00:00:00Z`) } },
+        });
+        const block = teamBlock(installation_team_id, when.date, when.session, rows);
+        if (block) {
+          return res.status(400).json({
+            success: false, code: 'TEAM_BLOCKED',
+            error: `This team is blocked on ${when.date} (${when.session}): ${block.reason}${block.note ? ` - ${block.note}` : ''}.`,
+          });
+        }
+      }
+    }
 
     const updateData = { updated_at: new Date() };
 

@@ -98,20 +98,6 @@ export const mockScheduleGateway = {
     return { ...next, configScope: 'mock' };
   },
 
-  async addBlockoff(blockoff) {
-    await delay();
-    const current = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
-    const created = { note: null, ...blockoff, id: `mock-blk-${Date.now()}` };
-    writeStoredConfig({ ...current, blockoffs: [...(current.blockoffs ?? []), created] });
-    return created;
-  },
-
-  async removeBlockoff(id) {
-    await delay();
-    const current = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
-    writeStoredConfig({ ...current, blockoffs: (current.blockoffs ?? []).filter(b => b.id !== id) });
-  },
-
   async commitMoves(moves = []) {
     await delay();
     if (!state) return { applied: [], rejected: [] };

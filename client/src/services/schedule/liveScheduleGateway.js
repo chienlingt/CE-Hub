@@ -19,7 +19,7 @@ import { assertGateway } from './scheduleGateway';
 import { normalizeSnapshot, normalizeSlot } from '../../utils/schedule/scheduleNormalize';
 import { buildWorkingRange } from '../../utils/schedule/weekRange';
 import {
-  configFromServer, patchToServer, fieldErrorsFromServer, blockoffToServer, blockoffFromServer,
+  configFromServer, patchToServer, fieldErrorsFromServer,
 } from '../../utils/schedule/schedulerConfigMapping';
 import { todayLocalDateKey } from '../../utils/dateKey';
 
@@ -154,19 +154,6 @@ export const liveScheduleGateway = {
     }
     // Named reference rather than `this`, so the method survives destructuring.
     return liveScheduleGateway.loadConfig();
-  },
-
-  async addBlockoff(blockoff) {
-    const { ok, status, data } = await rawRequest('scheduler/blockoffs', {
-      method: 'POST', body: blockoffToServer(blockoff),
-    });
-    if (!ok) throw requestError(status, data, 'Could not save the block-off.');
-    return blockoffFromServer(data.blockoff);
-  },
-
-  async removeBlockoff(id) {
-    const { ok, status, data } = await rawRequest(`scheduler/blockoffs/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!ok) throw requestError(status, data, 'Could not remove the block-off.');
   },
 
   async commitMoves(moves = []) {

@@ -23,21 +23,12 @@ const WAREHOUSE_FIELDS = {
   lat: 'warehouse_latitude',
   lng: 'warehouse_longitude',
 };
-const BLOCKOFF_FIELDS = {
-  resourceType: 'resource_type',
-  resourceId: 'resource_id',
-  startDate: 'start_date',
-  endDate: 'end_date',
-  reason: 'reason',
-  note: 'note',
-};
 
 // Server field -> the client field name a form shows the error against.
 const SERVER_TO_CLIENT_FIELD = {
   ...Object.fromEntries(Object.entries(SCALAR_FIELDS).map(([c, s]) => [s, c])),
   ...Object.fromEntries(Object.entries(DURATION_FIELDS).map(([c, s]) => [s, `duration.${c}`])),
   ...Object.fromEntries(Object.entries(WAREHOUSE_FIELDS).map(([c, s]) => [s, `warehouse.${c}`])),
-  ...Object.fromEntries(Object.entries(BLOCKOFF_FIELDS).map(([c, s]) => [s, c])),
   service_time_catalogue: 'serviceTimeCatalogue',
 };
 
@@ -63,24 +54,21 @@ export function catalogueEntryToServer(e = {}) {
   };
 }
 
+/**
+ * Block-off row (GET /api/scheduler/blockoffs) → client. resourceType is
+ * fleet | truck_type | truck | team; scopeValue is the tonnage key for
+ * truck_type; sessions lists the blocked sessions (all three = full day).
+ */
 export function blockoffFromServer(b = {}) {
   return {
     id: b.id,
+    groupId: b.group_id ?? b.id,
     resourceType: b.resource_type,
-    resourceId: b.resource_id,
+    resourceId: b.resource_id ?? null,
+    scopeValue: b.scope_value ?? null,
+    sessions: Array.isArray(b.sessions) && b.sessions.length ? b.sessions : ['morning', 'afternoon', 'evening'],
     startDate: String(b.start_date ?? '').slice(0, 10),
     endDate: String(b.end_date ?? '').slice(0, 10),
-    reason: b.reason,
-    note: b.note ?? null,
-  };
-}
-
-export function blockoffToServer(b = {}) {
-  return {
-    resource_type: b.resourceType,
-    resource_id: b.resourceId,
-    start_date: b.startDate,
-    end_date: b.endDate,
     reason: b.reason,
     note: b.note ?? null,
   };

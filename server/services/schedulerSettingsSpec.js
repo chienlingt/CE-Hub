@@ -33,8 +33,8 @@ const SETTINGS_SPEC = {
 const CUTOFF = { default: '17:00', min: '12:00', max: '22:00', stepMinutes: 15 };
 const CATALOGUE_MINUTES = { min: 0, max: 480 };
 const CATALOGUE_MAX_ENTRIES = 100;
-const BLOCKOFF_REASONS = ['leave', 'mc', 'event', 'maintenance', 'other'];
-const BLOCKOFF_RESOURCE_TYPES = ['truck', 'team'];
+// Block-off reasons are owned by B.4 Fleet Availability; the settings view lists them.
+const { BLOCKOFF_REASONS } = require('./fleetAvailabilitySpec');
 
 const DEFAULT_WAREHOUSE = {
   address: 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor',
@@ -64,14 +64,6 @@ const clockToMinutes = (hhmm) => {
 };
 const minutesToClock = (mins) =>
   `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidDateKey(s) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''))) return false;
-  const d = new Date(`${s}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
-}
 
 /** Integer from a number or numeric string, else null. */
 function toInt(v) {
@@ -243,35 +235,6 @@ function validateSettingsPatch(patch = {}, current = {}) {
   return { value, errors };
 }
 
-function validateBlockoff(body = {}) {
-  const value = {};
-  const errors = {};
-
-  if (!BLOCKOFF_RESOURCE_TYPES.includes(body.resource_type)) errors.resource_type = `must be one of ${BLOCKOFF_RESOURCE_TYPES.join(', ')}`;
-  else value.resource_type = body.resource_type;
-
-  if (!UUID_RE.test(String(body.resource_id ?? ''))) errors.resource_id = 'must be a truck or team id';
-  else value.resource_id = body.resource_id;
-
-  if (!isValidDateKey(body.start_date)) errors.start_date = 'must be a date (YYYY-MM-DD)';
-  else value.start_date = body.start_date;
-
-  if (!isValidDateKey(body.end_date)) errors.end_date = 'must be a date (YYYY-MM-DD)';
-  else if (value.start_date && body.end_date < value.start_date) errors.end_date = 'must be on or after the start date';
-  else value.end_date = body.end_date;
-
-  if (!BLOCKOFF_REASONS.includes(body.reason)) errors.reason = `must be one of ${BLOCKOFF_REASONS.join(', ')}`;
-  else value.reason = body.reason;
-
-  if (body.note !== undefined && body.note !== null) {
-    const note = String(body.note).trim();
-    if (note.length > 300) errors.note = 'max 300 characters';
-    else value.note = note || null;
-  }
-
-  return { value, errors };
-}
-
 // ------------------------------------------------------------------ API shape
 
 const intOr = (v, d) => (Number.isInteger(v) ? v : d);
@@ -327,7 +290,6 @@ module.exports = {
   planningRunClock,
   cronFromCutoff,
   validateSettingsPatch,
-  validateBlockoff,
   toApi,
   specForClient,
 };
