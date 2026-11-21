@@ -397,7 +397,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
           <button
             type="button"
             onClick={() => beginSerialEdit(row)}
-            className="p-1 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded text-blue-500 hover:bg-blue-50 hover:text-blue-700 lg:h-8 lg:w-8"
             title={currentSerial ? 'Edit serial number' : 'Add serial number'}
             aria-label={currentSerial ? 'Edit serial number' : 'Add serial number'}
           >
@@ -414,14 +414,14 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
           onChange={e => setSerialDrafts(p => ({ ...p, [row.id]: e.target.value }))}
           onKeyDown={e => e.key === 'Enter' && handleAssignSerial(row, row._orderId)}
           placeholder="Enter serial number"
-          className="min-w-0 w-36 px-2 py-1.5 text-xs font-mono border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="min-h-10 min-w-0 w-36 px-2 py-1.5 text-xs font-mono border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 lg:min-h-0"
           disabled={savingSerial === row.id}
         />
         <button
           type="button"
           onClick={() => handleAssignSerial(row, row._orderId)}
           disabled={savingSerial === row.id || !(serialDrafts[row.id] || '').trim()}
-          className="p-1.5 text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-40"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 lg:h-8 lg:w-8"
           title="Save serial number"
           aria-label="Save serial number"
         >
@@ -431,7 +431,7 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
           type="button"
           onClick={() => cancelSerialEdit(row.id)}
           disabled={savingSerial === row.id}
-          className="p-1.5 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40 lg:h-8 lg:w-8"
           title="Cancel editing"
           aria-label="Cancel editing"
         >
@@ -513,7 +513,8 @@ export function ItemTable({ rows, allRows = rows, tab, employeeId, isAdmin, onUp
           <div className={`flex min-w-0 items-center justify-between gap-2 lg:grid ${isAdmin ? 'lg:grid-cols-[minmax(0,1fr)_6rem_2rem]' : 'lg:grid-cols-[minmax(0,1fr)_6rem]'}`}>
             <div className="min-w-0 flex-1 lg:text-right lg:[&>div]:justify-end">{isAdmin ? renderAdminSerialControl(item) : <p className="break-all font-mono text-xs text-gray-500">{item.loaded_serial || item.assigned_serial || 'No serial assigned'}</p>}</div>
             <div className="shrink-0 lg:justify-self-end"><StatusPill item={item} /></div>
-            {isAdmin && item.handling_status === 'loaded' && <details className="shrink-0"><summary aria-label="Item actions" className="cursor-pointer list-none p-2 text-gray-500">⋯</summary><button type="button" onClick={() => handleCancelScan(item, id)} disabled={cancelling === item.id} className="min-h-10 text-xs text-red-600">Cancel scan</button></details>}
+            {isAdmin && item.handling_status === 'loaded' && <details className="relative shrink-0"><summary aria-label="Item actions" className="grid h-10 w-10 cursor-pointer list-none place-items-center rounded-lg text-gray-500 hover:bg-gray-100 lg:h-8 lg:w-8 [&::-webkit-details-marker]:hidden">⋯</summary><div className="absolute right-0 top-full z-20 mt-1 rounded-lg border border-gray-200 bg-white p-1 shadow-lg"><button type="button" onClick={() => handleCancelScan(item, id)} disabled={cancelling === item.id} className="min-h-10 whitespace-nowrap rounded px-3 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">Cancel scan</button></div></details>}
+            {isAdmin && item.handling_status !== 'loaded' && <span aria-hidden="true" className="h-10 w-10 shrink-0 lg:h-8 lg:w-8" />}
           </div>
           {rowFb[item.id] && <ErrorBanner fb={rowFb[item.id]} onDismiss={() => setRowFb(p => ({ ...p, [item.id]: null }))} />}
         </div>)}</div>
@@ -887,7 +888,7 @@ export default function ScanStation({ forcedStage }) {
         </div>
       </div>
 
-      <div role="region" aria-label={`${tabLabel} checklist`} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-4 [touch-action:pan-y] [-webkit-overflow-scrolling:touch]">
+      <div role="region" aria-label={`${tabLabel} checklist`} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-[max(1rem,env(safe-area-inset-bottom))] [touch-action:pan-y] [-webkit-overflow-scrolling:touch]">
       {/* Global scanner modal (loading) */}
       {showGlobalCam && (
         <ScannerModal
