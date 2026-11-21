@@ -29,7 +29,6 @@ export const DEFAULT_SCHEDULE_CONFIG = {
   planningRunAt: '18:00',
   autoEnabled: true,
   duration: { baseDeliveryMinutes: 15, fallbackInstallMinutes: 0 },
-  serviceTimeCatalogue: [],
   warehouse: { address: '', postal: '', lat: null, lng: null },
   slotWindows: [],
   spec: {},
@@ -45,7 +44,6 @@ export function withDefaults(config = {}) {
     ...DEFAULT_SCHEDULE_CONFIG,
     ...config,
     duration: { ...DEFAULT_SCHEDULE_CONFIG.duration, ...(config.duration ?? {}) },
-    serviceTimeCatalogue: config.serviceTimeCatalogue ?? [],
     blockoffs: config.blockoffs ?? [],
   };
 }

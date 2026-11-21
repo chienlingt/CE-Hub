@@ -29,30 +29,7 @@ const SERVER_TO_CLIENT_FIELD = {
   ...Object.fromEntries(Object.entries(SCALAR_FIELDS).map(([c, s]) => [s, c])),
   ...Object.fromEntries(Object.entries(DURATION_FIELDS).map(([c, s]) => [s, `duration.${c}`])),
   ...Object.fromEntries(Object.entries(WAREHOUSE_FIELDS).map(([c, s]) => [s, `warehouse.${c}`])),
-  service_time_catalogue: 'serviceTimeCatalogue',
 };
-
-export function catalogueEntryFromServer(e = {}) {
-  return {
-    id: e.id,
-    label: e.label,
-    odooCategories: Array.isArray(e.odoo_categories) ? e.odoo_categories : [],
-    installMinutes: e.install_minutes ?? null,
-    dismantleMinutes: e.dismantle_minutes ?? null,
-    requiresInstaller: Boolean(e.requires_installer),
-  };
-}
-
-export function catalogueEntryToServer(e = {}) {
-  return {
-    id: e.id,
-    label: e.label,
-    odoo_categories: Array.isArray(e.odooCategories) ? e.odooCategories : [],
-    install_minutes: e.installMinutes ?? null,
-    dismantle_minutes: e.dismantleMinutes ?? null,
-    requires_installer: Boolean(e.requiresInstaller),
-  };
-}
 
 /**
  * Block-off row (GET /api/scheduler/blockoffs) → client. resourceType is
@@ -88,8 +65,6 @@ export function configFromServer(view = {}, blockoffs = []) {
     planningRunAt: c.planning_run_at ?? null,
     cronExpression: c.cron_expression ?? '',
     duration: Object.fromEntries(Object.entries(DURATION_FIELDS).map(([cl, s]) => [cl, c[s]])),
-    serviceTimeCatalogue: (Array.isArray(c.service_time_catalogue) ? c.service_time_catalogue : [])
-      .map(catalogueEntryFromServer),
     warehouse: {
       address: c.warehouse_address ?? '',
       postal: c.warehouse_postal ?? '',
@@ -119,9 +94,6 @@ export function patchToServer(patch = {}) {
   for (const [client, server] of Object.entries(WAREHOUSE_FIELDS)) {
     if (patch.warehouse?.[client] !== undefined) body[server] = patch.warehouse[client];
   }
-  if (patch.serviceTimeCatalogue !== undefined) {
-    body.service_time_catalogue = patch.serviceTimeCatalogue.map(catalogueEntryToServer);
-  }
   return body;
 }
 
@@ -139,7 +111,7 @@ export function fieldErrorsFromServer(errors = {}) {
  */
 export function diffConfig(saved = {}, draft = {}) {
   const patch = {};
-  for (const key of [...Object.keys(SCALAR_FIELDS), 'serviceTimeCatalogue']) {
+  for (const key of Object.keys(SCALAR_FIELDS)) {
     if (JSON.stringify(saved[key]) !== JSON.stringify(draft[key])) patch[key] = draft[key];
   }
   for (const key of ['warehouse', 'duration']) {

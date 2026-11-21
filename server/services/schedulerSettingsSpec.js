@@ -23,7 +23,8 @@ const SETTINGS_SPEC = {
   max_dos_per_slot:            { type: 'int', min: 1, max: 100, default: 25, unit: 'DO' },
   // Additive: delivery + install + dismantle (proposal §5: 15 + 30 = 45 min).
   base_delivery_minutes:       { type: 'int', min: 1, max: 120, default: 15, unit: 'min' }, // confirm
-  // Used when an item type has no confirmed install time.
+  // Install time for a product with no item type, or whose type has no
+  // confirmed install time. Edited on Information > Item.
   fallback_install_minutes:    { type: 'int', min: 0, max: 480, default: 0,  unit: 'min' },
   // The auto-run fires this long after the cutoff, so it runs after the Odoo
   // INT-12 5:00 PM fallback sync has pulled in tomorrow's missing DOOs.
@@ -31,8 +32,6 @@ const SETTINGS_SPEC = {
 };
 
 const CUTOFF = { default: '17:00', min: '12:00', max: '22:00', stepMinutes: 15 };
-const CATALOGUE_MINUTES = { min: 0, max: 480 };
-const CATALOGUE_MAX_ENTRIES = 100;
 // Block-off reasons are owned by B.4 Fleet Availability; the settings view lists them.
 const { BLOCKOFF_REASONS } = require('./fleetAvailabilitySpec');
 
@@ -40,16 +39,6 @@ const DEFAULT_WAREHOUSE = {
   address: 'Lot 33, Jalan Delima 1/3, Subang Hi-tech Industrial Park, 40000 Shah Alam, Selangor',
   postal: '40000',
 };
-
-// Seeded from Mr Lee's figures in the proposal §2. Odoo will send a product
-// category per line (FRD v1.2 §12 #15), but the category values are not known
-// yet, so `odoo_categories` starts empty. null minutes = not confirmed.
-const DEFAULT_SERVICE_TIME_CATALOGUE = [
-  { id: 'washing-machine', label: 'Washing machine', odoo_categories: [], install_minutes: 90,  dismantle_minutes: null, requires_installer: true },
-  { id: 'refrigerator',    label: 'Refrigerator',    odoo_categories: [], install_minutes: 60,  dismantle_minutes: null, requires_installer: false },
-  { id: 'tv-wall-mount',   label: 'TV (wall bracket)', odoo_categories: [], install_minutes: 150, dismantle_minutes: null, requires_installer: true },
-  { id: 'air-conditioner', label: 'Air conditioner', odoo_categories: [], install_minutes: null, dismantle_minutes: null, requires_installer: true },
-];
 
 const DEFAULT_SETTINGS = {
   ...Object.fromEntries(Object.entries(SETTINGS_SPEC).map(([k, s]) => [k, s.default])),
@@ -100,59 +89,6 @@ function cronFromCutoff(cutoff, offsetMinutes) {
 }
 
 // ------------------------------------------------------------------ validation
-
-function validateCatalogue(list) {
-  if (!Array.isArray(list)) return { error: 'must be a list of item types' };
-  if (list.length > CATALOGUE_MAX_ENTRIES) return { error: `at most ${CATALOGUE_MAX_ENTRIES} item types` };
-
-  const ids = new Set();
-  const categories = new Map();
-  const out = [];
-
-  for (let i = 0; i < list.length; i += 1) {
-    const e = list[i] ?? {};
-    const row = `row ${i + 1}`;
-    const label = typeof e.label === 'string' ? e.label.trim() : '';
-    if (!label || label.length > 80) return { error: `${row}: label is required (max 80 characters)` };
-
-    const id = typeof e.id === 'string' && e.id.trim()
-      ? e.id.trim()
-      : label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    if (ids.has(id)) return { error: `${row}: duplicate item type "${label}"` };
-    ids.add(id);
-
-    const minutes = {};
-    for (const key of ['install_minutes', 'dismantle_minutes']) {
-      if (e[key] === null || e[key] === undefined || e[key] === '') { minutes[key] = null; continue; }
-      const n = toInt(e[key]);
-      if (n === null || n < CATALOGUE_MINUTES.min || n > CATALOGUE_MINUTES.max) {
-        return { error: `${row}: ${key} must be a whole number from ${CATALOGUE_MINUTES.min} to ${CATALOGUE_MINUTES.max}, or blank` };
-      }
-      minutes[key] = n;
-    }
-
-    const rawCats = Array.isArray(e.odoo_categories) ? e.odoo_categories : [];
-    const cats = [];
-    for (const c of rawCats) {
-      const name = typeof c === 'string' ? c.trim() : '';
-      if (!name || cats.some(x => x.toLowerCase() === name.toLowerCase())) continue;
-      const owner = categories.get(name.toLowerCase());
-      if (owner) return { error: `${row}: Odoo category "${name}" is already mapped to ${owner}` };
-      categories.set(name.toLowerCase(), label);
-      cats.push(name);
-    }
-
-    out.push({
-      id,
-      label,
-      odoo_categories: cats,
-      install_minutes: minutes.install_minutes,
-      dismantle_minutes: minutes.dismantle_minutes,
-      requires_installer: Boolean(e.requires_installer),
-    });
-  }
-  return { value: out };
-}
 
 /**
  * Validate a PUT body. Returns `{ value, errors }`; `value` holds only the
@@ -210,12 +146,6 @@ function validateSettingsPatch(patch = {}, current = {}) {
         else value[key] = n;
         break;
       }
-      case 'service_time_catalogue': {
-        const r = validateCatalogue(raw);
-        if (r.error) errors[key] = r.error;
-        else value[key] = r.value;
-        break;
-      }
       default:
         errors[key] = 'is not an editable scheduler setting';
     }
@@ -247,9 +177,6 @@ function toApi(row) {
     Object.keys(SETTINGS_SPEC).map(k => [k, intOr(r[k], SETTINGS_SPEC[k].default)]),
   );
   const planningCutoff = clockToMinutes(r.planning_cutoff) !== null ? r.planning_cutoff : CUTOFF.default;
-  let catalogue;
-  if (!row) catalogue = DEFAULT_SERVICE_TIME_CATALOGUE;
-  else catalogue = Array.isArray(r.service_time_catalogue) ? r.service_time_catalogue : [];
 
   return {
     id: r.id ?? null,
@@ -263,7 +190,6 @@ function toApi(row) {
     // Derived, never edited directly.
     planning_run_at: planningRunClock(planningCutoff, settings.planning_run_offset_minutes),
     cron_expression: cronFromCutoff(planningCutoff, settings.planning_run_offset_minutes),
-    service_time_catalogue: catalogue,
     last_run_at: r.last_run_at ?? null,
     updated_at: r.updated_at ?? null,
     updated_by: r.updated_by ?? null,
@@ -275,7 +201,6 @@ function specForClient() {
   return {
     ...Object.fromEntries(Object.entries(SETTINGS_SPEC).map(([k, s]) => [k, { min: s.min, max: s.max, unit: s.unit }])),
     planning_cutoff: { min: CUTOFF.min, max: CUTOFF.max, step_minutes: CUTOFF.stepMinutes },
-    catalogue_minutes: { ...CATALOGUE_MINUTES },
     blockoff_reasons: [...BLOCKOFF_REASONS],
   };
 }
@@ -283,7 +208,6 @@ function specForClient() {
 module.exports = {
   SETTINGS_SPEC,
   DEFAULT_SETTINGS,
-  DEFAULT_SERVICE_TIME_CATALOGUE,
   DEFAULT_WAREHOUSE,
   BLOCKOFF_REASONS,
   slotWindows,

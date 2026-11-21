@@ -440,7 +440,6 @@ model scheduler_config {
   planning_run_offset_minutes Int       @default(60)
   base_delivery_minutes       Int       @default(15)
   fallback_install_minutes    Int       @default(0)
-  service_time_catalogue      Json      @default("[]")
   updated_by                  String?   @db.Uuid
 }
 
@@ -677,8 +676,39 @@ model item_point_rates {
   item_key        String   @unique @db.VarChar(255)
   item_name       String   @db.VarChar(255)
   points_per_item Float
-  // True for items found on order lines and not yet set by an admin (0 points).
-  needs_review    Boolean  @default(false)
-  updated_by      String?  @db.Uuid
-  updated_at      DateTime @default(now()) @updatedAt
+  // Unclassified (item_type_id null) = needs admin review: the scheduler uses
+  // the fallback install time and a new item earns 0 points until classified.
+  item_type_id           String?     @db.Uuid
+  // Keyword match waiting for an admin to accept it. Never used for timing.
+  suggested_item_type_id String?     @db.Uuid
+  // How item_type_id was set: admin | suggestion | odoo (reserved for the GCA push).
+  classification_source  String?     @db.VarChar(20)
+  updated_by             String?     @db.Uuid
+  updated_at             DateTime    @default(now()) @updatedAt
+  item_type              item_types? @relation("item_type_assigned", fields: [item_type_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  suggested_item_type    item_types? @relation("item_type_suggested", fields: [suggested_item_type_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+}
+
+// Item types (Information > Item > Manage item types). Service time for the
+// scheduler: base delivery (scheduler_config) + install + dismantle per unit.
+// Each size is its own type. Rules: services/itemTypeSpec.js.
+model item_types {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String             @unique @db.VarChar(80)
+  // null = not confirmed yet; scheduler_config.fallback_install_minutes is used.
+  install_minutes    Int?
+  // Only counted on order lines with dismantle_required.
+  dismantle_minutes  Int?
+  requires_installer Boolean            @default(false)
+  // Copied into a product's points when it is given this type and has none yet.
+  default_points     Float              @default(0)
+  // Each keyword is a set of words that must all appear in the product name.
+  keywords           String[]           @default([])
+  // Inactive: hidden from the picker and suggestions; assigned products keep it.
+  active             Boolean            @default(true)
+  updated_by         String?            @db.Uuid
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @default(now()) @updatedAt
+  items              item_point_rates[] @relation("item_type_assigned")
+  suggested_items    item_point_rates[] @relation("item_type_suggested")
 }

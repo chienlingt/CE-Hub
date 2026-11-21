@@ -1,9 +1,8 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Settings, Save, RotateCcw, Clock, Gauge, Wrench, Info, MapPin } from 'lucide-react';
+import { Settings, Save, RotateCcw, Clock, Gauge, Info, MapPin } from 'lucide-react';
 import ScheduleProvider, { useScheduleState, useScheduleActions } from './ScheduleProvider';
 import BufferField from './settings/BufferField';
 import ConfigImpactPreview from './settings/ConfigImpactPreview';
-import ServiceTimeCatalogue from './settings/ServiceTimeCatalogue';
 import Button from '../../common/Button';
 import EmptyState from '../../common/EmptyState';
 import { badgeClass, FOCUS_RING } from '../../common/tokens';
@@ -268,39 +267,6 @@ function SettingsInner() {
             />
           </Section>
 
-          <Section
-            icon={Wrench}
-            title="Service durations"
-            description="Service time per order is base delivery + installation + dismantling."
-          >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <BufferField
-                label="Base delivery time"
-                hint="Per order, added to any installation."
-                value={working.duration?.baseDeliveryMinutes}
-                onChange={v => patchNested('duration', 'baseDeliveryMinutes', v)}
-                {...range('base_delivery_minutes', [1, 120])}
-                disabled={disabled}
-                error={errors['duration.baseDeliveryMinutes']}
-              />
-              <BufferField
-                label="Fallback install time"
-                hint="When an item type has no confirmed install time."
-                value={working.duration?.fallbackInstallMinutes}
-                onChange={v => patchNested('duration', 'fallbackInstallMinutes', v)}
-                {...range('fallback_install_minutes', [0, 480])}
-                disabled={disabled}
-                error={errors['duration.fallbackInstallMinutes']}
-              />
-            </div>
-            <ServiceTimeCatalogue
-              rows={working.serviceTimeCatalogue ?? []}
-              onChange={rows => patch('serviceTimeCatalogue', rows)}
-              range={spec.catalogue_minutes ?? { min: 0, max: 480 }}
-              disabled={disabled}
-              error={errors.serviceTimeCatalogue}
-            />
-          </Section>
 
         </div>
 
