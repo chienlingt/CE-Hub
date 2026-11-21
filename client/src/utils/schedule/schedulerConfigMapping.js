@@ -9,6 +9,7 @@ const SCALAR_FIELDS = {
   loadMinutes: 'load_minutes',
   unloadMinutes: 'unload_minutes',
   maxDOsPerSlot: 'max_dos_per_slot',
+  nearbyKm: 'nearby_km',
   planningCutoff: 'planning_cutoff',
   planningRunOffsetMinutes: 'planning_run_offset_minutes',
   autoEnabled: 'enabled',

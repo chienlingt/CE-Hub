@@ -8,8 +8,26 @@
 import { buildMockSnapshot, DEFAULT_SCENARIO } from '../../mocks/schedule';
 import { DEFAULT_SCHEDULE_CONFIG } from '../../utils/schedule/gracePeriod';
 import { SLOT_WINDOWS } from '../../utils/schedule/slotWindows';
-import { recommendSlots, RECOMMEND_HORIZON_DAYS } from '../../utils/schedule/recommendSlots';
+import { recommendSlots, RECOMMEND_HORIZON_DAYS, DEFAULT_INSTALL_MINUTES } from '../../utils/schedule/recommendSlots';
 import { todayLocalDateKey, toLocalDateKey } from '../../utils/dateKey';
+
+/** Item lines -> installer need and volume, from the mock products by name. */
+function mockJob(items, products) {
+  const byName = new Map(products.allIds.map(id => [products.byId[id].name.toLowerCase(), products.byId[id]]));
+  let volumeCm3 = 0;
+  let requiresInstaller = false;
+  for (const item of items) {
+    const p = byName.get(String(item.name).toLowerCase());
+    if (p?.installerRequired) requiresInstaller = true;
+    const dims = [p?.packageLengthCm, p?.packageWidthCm, p?.packageHeightCm];
+    if (volumeCm3 !== null && dims.every(n => Number.isFinite(n) && n > 0)) {
+      volumeCm3 += dims[0] * dims[1] * dims[2] * (item.quantity || 1);
+    } else {
+      volumeCm3 = null;
+    }
+  }
+  return { requiresInstaller, volumeCm3 };
+}
 
 const LATENCY_MIN_MS = 180;
 const LATENCY_MAX_MS = 480;
@@ -209,6 +227,38 @@ export const mockScheduleGateway = {
     return slot;
   },
 
+  // Mock: suggest the mock buildings whose name matches; no Google check.
+  async searchAddresses(query) {
+    await delay();
+    if (!state) return [];
+    const { buildings } = state.snapshot.entities;
+    const q = query.toLowerCase();
+    return buildings.allIds.map(id => buildings.byId[id])
+      .filter(b => b.name && b.name.toLowerCase().includes(q))
+      .slice(0, 8)
+      .map(b => ({
+        key: `building:${b.id}`, kind: 'building', text: b.name, mainText: b.name,
+        secondaryText: b.postalCode ?? '', buildingId: b.id, location: null,
+      }));
+  },
+
+  async checkAddress() {
+    await delay();
+    throw new Error('Address check uses Google and is only available on live data.');
+  },
+
+  async listRecommendItems() {
+    await delay();
+    if (!state) return [];
+    const { products } = state.snapshot.entities;
+    const byName = new Map();
+    for (const id of products.allIds) {
+      const p = products.byId[id];
+      if (!byName.has(p.name)) byName.set(p.name, { name: p.name, itemType: null, requiresInstaller: p.installerRequired });
+    }
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  },
+
   async recommendSlots(input) {
     await delay();
     if (!state) throw new Error('Nothing loaded.');
@@ -225,9 +275,20 @@ export const mockScheduleGateway = {
     }
     const now = new Date();
     const config = { ...DEFAULT_SCHEDULE_CONFIG, ...(readStoredConfig() ?? {}) };
-    return recommendSlots({
-      input, sources, config, todayKey, nowMinutes: now.getHours() * 60 + now.getMinutes(),
+    const job = input.items ? mockJob(input.items, state.snapshot.entities.products) : null;
+    const result = recommendSlots({
+      input: job ? { ...input, installation: job.requiresInstaller, volumeCm3: job.volumeCm3 } : input,
+      sources, config, todayKey, nowMinutes: now.getHours() * 60 + now.getMinutes(),
     });
+    if (!job) return result;
+    return {
+      ...result,
+      job: { serviceMinutes: config.duration.baseDeliveryMinutes + (job.requiresInstaller ? DEFAULT_INSTALL_MINUTES : 0), requiresInstaller: job.requiresInstaller },
+      notes: [
+        'Mock data: the live engine reads item types from Information > Item.',
+        ...(job.volumeCm3 === null ? ['Some item sizes are unknown, so truck space was not checked.'] : []),
+      ],
+    };
   },
 
   async approveOrders(orderIds = []) {

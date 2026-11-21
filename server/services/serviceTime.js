@@ -107,4 +107,33 @@ async function serviceMinutes(order, { settings, db = prisma } = {}) {
   );
 }
 
-module.exports = { computeServiceMinutes, serviceMinutes };
+/**
+ * Service time for many orders with one item lookup. Each order needs
+ * `order_products` (with optional `products.product_name`).
+ * @returns {Promise<Map<string, object>>} order id -> computeServiceMinutes() result
+ */
+async function serviceMinutesForOrders(orders = [], { settings, db = prisma } = {}) {
+  const resolvedSettings = settings ?? await require('./schedulerSettings').getSchedulerSettings();
+  const keys = new Set();
+  for (const order of orders) {
+    for (const line of order.order_products ?? []) {
+      const key = itemKey(lineName(line));
+      if (key) keys.add(key);
+    }
+  }
+  const rows = keys.size
+    ? await db.item_point_rates.findMany({ where: { item_key: { in: [...keys] } }, include: { item_type: true } })
+    : [];
+  const rowByKey = new Map(rows.map(row => [row.item_key, row]));
+  const out = new Map();
+  for (const order of orders) {
+    const lines = (order.order_products ?? []).map(line => {
+      const product = rowByKey.get(itemKey(lineName(line))) ?? null;
+      return { line, product, itemType: product?.item_type ?? null };
+    });
+    out.set(order.id, computeServiceMinutes(lines, resolvedSettings));
+  }
+  return out;
+}
+
+module.exports = { computeServiceMinutes, serviceMinutes, serviceMinutesForOrders, itemKey };

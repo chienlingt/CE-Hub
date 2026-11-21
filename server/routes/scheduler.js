@@ -9,6 +9,9 @@ const { loadTeams } = require('../services/fleetAvailabilityService');
 const { geocodeAddress } = require('../services/googleRoutingService');
 const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 const { updateSchedulerCron } = require('../schedulerCron');
+const { validateRequest: validateRecommendRequest } = require('../services/slotRecommendSpec');
+const { recommendSlots } = require('../services/slotRecommendService');
+const { suggestAddresses, geocodeCandidates } = require('../services/addressLookupService');
 
 
 /**
@@ -89,6 +92,88 @@ router.put('/config', requireReviewAdmin, async (req, res) => {
       error: 'Failed to update scheduler configuration',
       details: error.message
     });
+  }
+});
+
+/**
+ * POST /api/scheduler/recommend
+ * B.1 Part 1: which date + session could take a new DO. Advisory; books nothing.
+ * Body: { address, items: [{ name, quantity, dismantle? }], not_before?, days? }
+ * Admin session only (it calls Google per request).
+ */
+/**
+ * GET /api/scheduler/recommend/items
+ * Product names on Information > Item, for the Find a slot picker. Read-only
+ * (unlike /api/performance/items, which also picks up new order lines).
+ */
+router.get('/recommend/items', requireReviewAdmin, async (req, res) => {
+  try {
+    const rows = await prisma.item_point_rates.findMany({
+      orderBy: { item_name: 'asc' },
+      select: { item_name: true, item_type: { select: { name: true, requires_installer: true } } },
+    });
+    res.json({
+      success: true,
+      items: rows.map(r => ({
+        name: r.item_name,
+        item_type: r.item_type?.name ?? null,
+        requires_installer: Boolean(r.item_type?.requires_installer),
+      })),
+    });
+  } catch (error) {
+    console.error('GET /api/scheduler/recommend/items error', error);
+    res.status(500).json({ success: false, error: 'Could not load items', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/recommend/addresses?q=happy
+ * Type-ahead for the Find a slot address box from CE Hub's own data: buildings,
+ * then past delivery addresses. No Google call.
+ */
+router.get('/recommend/addresses', requireReviewAdmin, async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (q.length < 2 || q.length > 200) {
+    return res.status(400).json({ success: false, error: 'q must be 2 to 200 characters', code: 'INVALID_REQUEST' });
+  }
+  try {
+    res.json({ success: true, suggestions: await suggestAddresses(q) });
+  } catch (error) {
+    console.error('GET /api/scheduler/recommend/addresses error', error);
+    res.status(500).json({ success: false, error: 'Could not load address suggestions', details: error.message });
+  }
+});
+
+/**
+ * POST /api/scheduler/recommend/check-address  { address }
+ * "Check address": Google Geocoding matches (up to 3), each flagged precise,
+ * for the user to confirm. Writes nothing.
+ */
+router.post('/recommend/check-address', requireReviewAdmin, async (req, res) => {
+  const address = typeof req.body?.address === 'string' ? req.body.address.trim() : '';
+  if (address.length < 3 || address.length > 300) {
+    return res.status(400).json({ success: false, error: 'address must be 3 to 300 characters', code: 'INVALID_REQUEST' });
+  }
+  try {
+    res.json({ success: true, candidates: await geocodeCandidates(address) });
+  } catch (error) {
+    if (error.code !== 'NO_KEY') console.error('POST /api/scheduler/recommend/check-address error', error.message);
+    res.status(502).json({ success: false, error: error.message, code: error.code ?? 'GOOGLE_ERROR' });
+  }
+});
+
+router.post('/recommend', requireReviewAdmin, async (req, res) => {
+  // Step 1. Validate the request; steps 2-9 are in slotRecommendService.recommendSlots.
+  const { value, errors } = validateRecommendRequest(req.body ?? {});
+  if (!value) {
+    return res.status(400).json({ success: false, error: 'Invalid recommendation request', code: 'INVALID_REQUEST', errors });
+  }
+  try {
+    const result = await recommendSlots(value);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('POST /api/scheduler/recommend error', error);
+    res.status(500).json({ success: false, error: 'Could not recommend a slot', details: error.message });
   }
 });
 

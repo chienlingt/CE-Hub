@@ -315,16 +315,16 @@ async function main() {
 
   // ── Trucks & truck_zones ────────────────────────────────────────────────
   const truck1 = await prisma.trucks.create({
-    data: { plate_no: 'WXX 1234', tone: 3, length_cm: 420, width_cm: 190, height_cm: 200, driver_id: driver1.id, assistant_id: assistant1.id },
+    data: { plate_no: 'WXX 1234', tone: 3, length_cm: 427, width_cm: 213, height_cm: 219, driver_id: driver1.id, assistant_id: assistant1.id },
   });
   const truck2 = await prisma.trucks.create({
-    data: { plate_no: 'WYY 5678', tone: 1, length_cm: 280, width_cm: 160, height_cm: 170, driver_id: driver2.id, assistant_id: assistant2.id },
+    data: { plate_no: 'WYY 5678', tone: 1, length_cm: 274, width_cm: 152, height_cm: 152, driver_id: driver2.id, assistant_id: assistant2.id },
   });
   // The rest of Mr Lee's fleet (8 x 3-ton, 13 x 1-ton in total, Meeting
   // 13-10-2026 §4). Spares: no default crew, one primary zone each in rotation.
   const TONE_DIMENSIONS = {
-    3: { length_cm: 420, width_cm: 190, height_cm: 200 },
-    1: { length_cm: 280, width_cm: 160, height_cm: 170 },
+    3: { length_cm: 427, width_cm: 213, height_cm: 219 }, // 14 x 7 x 7.2 ft
+    1: { length_cm: 274, width_cm: 152, height_cm: 152 }, // 9 x 5 x 5 ft
   };
   const SPARE_FLEET = [
     { plate: 'WKL 3201', tone: 3 }, { plate: 'WKL 3302', tone: 3 },

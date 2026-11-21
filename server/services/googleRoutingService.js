@@ -478,8 +478,41 @@ async function planRoutes(orders, warehouseAddress) {
   return results;
 }
 
+// ── B.1 nearby check: road km from one point to many (Distance Matrix) ──────
+
+/**
+ * Road distance in km from `origin` to each destination, in order. One origin
+ * and up to 25 destinations per request; no departure time, so these are basic
+ * (non-traffic) elements. null where Google has no route. Throws when the key
+ * is missing or Google refuses, so the caller can fall back to an estimate.
+ */
+async function roadDistancesKm(origin, destinations) {
+  const key = apiKey();
+  if (!key) throw new Error('GOOGLE_MAPS_SERVER_KEY not configured');
+  const out = Array(destinations.length).fill(null);
+  const chunkSize = 25;
+  for (let i = 0; i < destinations.length; i += chunkSize) {
+    const chunk = destinations.slice(i, i + chunkSize);
+    const res = await axios.get(DISTANCE_MATRIX_URL, {
+      params: {
+        origins: `${origin.lat},${origin.lon}`,
+        destinations: chunk.map(c => `${c.lat},${c.lon}`).join('|'),
+        key,
+        mode: 'driving',
+      },
+      timeout: 15000,
+    });
+    if (res.data?.status !== 'OK') throw new Error(`Distance Matrix error: ${res.data?.status}`);
+    (res.data.rows?.[0]?.elements ?? []).forEach((el, j) => {
+      if (el.status === 'OK' && Number.isFinite(el.distance?.value)) out[i + j] = el.distance.value / 1000;
+    });
+  }
+  return out;
+}
+
 module.exports = {
   planRoutes,
+  roadDistancesKm,
   geocodeAddress,
   resolveOrderCoords,
   getOrderAddress,

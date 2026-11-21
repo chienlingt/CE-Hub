@@ -29,6 +29,9 @@ const SETTINGS_SPEC = {
   // The auto-run fires this long after the cutoff, so it runs after the Odoo
   // INT-12 5:00 PM fallback sync has pulled in tomorrow's missing DOOs.
   planning_run_offset_minutes: { type: 'int', min: 0, max: 240, default: 60, unit: 'min' },
+  // Slot recommendation: a booked DO within this road distance counts as
+  // nearby (proposal §5 Part 1 Step 2).
+  nearby_km:                   { type: 'int', min: 1, max: 50,  default: 10, unit: 'km' },
 };
 
 const CUTOFF = { default: '17:00', min: '12:00', max: '22:00', stepMinutes: 15 };

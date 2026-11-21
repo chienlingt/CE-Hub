@@ -440,6 +440,7 @@ model scheduler_config {
   planning_run_offset_minutes Int       @default(60)
   base_delivery_minutes       Int       @default(15)
   fallback_install_minutes    Int       @default(0)
+  nearby_km                   Int       @default(10)
   updated_by                  String?   @db.Uuid
 }
 

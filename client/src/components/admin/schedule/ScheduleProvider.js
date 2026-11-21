@@ -151,6 +151,9 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
 
     /** Advisory only: asks the gateway, touches no state. */
     recommendSlots: (input) => gateway.recommendSlots(input),
+    listRecommendItems: () => gateway.listRecommendItems(),
+    searchAddresses: (query) => gateway.searchAddresses(query),
+    checkAddress: (address) => gateway.checkAddress(address),
 
     approveOrders: async (orderIds) => {
       const result = await gateway.approveOrders(orderIds);

@@ -24,6 +24,7 @@ export const DEFAULT_SCHEDULE_CONFIG = {
   loadMinutes: 20,
   unloadMinutes: 10,
   maxDOsPerSlot: 25,
+  nearbyKm: 10,
   planningCutoff: '17:00',
   planningRunOffsetMinutes: 60,
   planningRunAt: '18:00',

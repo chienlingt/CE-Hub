@@ -211,7 +211,7 @@ function SettingsInner() {
           <Section
             icon={Gauge}
             title="Slot capacity"
-            description="The most DOs that can be booked into one delivery window."
+            description="The most DOs one delivery window can take, and what counts as nearby when recommending a slot."
           >
             <BufferField
               label="Maximum DOs per slot"
@@ -222,6 +222,16 @@ function SettingsInner() {
               unit="DO"
               disabled={disabled}
               error={errors.maxDOsPerSlot}
+            />
+            <BufferField
+              label="Nearby distance"
+              hint="When recommending a slot, booked DOs within this road distance of the new address count as nearby."
+              value={working.nearbyKm}
+              onChange={v => patch('nearbyKm', v)}
+              {...range('nearby_km', [1, 50])}
+              unit="km"
+              disabled={disabled}
+              error={errors.nearbyKm}
             />
           </Section>
 
