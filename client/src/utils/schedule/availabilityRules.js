@@ -6,8 +6,10 @@
 //   2. Block-offs — public holidays, leave, MC, events and maintenance, set
 //      under Information › Fleet Availability and stored in resource_blockoffs
 //      (GET /api/scheduler/blockoffs). The gateway puts them on config.blockoffs.
-//      A row can cover the whole fleet, a truck type, one truck or one team, for
-//      one or more sessions; matching is shared with utils/fleet/fleetRules.js.
+//      A row can cover the whole fleet, a truck type, one truck, one team or one
+//      staff member (leave/MC: a team is out when its driver, or every
+//      installer, is), for one or more sessions; matching is shared with
+//      utils/fleet/fleetRules.js.
 
 import { parseDateKey } from './weekRange';
 import { truckBlock, teamBlock } from '../fleet/fleetRules';
@@ -69,8 +71,11 @@ export function truckAvailableOn(truck, dateKey, config = {}, session) {
 export function teamAvailableOn(team, dateKey, config = {}, session) {
   if (!team) return { available: true, reason: null };
 
-  const blocked = blockoffFor('team', team.id, dateKey, config.blockoffs, { session });
-  if (blocked) return { available: false, reason: blockoffReason(blocked) };
+  const blocked = Array.isArray(config.blockoffs) && team.id ? teamBlock(team, dateKey, session, config.blockoffs) : null;
+  if (blocked) {
+    const who = !blocked.staff ? '' : blocked.staff.role === 'Driver' ? ' (driver out)' : ' (all installers out)';
+    return { available: false, reason: `${blockoffReason(blocked)}${who}` };
+  }
   if (team.availableFlag === false) {
     return { available: false, reason: 'Marked unavailable' };
   }

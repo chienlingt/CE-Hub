@@ -445,7 +445,8 @@ model scheduler_config {
 
 // Dated unavailability (public holidays, events, leave, MC, maintenance).
 // resource_type: fleet (every truck and team), truck_type (every truck whose
-// tonnage key is scope_value: "1", "3", "unknown"), truck or team (resource_id).
+// tonnage key is scope_value: "1", "3", "unknown"), truck, team or employee
+// (resource_id; an employee row is one staff member's leave or MC).
 // Fleet and truck_type rows are matched when checked, so trucks and teams added
 // later are covered. Polymorphic, so no foreign key; the route checks ids exist.
 // Rows saved in one submission share group_id. Rules: services/fleetAvailabilitySpec.js.

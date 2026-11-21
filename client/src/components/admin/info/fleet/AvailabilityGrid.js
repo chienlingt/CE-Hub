@@ -11,8 +11,9 @@ const CELL = {
 };
 
 /**
- * Next 14 days × 3 sessions: trucks (and teams) available. Selecting a cell
- * opens the session panel with every truck and team.
+ * Next 14 days × 3 sessions: trucks (and teams) available. With onSelect (admins),
+ * selecting a cell opens Add block-off for that date and session; without it
+ * the cells are plain cards.
  */
 export default function AvailabilityGrid({ grid, selected, onSelect, rangeLabel, canPrev, onPrev, onNext, loading }) {
   return (
@@ -21,7 +22,7 @@ export default function AvailabilityGrid({ grid, selected, onSelect, rangeLabel,
         <div>
           <h3 id="fleet-grid-title" className="text-sm font-semibold text-gray-900">Next 14 days</h3>
           <p className="mt-0.5 text-xs text-gray-600">
-            Trucks available per session. Select a session to see every truck and team, and block them from there.
+            Trucks available per session.{onSelect && ' Select a session to add a block-off for it.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -56,21 +57,31 @@ export default function AvailabilityGrid({ grid, selected, onSelect, rangeLabel,
               </span>
               {day.sessions.map(cell => {
                 const isSelected = selected?.date === day.date && selected?.session === cell.session;
-                return (
-                  <button
-                    key={cell.session}
-                    type="button"
-                    onClick={() => onSelect({ date: day.date, session: cell.session })}
-                    aria-pressed={isSelected}
-                    aria-label={`${formatDay(day.date)}, ${sessionLabel(cell.session)}: ${cell.trucksAvailable} of ${cell.trucksTotal} trucks and ${cell.teamsAvailable} of ${cell.teamsTotal} teams available`}
-                    className={`flex min-h-[3.25rem] flex-col justify-center rounded-md border px-3 py-1.5 text-left transition-colors ${CELL[cell.level]} ${isSelected ? 'ring-2 ring-blue-600 ring-offset-1' : ''} ${FOCUS_RING}`}
-                  >
+                const label = `${formatDay(day.date)}, ${sessionLabel(cell.session)}: ${cell.trucksAvailable} of ${cell.trucksTotal} trucks and ${cell.teamsAvailable} of ${cell.teamsTotal} teams available`;
+                const look = `flex min-h-[3.25rem] flex-col justify-center rounded-md border px-3 py-1.5 text-left transition-colors ${CELL[cell.level]}`;
+                const body = (
+                  <>
                     <span className="text-sm font-bold tabular-nums">
                       {cell.trucksAvailable}/{cell.trucksTotal} <span className="text-xs font-medium">trucks</span>
                     </span>
                     <span className="text-xs tabular-nums">
                       {cell.level === 'none' ? 'Closed in Odoo' : `${cell.teamsAvailable}/${cell.teamsTotal} teams`}
                     </span>
+                  </>
+                );
+                if (!onSelect) {
+                  return <div key={cell.session} role="group" aria-label={label} className={look}>{body}</div>;
+                }
+                return (
+                  <button
+                    key={cell.session}
+                    type="button"
+                    onClick={() => onSelect({ date: day.date, session: cell.session })}
+                    aria-pressed={isSelected}
+                    aria-label={`${label}. Add block-off`}
+                    className={`${look} ${isSelected ? 'ring-2 ring-blue-600 ring-offset-1' : ''} ${FOCUS_RING}`}
+                  >
+                    {body}
                   </button>
                 );
               })}

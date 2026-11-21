@@ -144,6 +144,10 @@ async function checkTargets(db = prisma, value) {
     const found = await db.teams.findMany({ where: { id: { in: value.teams } }, select: { id: true } });
     if (found.length !== value.teams.length) errors.teams = 'one or more teams no longer exist';
   }
+  if (value.employees?.length) {
+    const found = await db.employees.findMany({ where: { id: { in: value.employees } }, select: { id: true } });
+    if (found.length !== value.employees.length) errors.employees = 'one or more staff no longer exist';
+  }
   if (value.truck_types.length) {
     const tones = new Set((await db.trucks.findMany({ select: { tone: true } })).map(t => spec.toneKey(t.tone)));
     const missing = value.truck_types.filter(t => !tones.has(t));
@@ -152,10 +156,23 @@ async function checkTargets(db = prisma, value) {
   return errors;
 }
 
-/** Bookings a group of rows would affect, for the impact check before saving. */
+const bookingKey = b => [b.kind, b.order_id, b.slot_id ?? b.installation_id, b.date, b.session].join('|');
+
+/**
+ * Bookings a group of rows would newly affect, for the impact check before
+ * saving. Other block-offs in the range count too, because staff rows combine:
+ * a second installer's MC can be what takes the whole team out.
+ */
 async function previewAffected(db = prisma, rows, { from, to }) {
-  const [trucks, bookings] = await Promise.all([loadTrucks(db), loadBookings(db, { from, to })]);
-  return spec.affectedBookings(bookings, trucks, rows).map(({ booking }) => booking);
+  const groupId = rows[0]?.group_id;
+  const [trucks, teams, bookings, existing] = await Promise.all([
+    loadTrucks(db), loadTeams(db), loadBookings(db, { from, to }), loadRows(db, { from, to }),
+  ]);
+  const others = existing.filter(r => r.group_id !== groupId);
+  const before = new Set(spec.affectedBookings(bookings, trucks, others, teams).map(({ booking }) => bookingKey(booking)));
+  return spec.affectedBookings(bookings, trucks, [...others, ...rows], teams)
+    .map(({ booking }) => booking)
+    .filter(b => !before.has(bookingKey(b)));
 }
 
 /**
@@ -168,8 +185,8 @@ async function findAffected(db = prisma, now = new Date()) {
   if (!rows.length) return [];
   const lastEnd = rows.reduce((m, r) => { const e = spec.toDateKey(r.end_date); return e > m ? e : m; }, today);
   const to = lastEnd < spec.addDays(today, AFFECTED_HORIZON_DAYS) ? lastEnd : spec.addDays(today, AFFECTED_HORIZON_DAYS);
-  const [trucks, bookings] = await Promise.all([loadTrucks(db), loadBookings(db, { from: today, to })]);
-  return spec.affectedBookings(bookings, trucks, rows).map(({ booking, row }) => ({ ...booking, blocked_by: spec.rowToApi(row) }));
+  const [trucks, teams, bookings] = await Promise.all([loadTrucks(db), loadTeams(db), loadBookings(db, { from: today, to })]);
+  return spec.affectedBookings(bookings, trucks, rows, teams).map(({ booking, row }) => ({ ...booking, blocked_by: spec.rowToApi(row) }));
 }
 
 /** Distinct orders on the Fleet Blocked list, for the Exceptions badge. */

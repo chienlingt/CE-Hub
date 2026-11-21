@@ -10,13 +10,17 @@
 //   truck_type  every truck whose tonnage key (toneKey) equals scope_value
 //   truck       one truck (resource_id)
 //   team        one team (resource_id), delivery or installer
+//   employee    one staff member (resource_id), for leave or MC. A delivery
+//               team whose driver is blocked is blocked too; an installer team
+//               is blocked when every installer is. Otherwise the team stays
+//               available, short of that person.
 // Rows saved in one submission share group_id and are listed as one block-off.
 
 const { APPOINTMENT_SESSIONS, sessionForWindow } = require('./odooAppointmentSessions');
 
 const SESSIONS = Object.keys(APPOINTMENT_SESSIONS); // morning, afternoon, evening
 const BLOCKOFF_REASONS = ['public_holiday', 'event', 'leave', 'mc', 'maintenance', 'other'];
-const RESOURCE_TYPES = ['fleet', 'truck_type', 'truck', 'team'];
+const RESOURCE_TYPES = ['fleet', 'truck_type', 'truck', 'team', 'employee'];
 const MAX_DAYS = 366;
 const MAX_TARGETS = 500;
 const NOTE_MAX = 300;
@@ -82,7 +86,7 @@ const asList = v => (Array.isArray(v) ? v.map(x => String(x ?? '').trim()).filte
 /**
  * Body of POST /blockoffs and /blockoffs/preview:
  *   { fleet: true }                                   → block everything
- *   { truck_types: ["3"], trucks: [id], teams: [id] } → any mix, at least one
+ *   { truck_types: ["3"], trucks: [id], teams: [id], employees: [id] } → any mix, at least one
  *   + start_date, end_date (YYYY-MM-DD), sessions (non-empty subset), reason, note
  * @returns {{ value: object, errors: Record<string,string> }}
  */
@@ -95,9 +99,12 @@ function validateBlockoffGroup(body = {}, today) {
     value.truck_types = [];
     value.trucks = [];
     value.teams = [];
+    value.employees = [];
   } else {
     value.fleet = false;
-    const fields = { truck_types: body.truck_types ?? [], trucks: body.trucks ?? [], teams: body.teams ?? [] };
+    const fields = {
+      truck_types: body.truck_types ?? [], trucks: body.trucks ?? [], teams: body.teams ?? [], employees: body.employees ?? [],
+    };
     for (const [key, raw] of Object.entries(fields)) {
       const list = asList(raw);
       if (!list) { errors[key] = 'must be a list'; continue; }
@@ -105,9 +112,10 @@ function validateBlockoffGroup(body = {}, today) {
       if (bad) errors[key] = key === 'truck_types' ? `"${bad}" is not a tonnage` : `"${bad}" is not an id`;
       value[key] = uniq(list);
     }
-    const total = (value.truck_types?.length ?? 0) + (value.trucks?.length ?? 0) + (value.teams?.length ?? 0);
-    if (!Object.keys(errors).length && total === 0) errors.targets = 'pick all trucks and teams, a truck type, a truck or a team';
-    if (total > MAX_TARGETS) errors.targets = `at most ${MAX_TARGETS} trucks and teams at once`;
+    const total = (value.truck_types?.length ?? 0) + (value.trucks?.length ?? 0) + (value.teams?.length ?? 0)
+      + (value.employees?.length ?? 0);
+    if (!Object.keys(errors).length && total === 0) errors.targets = 'pick all trucks and teams, a truck type, a truck, a team or a staff member';
+    if (total > MAX_TARGETS) errors.targets = `at most ${MAX_TARGETS} trucks, teams and staff at once`;
   }
 
   if (!isDateKey(body.start_date)) errors.start_date = 'must be a date (YYYY-MM-DD)';
@@ -153,6 +161,7 @@ function expandGroup(value, { groupId, createdBy = null }) {
     ...value.truck_types.map(t => ({ ...common, resource_type: 'truck_type', resource_id: null, scope_value: t })),
     ...value.trucks.map(id => ({ ...common, resource_type: 'truck', resource_id: id, scope_value: null })),
     ...value.teams.map(id => ({ ...common, resource_type: 'team', resource_id: id, scope_value: null })),
+    ...(value.employees ?? []).map(id => ({ ...common, resource_type: 'employee', resource_id: id, scope_value: null })),
   ];
 }
 
@@ -191,8 +200,45 @@ function truckBlock(truck, dateKey, session, rows = []) {
   return rows.find(r => rowCovers(r, dateKey, session) && rowBlocksTruck(r, truck)) ?? null;
 }
 
-function teamBlock(teamId, dateKey, session, rows = []) {
-  return rows.find(r => rowCovers(r, dateKey, session) && rowBlocksTeam(r, teamId)) ?? null;
+function rowBlocksEmployee(row, employeeId) {
+  return Boolean(employeeId) && row.resource_type === 'employee' && row.resource_id === employeeId;
+}
+
+/** First row blocking this staff member (leave, MC) on dateKey/session, or null. */
+function staffBlock(employeeId, dateKey, session, rows = []) {
+  return rows.find(r => rowCovers(r, dateKey, session) && rowBlocksEmployee(r, employeeId)) ?? null;
+}
+
+/**
+ * A team as an id, or { id, kind, members: [{ id, name, role }] } (loadTeams).
+ * Delivery: the driver is the member with role Driver. Installer: every member.
+ */
+function teamCrew(team) {
+  if (!team || typeof team !== 'object') return { id: team ?? null, driver: null, installers: [] };
+  const members = Array.isArray(team.members) ? team.members : [];
+  if (team.kind === 'installer') return { id: team.id, driver: null, installers: members };
+  return { id: team.id, driver: members.find(m => m.role === 'Driver') ?? null, installers: [] };
+}
+
+/**
+ * Row blocking this team on dateKey/session, or null: a fleet or team row, the
+ * driver's staff row (delivery), or — when every installer is out — the first
+ * installer's staff row. A staff row comes back with `staff: { id, name, role }`.
+ */
+function teamBlock(team, dateKey, session, rows = []) {
+  const crew = teamCrew(team);
+  if (!crew.id) return null;
+  const own = rows.find(r => rowCovers(r, dateKey, session) && rowBlocksTeam(r, crew.id));
+  if (own) return own;
+  if (crew.driver) {
+    const row = staffBlock(crew.driver.id, dateKey, session, rows);
+    if (row) return { ...row, staff: { id: crew.driver.id, name: crew.driver.name, role: crew.driver.role } };
+  }
+  if (crew.installers.length) {
+    const out = crew.installers.map(m => ({ m, row: staffBlock(m.id, dateKey, session, rows) }));
+    if (out.every(x => x.row)) return { ...out[0].row, staff: { id: out[0].m.id, name: out[0].m.name, role: out[0].m.role } };
+  }
+  return null;
 }
 
 /** Trucks not blocked on dateKey/session. */
@@ -211,18 +257,21 @@ function fleetClosed(trucks, dateKey, session, rows) {
 // ------------------------------------------------------------------ bookings
 
 /**
- * Bookings that land on a blocked truck or team.
+ * Bookings that land on a blocked truck or team (a team counts as blocked when
+ * its driver, or every installer, is on leave or MC — pass teams for that).
  * @param {Array<{date: string, session: string, truck_id?: string, team_id?: string}>} bookings
  * @param {Array<{id: string, tone: number|null}>} trucks
+ * @param {Array<{id: string, kind: string, members: object[]}>} [teams]
  * @returns {Array<{booking: object, row: object}>}
  */
-function affectedBookings(bookings, trucks, rows) {
+function affectedBookings(bookings, trucks, rows, teams = []) {
   const trucksById = new Map(trucks.map(t => [t.id, t]));
+  const teamsById = new Map(teams.map(t => [t.id, t]));
   const out = [];
   for (const b of bookings) {
     if (!b?.date || !b?.session) continue;
     const truck = b.truck_id ? (trucksById.get(b.truck_id) ?? { id: b.truck_id, tone: null }) : null;
-    const row = (truck && truckBlock(truck, b.date, b.session, rows)) || teamBlock(b.team_id, b.date, b.session, rows);
+    const row = (truck && truckBlock(truck, b.date, b.session, rows)) || teamBlock(teamsById.get(b.team_id) ?? b.team_id, b.date, b.session, rows);
     if (row) out.push({ booking: b, row });
   }
   return out;
@@ -309,7 +358,9 @@ module.exports = {
   rowCovers,
   rowBlocksTruck,
   rowBlocksTeam,
+  rowBlocksEmployee,
   truckBlock,
+  staffBlock,
   teamBlock,
   availableTruckCount,
   fleetClosed,

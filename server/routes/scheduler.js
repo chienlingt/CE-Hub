@@ -5,6 +5,7 @@ const prisma = require('../prismaClient');
 const { scheduleOrders } = require('../services/scheduler');
 const { getSchedulerSettings, getSettingsView, updateSchedulerSettings, SettingsValidationError } = require('../services/schedulerSettings');
 const { rowToApi, klDateSession, teamBlock } = require('../services/fleetAvailabilitySpec');
+const { loadTeams } = require('../services/fleetAvailabilityService');
 const { geocodeAddress } = require('../services/googleRoutingService');
 const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 const { updateSchedulerCron } = require('../schedulerCron');
@@ -92,7 +93,7 @@ router.put('/config', requireReviewAdmin, async (req, res) => {
 });
 
 /**
- * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=fleet|truck_type|truck|team
+ * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=fleet|truck_type|truck|team|employee
  * Block-off rows overlapping the range (all when no range given), for the
  * schedule board. They are created and removed under /api/fleet-availability.
  */
@@ -263,11 +264,13 @@ router.put('/installation-schedules/:id', async (req, res) => {
         const rows = await prisma.resource_blockoffs.findMany({
           where: { start_date: { lte: new Date(`${when.date}T00:00:00Z`) }, end_date: { gte: new Date(`${when.date}T00:00:00Z`) } },
         });
-        const block = teamBlock(installation_team_id, when.date, when.session, rows);
+        const team = rows.length ? (await loadTeams()).find(t => t.id === installation_team_id) : null;
+        const block = teamBlock(team ?? installation_team_id, when.date, when.session, rows);
         if (block) {
+          const who = block.staff ? ` (${block.staff.name})` : '';
           return res.status(400).json({
             success: false, code: 'TEAM_BLOCKED',
-            error: `This team is blocked on ${when.date} (${when.session}): ${block.reason}${block.note ? ` - ${block.note}` : ''}.`,
+            error: `This team is blocked on ${when.date} (${when.session}): ${block.reason}${who}${block.note ? ` - ${block.note}` : ''}.`,
           });
         }
       }

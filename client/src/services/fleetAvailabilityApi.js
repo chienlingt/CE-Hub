@@ -82,6 +82,7 @@ export const selectionToServer = s => ({
   truck_types: s.truckTypes ?? [],
   trucks: s.trucks ?? [],
   teams: s.teams ?? [],
+  employees: s.staff ?? [],
   start_date: s.startDate,
   end_date: s.endDate,
   sessions: s.sessions ?? [],

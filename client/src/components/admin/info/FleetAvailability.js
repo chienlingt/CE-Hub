@@ -4,13 +4,12 @@ import { Ban, Plus, X } from 'lucide-react';
 import Button from '../../common/Button';
 import { FOCUS_RING } from '../../common/tokens';
 import AvailabilityGrid from './fleet/AvailabilityGrid';
-import SlotPanel from './fleet/SlotPanel';
 import BlockoffDialog from './fleet/BlockoffDialog';
 import ImpactDialog from './fleet/ImpactDialog';
 import BlockoffList from './fleet/BlockoffList';
 import useFleetAdmin from './fleet/useFleetAdmin';
 import {
-  getResources, getBlockoffs, getBookings, previewBlockoff, createBlockoff,
+  getResources, getBlockoffs, previewBlockoff, createBlockoff,
   deleteBlockoffGroup, endBlockoffGroup, removeBlockoffTarget,
 } from '../../../services/fleetAvailabilityApi';
 import {
@@ -23,8 +22,8 @@ const GRID_DAYS = 14;
 /**
  * Information › Fleet Availability (B.4, FR-10-001..007).
  * Block every truck and team for a public holiday, block by truck type, truck
- * or team for a full day or a session, see availability for the next 14 days,
- * and block straight from one session's panel.
+ * or team for a full day or a session, and see availability for the next 14 days.
+ * Selecting a grid cell opens Add block-off for that date and session.
  */
 export default function FleetAvailability() {
   const canEdit = useFleetAdmin();
@@ -33,12 +32,11 @@ export default function FleetAvailability() {
   const [rows, setRows] = useState([]);
   const [groups, setGroups] = useState([]);
   const [pastGroups, setPastGroups] = useState(null);
-  const [bookings, setBookings] = useState([]);
   const [gridStart, setGridStart] = useState(null);
   const [listView, setListView] = useState('upcoming');
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(null); // grid cell the open Add block-off came from
   const [dialog, setDialog] = useState(null); // 'all' | 'add'
-  const [impact, setImpact] = useState(null); // { selection, summary, affected, onDone }
+  const [impact, setImpact] = useState(null); // { selection, summary, affected }
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [serverError, setServerError] = useState(null);
@@ -58,16 +56,11 @@ export default function FleetAvailability() {
     return res.today;
   }, []);
 
-  const loadBookings = useCallback(async from => {
-    setBookings(await getBookings({ from, to: addDays(from, GRID_DAYS - 1) }));
-  }, []);
-
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const t = await loadBase();
-        if (alive) await loadBookings(gridStart ?? t ?? todayLocalDateKey());
+        await loadBase();
         if (alive) setLoadError(null);
       } catch (error) {
         if (alive) setLoadError(error.message);
@@ -76,7 +69,7 @@ export default function FleetAvailability() {
       }
     })();
     return () => { alive = false; };
-  }, [loadBase, loadBookings, gridStart]);
+  }, [loadBase]);
 
   useEffect(() => {
     if (listView !== 'past' || pastGroups) return;
@@ -85,10 +78,7 @@ export default function FleetAvailability() {
       .catch(error => setNotice({ text: error.message, tone: 'error' }));
   }, [listView, pastGroups, today]);
 
-  const refresh = useCallback(async () => {
-    await loadBase();
-    await loadBookings(start);
-  }, [loadBase, loadBookings, start]);
+  const refresh = loadBase;
 
   const grid = useMemo(
     () => buildGrid(resources.trucks, resources.teams, rows, start, GRID_DAYS),
@@ -108,7 +98,9 @@ export default function FleetAvailability() {
 
   // ---------------------------------------------------------------- saving
 
-  const save = async (selection, onDone) => {
+  const closeDialog = () => { setDialog(null); setSelected(null); setServerError(null); };
+
+  const save = async selection => {
     const { group, affectedCount } = await createBlockoff(selection);
     const label = group.fleet ? 'all trucks and teams' : groupLabel(group, resources);
     setNotice({
@@ -118,20 +110,19 @@ export default function FleetAvailability() {
         + (affectedCount ? `${plural(affectedCount, 'booked order')} flagged under Exceptions › Fleet Blocked.` : 'No booked orders affected.'),
     });
     setImpact(null);
-    setDialog(null);
-    onDone?.();
+    closeDialog();
     await refresh();
   };
 
   /** Impact check first; save straight away when nothing is booked. */
-  const submit = async (selection, summary, onDone) => {
+  const submit = async selection => {
     setBusy(true);
     setServerError(null);
     try {
       const affected = await previewBlockoff(selection);
-      const text = summary ?? `${selectionSummary(selection, resources)} · ${formatRange(selection.startDate, selection.endDate)}`;
-      if (affected.length) setImpact({ selection, summary: text, affected, onDone });
-      else await save(selection, onDone);
+      const text = `${selectionSummary(selection, resources)} · ${formatRange(selection.startDate, selection.endDate)}`;
+      if (affected.length) setImpact({ selection, summary: text, affected });
+      else await save(selection);
     } catch (error) {
       setServerError(error.message);
     } finally {
@@ -142,7 +133,7 @@ export default function FleetAvailability() {
   const confirmImpact = async () => {
     setBusy(true);
     setServerError(null);
-    try { await save(impact.selection, impact.onDone); } catch (error) { setServerError(error.message); } finally { setBusy(false); }
+    try { await save(impact.selection); } catch (error) { setServerError(error.message); } finally { setBusy(false); }
   };
 
   const listAction = async (group, run, text) => {
@@ -171,8 +162,8 @@ export default function FleetAvailability() {
         </div>
         {canEdit && (
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" icon={Plus} onClick={() => { setServerError(null); setDialog('add'); }}>Add block-off</Button>
-            <Button icon={Ban} onClick={() => { setServerError(null); setDialog('all'); }}>Block all trucks and teams</Button>
+            <Button variant="secondary" icon={Plus} onClick={() => { setServerError(null); setSelected(null); setDialog('add'); }}>Add block-off</Button>
+            <Button icon={Ban} onClick={() => { setServerError(null); setSelected(null); setDialog('all'); }}>Block all trucks and teams</Button>
           </div>
         )}
       </div>
@@ -215,12 +206,12 @@ export default function FleetAvailability() {
       <AvailabilityGrid
         grid={grid}
         loading={loading}
-        selected={selected}
-        onSelect={setSelected}
+        selected={dialog === 'add' ? selected : null}
+        onSelect={canEdit ? cell => { setServerError(null); setSelected(cell); setDialog('add'); } : null}
         rangeLabel={`${formatShort(start)} – ${formatShort(addDays(start, GRID_DAYS - 1))}`}
         canPrev={start > today}
-        onPrev={() => { setSelected(null); setGridStart(addDays(start, -GRID_DAYS) < today ? today : addDays(start, -GRID_DAYS)); }}
-        onNext={() => { setSelected(null); setGridStart(addDays(start, GRID_DAYS)); }}
+        onPrev={() => setGridStart(addDays(start, -GRID_DAYS) < today ? today : addDays(start, -GRID_DAYS))}
+        onNext={() => setGridStart(addDays(start, GRID_DAYS))}
       />
 
       <BlockoffList
@@ -237,35 +228,21 @@ export default function FleetAvailability() {
         onRemoveTarget={(g, t) => listAction(g, () => removeBlockoffTarget(t.id), 'Removed from the block-off.')}
       />
 
-      {selected && (
-        <SlotPanel
-          key={`${selected.date}|${selected.session}`}
-          date={selected.date}
-          session={selected.session}
-          trucks={resources.trucks}
-          teams={resources.teams}
-          rows={rows}
-          bookings={bookings}
-          canEdit={canEdit}
-          busy={busy}
-          serverError={dialog || impact ? null : serverError}
-          suspended={Boolean(impact)}
-          onClose={() => { setSelected(null); setServerError(null); }}
-          onBlock={(selection, summary, onDone) => submit(selection, summary, onDone)}
-        />
-      )}
-
       {dialog && (
         <BlockoffDialog
+          key={selected ? `${selected.date}|${selected.session}` : dialog}
           mode={dialog}
           today={today}
           trucks={resources.trucks}
           teams={resources.teams}
+          rows={rows}
+          initialDate={selected?.date}
+          initialSession={selected?.session}
           busy={busy}
           serverError={impact ? null : serverError}
           suspended={Boolean(impact)}
-          onCancel={() => { setDialog(null); setServerError(null); }}
-          onSubmit={selection => submit(selection, null)}
+          onCancel={closeDialog}
+          onSubmit={submit}
         />
       )}
 
