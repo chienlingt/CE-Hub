@@ -20,7 +20,7 @@ const {
   enqueue,
   enqueueSlotEndTripSideEffects,
   enqueueSlotDepartureSideEffects,
-  enqueueOnTheWayNotifications,
+  enqueueNextOnTheWay,
 } = require('./integrationOutboxService');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
 
@@ -68,12 +68,8 @@ async function tryAutoCloseSlot(timeSlotId, employeeId) {
       enqueueSlotDepartureSideEffects(timeSlot.id, activeOrders).catch(e =>
         console.error('[A4] enqueueSlotDepartureSideEffects failed:', e.message)
       );
-      enqueueOnTheWayNotifications(timeSlot.id, activeOrders, {
-        date:              timeSlot.date,
-        time_window_start: timeSlot.time_window_start,
-        time_window_end:   timeSlot.time_window_end,
-      }).catch(e =>
-        console.error('[A4] enqueueOnTheWayNotifications failed:', e.message)
+      enqueueNextOnTheWay(timeSlot.id).catch(e =>
+        console.error('[A4] enqueueNextOnTheWay failed:', e.message)
       );
 
       autoDeparted = true;
@@ -307,6 +303,11 @@ async function runPostDeliverySteps(order, updatedOrder, { employeeId, latitude,
         reason: 'stop_completed_traffic_check',
         dynamic: true,
       }).catch(e => console.warn('[A4] Remaining route traffic check skipped:', e.message));
+
+      // FR-03-003: tell the next customer on the (refreshed) route.
+      await enqueueNextOnTheWay(updatedOrder.time_slot_id).catch(e =>
+        console.error('[A4] enqueueNextOnTheWay failed:', e.message)
+      );
     }
   }
 

@@ -24,6 +24,7 @@ import { ReasonBadge, FAILED_DELIVERY_REASON_STYLES } from './shared/badges';
 import EvidenceThumbnails from './shared/EvidenceThumbnails';
 import StatCard from './shared/StatCard';
 import useIssuePolling from './shared/useIssuePolling';
+import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
 
 const ITEM_STATUS = {
   pending:   { label: 'Pending',   color: 'bg-gray-100 text-gray-600',   dot: 'bg-gray-400'   },
@@ -71,6 +72,43 @@ function SortTh({ children, field, sort, onSort, className = '' }) {
         <Icon size={12} className={active ? 'text-blue-500' : 'text-gray-300 group-hover:text-gray-400'} />
       </div>
     </th>
+  );
+}
+
+// ── Failure history (FR-05-003) ───────────────────────────────────────────────
+// Every recorded failure across this order and its replacement DO chain, oldest first.
+function FailureHistory({ orderId }) {
+  const [events, setEvents] = useState([]);
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/api/orders/${orderId}/failure-history`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => { if (active) setEvents(Array.isArray(data) ? data : []); })
+      .catch(() => { if (active) setEvents([]); });
+    return () => { active = false; };
+  }, [orderId]);
+  if (events.length < 2) return null;
+  return (
+    <div data-testid="failure-history">
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Failure history ({events.length})</p>
+      <ol className="space-y-2">
+        {events.map((e, i) => (
+          <li key={e.id} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400">#{i + 1}</span>
+              <span className="font-semibold text-gray-800">{e.do_ref || 'Not Synced'}</span>
+              {e.is_current_order && <span className="text-[11px] text-blue-600">this order</span>}
+              <ReasonBadge reason={e.failure_reason} styles={FAILED_DELIVERY_REASON_STYLES} />
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {formatDate(e.created_at)} · Driver: {e.driver_name || 'Unknown'}
+            </div>
+            {e.failure_desc && <p className="text-xs text-gray-600 italic mt-1">"{e.failure_desc}"</p>}
+            <div className="mt-1.5"><EvidenceThumbnails evidence={e.evidence_urls || []} /></div>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -122,7 +160,7 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ issue_status: 'resolved', resolved_by: employeeData?.id || null }),
       });
       if (!res.ok) throw new Error('Failed');
@@ -217,6 +255,8 @@ function CaseDetail({ order, onClose, onResolved, onItemUpdated }) {
               ))}
             </div>
           )}
+
+          <FailureHistory orderId={order.id} />
 
           {/* Odoo Chatter (FR-06-003) */}
           {/*<div>

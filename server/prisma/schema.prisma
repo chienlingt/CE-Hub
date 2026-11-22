@@ -717,3 +717,38 @@ model item_types {
   items              item_point_rates[] @relation("item_type_assigned")
   suggested_items    item_point_rates[] @relation("item_type_suggested")
 }
+
+// B.1 planning run (fixed assignment at the cutoff): one row per run.
+// services/planningService.js; plan ~/.claude/plans/b1-planning-run.md.
+model planning_runs {
+  id          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  plan_date   String                   @db.VarChar(10)
+  trigger     String                   @db.VarChar(10) // cron | manual
+  dry_run     Boolean                  @default(false)
+  status      String                   @db.VarChar(10) // running | completed | failed
+  summary     Json?
+  error       String?
+  created_by  String?                  @db.Uuid
+  started_at  DateTime                 @default(now()) @db.Timestamp(6)
+  finished_at DateTime?                @db.Timestamp(6)
+  deferrals   planning_run_deferrals[]
+
+  @@index([plan_date, started_at])
+}
+
+// A booked DO the run could not place, why, and a suggested alternative.
+model planning_run_deferrals {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id            String        @db.Uuid
+  order_id          String        @db.Uuid
+  session           String        @db.VarChar(10)
+  reason_code       String        @db.VarChar(30)
+  reason_detail     String?       @db.VarChar(300)
+  suggested_date    String?       @db.VarChar(10)
+  suggested_session String?       @db.VarChar(10)
+  created_at        DateTime      @default(now()) @db.Timestamp(6)
+  run               planning_runs @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@index([run_id])
+  @@index([order_id])
+}

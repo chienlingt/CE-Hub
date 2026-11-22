@@ -49,7 +49,7 @@ function AssignModal({ order, employees, timeSlots, onClose, onAssigned }) {
       if (selectedSlot) {
         const res = await fetch(`${API_BASE}/api/orders/${order.id}`, {
           method:  'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
           body:    JSON.stringify({ time_slot_id: selectedSlot }),
         });
         if (!res.ok) {
@@ -70,7 +70,7 @@ function AssignModal({ order, employees, timeSlots, onClose, onAssigned }) {
       // Update assignment_status to assigned
       await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body:    JSON.stringify({ }),
       });
 

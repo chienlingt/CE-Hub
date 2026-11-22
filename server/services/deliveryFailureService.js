@@ -59,7 +59,8 @@ function assertAllItemsFailed(orderProducts, items) {
  * Confirm a failed delivery.
  *
  * Validates all business rules, persists failure state, fires A6 notifications,
- * and atomically enqueues ORDER_FAILED for Odoo's customer WhatsApp automation.
+ * and atomically enqueues ORDER_FAILED so the failure and its attempt Log Note reach Odoo
+ * (the customer's Failed Delivery WhatsApp is sent manually from Odoo, FRD INT-13).
  *
  * @param {string} orderId
  * @param {{
@@ -203,6 +204,13 @@ async function confirmFailure(orderId, {
     }
     return updated;
   }, { timeout: 15000 });
+
+  // FR-03-003: a failed stop is finished too, so tell the next customer on the route.
+  if (updatedOrder?.time_slot_id) {
+    require('./integrationOutboxService').enqueueNextOnTheWay(updatedOrder.time_slot_id).catch(err =>
+      console.error('[A5] enqueueNextOnTheWay failed:', err.message)
+    );
+  }
 
   // Internal notifications stay in CE Hub; customer WhatsApp belongs to Odoo.
   sendDeliveryFailureNotifications(orderId).catch(err =>

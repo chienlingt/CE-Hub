@@ -9,6 +9,7 @@
 //  - Drop this file in client/src/services and import functions as before.
 
 import { API_BASE_URL as API_BASE } from '../utils/apiBaseUrl';
+import { adminSessionHeaders } from '../utils/adminSessionHeaders';
 
 // Map Firestore collection names (original) to REST endpoints provided by the server
 const endpointMap = {
@@ -39,7 +40,7 @@ async function apiFetch(path, options = {}) {
   headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   headers['ngrok-skip-browser-warning'] = '1'; // skip ngrok interstitial for API calls
   const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (token && !headers.Authorization) headers['Authorization'] = `Bearer ${token}`;
   const opts = { credentials: 'same-origin', ...options, headers };
   if (opts.body && typeof opts.body !== 'string') {
     opts.body = JSON.stringify(opts.body);
@@ -196,7 +197,7 @@ export async function assignOrUpdateEmployeeTeam(employeeId, teamId) {
 // -- Order / OrderProduct --
 export const getAllOrders = (options) => getAllDocs("Order", options);
 export const getOrdersWithIssues = () => apiFetch('orders?issues_only=true');
-export const resolveOrderIssue = (id, data) => apiFetch(`orders/${encodeURIComponent(id)}/issue`, { method: 'PATCH', body: data });
+export const resolveOrderIssue = (id, data) => apiFetch(`orders/${encodeURIComponent(id)}/issue`, { method: 'PATCH', body: data, headers: adminSessionHeaders() });
 export const getAllOrdersSummary = () => apiFetch('orders?include_products=false');
 export const getOrder = (id) => getDocById("Order", id);
 export const addOrder = (data) => addDocGeneric("Order", data, { idField: "OrderID", prefix: "ORD_" });

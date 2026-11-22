@@ -12,13 +12,14 @@ const { updateSchedulerCron } = require('../schedulerCron');
 const { validateRequest: validateRecommendRequest } = require('../services/slotRecommendSpec');
 const { recommendSlots } = require('../services/slotRecommendService');
 const { suggestAddresses, geocodeCandidates } = require('../services/addressLookupService');
+const { runPlanning, listRuns, PlanningError } = require('../services/planningService');
 
 
 /**
  * POST /api/scheduler/run
  * Manually trigger the scheduler
  */
-router.post('/run', async (req, res) => {
+router.post('/run', requireReviewAdmin, async (req, res) => {
   try {
     console.log('Manual scheduler run triggered via API');
 
@@ -101,6 +102,49 @@ router.put('/config', requireReviewAdmin, async (req, res) => {
  * Body: { address, items: [{ name, quantity, dismantle? }], not_before?, days? }
  * Admin session only (it calls Google per request).
  */
+/**
+ * POST /api/scheduler/plan  { date: 'YYYY-MM-DD', dry_run?: boolean }
+ * B.1 Part 2 planning run for one date: packs booked DOs into team trips
+ * ('assigned', admin approves), asks B.2 to sequence them and records DOs that
+ * could not be placed, with a reason and a suggested alternative.
+ * dry_run previews the packing only (nothing written, travel estimated).
+ */
+router.post('/plan', requireReviewAdmin, async (req, res) => {
+  const date = typeof req.body?.date === 'string' ? req.body.date : '';
+  const dryRun = req.body?.dry_run === true;
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10); // KL
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD', code: 'INVALID_REQUEST' });
+  }
+  if (date < today) {
+    return res.status(400).json({ success: false, error: 'Cannot plan a past date', code: 'PAST_DATE' });
+  }
+  try {
+    const result = await runPlanning({ date, dryRun, trigger: 'manual', createdBy: req.reviewAdmin?.id ?? null });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    if (error instanceof PlanningError) {
+      return res.status(error.status).json({ success: false, error: error.message, code: error.code });
+    }
+    console.error('POST /api/scheduler/plan error', error);
+    res.status(500).json({ success: false, error: 'Planning run failed', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/plan/runs?date=YYYY-MM-DD
+ * Recent planning runs (newest first) with their summaries.
+ */
+router.get('/plan/runs', requireReviewAdmin, async (req, res) => {
+  const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
+  try {
+    res.json({ success: true, runs: await listRuns({ date }) });
+  } catch (error) {
+    console.error('GET /api/scheduler/plan/runs error', error);
+    res.status(500).json({ success: false, error: 'Could not load planning runs', details: error.message });
+  }
+});
+
 /**
  * GET /api/scheduler/recommend/items
  * Product names on Information > Item, for the Find a slot picker. Read-only
@@ -230,7 +274,7 @@ router.get('/status', async (req, res) => {
  * PUT /api/orders/:id/reschedule
  * Move an order to a different timeslot
  */
-router.put('/orders/:id/reschedule', async (req, res) => {
+router.put('/orders/:id/reschedule', requireReviewAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { time_slot_id } = req.body;
@@ -336,7 +380,7 @@ router.get('/installation-schedules', async (req, res) => {
  * PUT /api/installation-schedules/:id
  * Update installation schedule status
  */
-router.put('/installation-schedules/:id', async (req, res) => {
+router.put('/installation-schedules/:id', requireReviewAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, estimated_arrival_time, installation_team_id } = req.body;

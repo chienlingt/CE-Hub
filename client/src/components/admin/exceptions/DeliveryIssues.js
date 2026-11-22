@@ -14,6 +14,7 @@ import { ReasonBadge } from './shared/badges';
 import EvidenceThumbnails from './shared/EvidenceThumbnails';
 import StatCard from './shared/StatCard';
 import useIssuePolling from './shared/useIssuePolling';
+import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
 
 // Escalations = driver Report (is_complaint_submitted: true)
 // Full reports = old Issue-status orders still in the system (is_complaint_submitted: false)
@@ -49,7 +50,7 @@ function ReportDetail({ order, onClose, onResolved }) {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ issue_status: 'resolved', resolved_by: employeeData?.id || null }),
       });
       if (!res.ok) throw new Error('Failed');
@@ -163,7 +164,7 @@ function EscalationDetail({ order, onClose, onAcknowledged }) {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/escalation-ack`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
       });
       if (!res.ok) throw new Error('Failed');
       onAcknowledged(order.id);

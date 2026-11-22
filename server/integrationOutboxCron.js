@@ -8,10 +8,12 @@
 //
 // Handlers:
 //   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus + writeOdooExtendedFields
+//                             (Delivered also posts the INT-08/09 result Log Note)
 //                             (Loaded/Arrived also get writeOdooOrderLines via RPC, or the
 //                             whole event via webhook instead if ODOO_USE_WEBHOOK=true —
 //                             see odooWebhookService.js)
-//                             ORDER_FAILED (A5.3)     → writeOdooDeliveryStatus('Failed') + extended fields
+//                             ORDER_FAILED (A5.3)     → triggerOdooFailureNotification: x_delivery_status='failed'
+//                                                       + attempt Log Note (FRD INT-07/INT-10) + extended fields
 //                             ORDER_SCHEDULED         → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
 //                             ORDER_APPROVAL_CANCELLED → clears the confirmed appointment (extended fields)
 //                             (both legacy — no longer enqueued; kept so queued rows drain)
@@ -22,7 +24,7 @@
 
 const {
   writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification,
-  writeOdooAppointmentResult, writeOdooAppointmentDecision,
+  writeOdooAppointmentResult, writeOdooAppointmentDecision, postOdooDeliveryResultNote,
 } = require('./services/odooService');
 const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
 const { assertOutboundLineIdentity } = require('./services/odooLineIdentity');
@@ -67,21 +69,26 @@ async function handleOdoo(row) {
     return;
   }
   await writeOdooExtendedFields(odooRef, payload);
-  if (['Loaded', 'Arrived'].includes(status)) {
+  // Line JSON (placeholder field, behind ODOO_SEND_EXTENDED_FIELDS, non-fatal); on
+  // Delivered it carries the delivered/undelivered quantities and serials (INT-08/09).
+  if (['Loaded', 'Arrived', 'Delivered'].includes(status)) {
     await writeOdooOrderLines(odooRef, payload.order_lines, payload.order_line_model);
   }
-  console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}`);
+  // INT-08/09 result record: Log Note on the DO, retried if Odoo refuses it.
+  let note = '';
+  if (status === 'Delivered') note = ` (Log Note ${(await postOdooDeliveryResultNote(odooRef, payload)).log_note})`;
+  console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}${note}`);
 }
 
 // ── A5.3: ORDER_FAILED handler — write Failed status to Odoo ──────────────
 
 async function handleOrderFailed(row) {
   const payload = row.payload || {};
-  await triggerOdooFailureNotification(payload);
+  const result = await triggerOdooFailureNotification(payload);
   if (payload.failure_event_id) await prisma.delivery_failure_events.updateMany({
     where: { id: payload.failure_event_id }, data: { odoo_sync_status: 'synced' },
   });
-  console.log(`[OutboxWorker] ORDER_FAILED: Odoo accepted the failure/WhatsApp trigger for ${payload.do_ref || payload.odooRef}`);
+  console.log(`[OutboxWorker] ORDER_FAILED: Odoo accepted the failure for ${payload.do_ref || payload.odooRef} (Log Note ${result?.log_note})`);
 }
 
 // ── ORDER_SCHEDULED handler — write the assigned window back to Odoo ──────

@@ -165,6 +165,12 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
     ...(ceHubStatus === 'Delivered' && {
       is_partial: isPartial,
       ...(isPartial && order.delivery_notes && { remarks: order.delivery_notes }),
+      // FRD INT-08/INT-09 result references for the Odoo Log Note. The signature itself
+      // (a data URL) is never sent; only whether one was captured.
+      ce_hub_order_ref: order.id,
+      delivery_notes: order.delivery_notes || null,
+      proof_photo_paths: order.delivery_evidence || [],
+      signature_captured: !!order.proof_of_delivery_url,
     }),
     ...(ceHubStatus === 'Failed' && {
       failure_reason: latestFailure?.failure_reason || order.issue_reason || null,

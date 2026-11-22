@@ -8,7 +8,7 @@
 //   settings       getSchedulerSettings() (cap, grace, base/fallback minutes, nearby_km)
 //   service time   serviceTime.js (item types on Information > Item)
 //   item volume    products.package_* (often empty; the load check is then skipped)
-//   fleet/teams    B.4 block-offs (fleetAvailabilityService / Spec)
+//   fleet/teams    crews (crewService: team + truck + member roles) and B.4 block-offs
 //   booked DOs     open orders on a time slot in the horizon, plus orders Odoo
 //                  booked (requested_appointment_date/session) not yet on a slot
 //   distance       Google Distance Matrix, only for DOs already within nearby_km
@@ -19,7 +19,8 @@ const prisma = require('../prismaClient');
 const spec = require('./slotRecommendSpec');
 const { getSchedulerSettings } = require('./schedulerSettings');
 const { computeServiceMinutes, serviceMinutesForOrders, itemKey } = require('./serviceTime');
-const { loadTeams, loadRows } = require('./fleetAvailabilityService');
+const { loadRows } = require('./fleetAvailabilityService');
+const { loadCrews } = require('./crewService');
 const { dateRange, closedSessions } = require('./availabilityService');
 const { sessionForWindow } = require('./odooAppointmentSessions');
 const routing = require('./googleRoutingService');
@@ -238,7 +239,7 @@ async function recommendSlots(input, { now = new Date(), db = prisma } = {}) {
   const [job, truckRows, teams, blockoffs, slots, booked, buildings] = await Promise.all([
     describeJob(input.items, settings, db),
     db.trucks.findMany({ select: { id: true, tone: true, length_cm: true, width_cm: true, height_cm: true } }),
-    loadTeams(db),
+    loadCrews(db),
     loadRows(db, { from, to }),
     db.time_slots.findMany({
       where: { date: { gte: from, lte: to } },

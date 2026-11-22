@@ -8,6 +8,7 @@ import {
 import { Calendar, Truck, Package, Users, MapPin, Edit, Save, X, Plus, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
 import { toLocalDateKey } from '../../../utils/dateKey';
+import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
 
 // Helper for generating days in a given month
 function getMonthDates(year, month) {
@@ -520,7 +521,7 @@ export default function Schedule() {
       const attemptReassign = async (payload) => {
         const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
           body: JSON.stringify(payload)
         });
         const data = await response.json().catch(() => ({}));
@@ -575,7 +576,7 @@ export default function Schedule() {
     try {
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/orders/${editingOrder.OrderID}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ time_slot_id: null })
       });
 
@@ -636,7 +637,7 @@ export default function Schedule() {
 
       const resp = await fetch('/api/scheduler/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ runAt })
       });
 

@@ -125,48 +125,132 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   return callModel('stock.picking', 'write', [[pickings[0].id], { x_delivery_status: odooStatus }]);
 }
 
-// Driver confirmation is the user trigger. Odoo owns customer WhatsApp via
-// its automation on x_delivery_status -> failed; CE Hub does not send it.
-// One atomic write includes any GCA-confirmed failure context fields BEFORE
-// Odoo evaluates its automation. No guessed custom RPC method is called.
-async function triggerOdooFailureNotification(payload) {
-  if (!process.env.ODOO_URL) throw new Error('Odoo is not configured; failure notification handoff remains pending.');
-  const snapshotField = process.env.ODOO_FAILURE_SNAPSHOT_FIELD;
-  if (!snapshotField || !/^x_[A-Za-z0-9_]+$/.test(snapshotField) || snapshotField === 'x_delivery_status') {
-    throw new Error('Failure synchronization blocked: GCA must confirm ODOO_FAILURE_SNAPSHOT_FIELD (Text field for full attempt JSON).');
+// Optional GCA-confirmed failure fields on stock.picking. Each one is written only
+// when its setting is present; none has a guessed default.
+const FAILURE_FIELD_SETTINGS = [
+  ['ODOO_FAILURE_SNAPSHOT_FIELD', payload => JSON.stringify(payload)],
+  ['ODOO_FAILURE_REASON_FIELD', payload => payload.failure_reason],
+  ['ODOO_FAILURE_NOTES_FIELD', payload => payload.remarks],
+  ['ODOO_FAILURE_EVENT_REFERENCE_FIELD', payload => payload.failure_event_id],
+];
+
+function configuredFailureFields(payload) {
+  const fields = {};
+  for (const [setting, valueOf] of FAILURE_FIELD_SETTINGS) {
+    const field = process.env[setting];
+    if (!field) continue;
+    if (!/^x_[A-Za-z0-9_]+$/.test(field) || field === 'x_delivery_status') throw new Error(`Invalid configured failure field: ${setting}`);
+    if (Object.hasOwn(fields, field)) throw new Error(`Failure destination fields must be distinct: ${setting}`);
+    fields[field] = valueOf(payload) || false;
   }
+  return fields;
+}
+
+// FRD INT-07/INT-10 attempt record: one Log Note per failed attempt, carrying
+// the CE Hub attempt reference so a retry can find it instead of posting twice.
+function failureLogNoteLines(payload) {
+  const crew = [payload.driver_name, payload.assistant_name].filter(Boolean).join(' / ');
+  return [
+    `CE Hub delivery attempt failed. Attempt reference: ${payload.failure_event_id}`,
+    `Attempt time: ${payload.attempt_time}`,
+    `Failure reason: ${payload.failure_reason || '-'}`,
+    payload.remarks && `Notes: ${payload.remarks}`,
+    `Driver: ${crew || '-'}${payload.driver_ref ? ` (CE Hub ${payload.driver_ref})` : ''}`,
+    `Vehicle: ${payload.vehicle_plate || '-'}${payload.vehicle_ref ? ` (CE Hub ${payload.vehicle_ref})` : ''}`,
+    `Trip reference: ${payload.trip_ref || '-'}; slot reference: ${payload.slot_ref || '-'}`,
+    ...(payload.order_lines || []).map(line =>
+      `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.actual_delivered_qty ?? 0}` +
+      `${line.serial_numbers?.length ? `, undelivered serials ${line.serial_numbers.join(', ')}` : ''}`),
+  ];
+}
+
+// Driver confirmation hands the failure to Odoo. Per FRD v1.2 INT-13/AC-14 the
+// Failed Delivery WhatsApp is MANUAL in Odoo: a user sends it once the structured
+// failure information below is available. CE Hub never sends it.
+//
+// 1. One write: x_delivery_status='failed' plus any GCA-confirmed failure fields.
+//    Skipped when the DO already shows failed (a retry after a timeout), so the
+//    status is never rewritten.
+// 2. The attempt Log Note (standard mail.thread API), unless one with this
+//    attempt reference already exists.
+// 3. The placeholder extended fields, non-fatally (off unless ODOO_SEND_EXTENDED_FIELDS).
+async function triggerOdooFailureNotification(payload) {
+  if (!process.env.ODOO_URL) throw new Error('Odoo is not configured; failure synchronization remains pending.');
   assertOutboundLineIdentity(payload);
   if (!payload.failure_event_id || !payload.attempt_time || Number.isNaN(Date.parse(payload.attempt_time))) {
     throw new Error('Failure snapshot lacks immutable attempt identity/time. Reconcile this legacy event; do not rebuild it from current order data.');
   }
   const reference = payload?.do_ref || payload?.odooRef;
-  if (!reference) throw new Error('Missing DO reference for Odoo failure notification.');
+  if (!reference) throw new Error('Missing DO reference for Odoo failure synchronization.');
+  const extraFields = configuredFailureFields(payload);
   const pickings = await callModel('stock.picking', 'search_read', [[['name', '=', reference]]], { fields: ['id', 'x_delivery_status'], limit: 1 });
-  if (!pickings?.length) throw new Error('Odoo Delivery Order not found; failure notification handoff remains pending.');
+  if (!pickings?.length) throw new Error('Odoo Delivery Order not found; failure synchronization remains pending.');
   const picking = pickings[0];
-  if (picking.x_delivery_status === 'delivered') throw new Error('Cannot trigger a failure notification for an Odoo delivery already marked delivered.');
-  // A timeout may happen after Odoo committed the first write. Do not rewrite
-  // failed on retry and retrigger an on-update WhatsApp automation.
-  if (picking.x_delivery_status === 'failed') {
-    const [saved] = await callModel('stock.picking', 'read', [[picking.id]], { fields: [snapshotField] });
-    if (saved?.[snapshotField] === JSON.stringify(payload)) return { already_failed: true, notification_owner: 'odoo' };
-    throw new Error('Odoo DO is already failed with a different or missing attempt snapshot. Reconciliation is required.');
+  if (picking.x_delivery_status === 'delivered') throw new Error('Cannot record a failure for an Odoo delivery already marked delivered.');
+
+  const alreadyFailed = picking.x_delivery_status === 'failed';
+  if (!alreadyFailed) {
+    const accepted = await callModel('stock.picking', 'write', [[picking.id], { x_delivery_status: 'failed', ...extraFields }]);
+    if (accepted !== true) throw new Error('Odoo did not acknowledge the failed delivery status.');
   }
-  const fields = { x_delivery_status: 'failed', [snapshotField]: JSON.stringify(payload) };
-  for (const [setting, value] of [
-    ['ODOO_FAILURE_REASON_FIELD', payload.failure_reason],
-    ['ODOO_FAILURE_NOTES_FIELD', payload.remarks],
-    ['ODOO_FAILURE_EVENT_REFERENCE_FIELD', payload.failure_event_id],
-  ]) {
-    const field = process.env[setting];
-    if (!field) continue;
-    if (!/^x_[A-Za-z0-9_]+$/.test(field) || field === 'x_delivery_status') throw new Error(`Invalid configured failure field: ${setting}`);
-    if (Object.hasOwn(fields, field)) throw new Error(`Failure destination fields must be distinct: ${setting}`);
-    fields[field] = value || false;
+
+  const existingNotes = await callModel('mail.message', 'search_read', [[
+    ['model', '=', 'stock.picking'], ['res_id', '=', picking.id], ['body', 'ilike', payload.failure_event_id],
+  ]], { fields: ['id'], limit: 1 });
+  if (!Array.isArray(existingNotes)) throw new Error('Invalid Odoo Log Note lookup response.');
+  let logNote = 'existing';
+  if (!existingNotes.length) {
+    const messageId = await postOdooLogNote(picking.id, failureLogNoteLines(payload));
+    if (!Number.isInteger(messageId) && messageId !== true) throw new Error('Odoo did not acknowledge the failure Log Note.');
+    logNote = 'posted';
   }
-  const accepted = await callModel('stock.picking', 'write', [[picking.id], fields]);
-  if (accepted !== true) throw new Error('Odoo did not acknowledge the failure notification trigger.');
-  return { triggered: true, notification_owner: 'odoo' };
+
+  await writeOdooExtendedFields(reference, payload);
+  return { ...(alreadyFailed ? { already_failed: true } : { triggered: true }), log_note: logNote, notification_owner: 'odoo' };
+}
+
+// FRD INT-08/INT-09 delivery result as a Log Note on the DO: delivered and
+// undelivered quantity and serials per Odoo line, completion time, notes and proof
+// references. It works before GCA confirms any custom field; Odoo's own line
+// reconciliation (stock.move.line, DOO Done) is still a separate GCA decision.
+function proofLink(path) {
+  const base = (process.env.CE_HUB_PUBLIC_URL || '').replace(/\/$/, '');
+  return /^https?:/.test(path) || !base ? path : `${base}${path}`;
+}
+
+function deliveryResultNoteLines(payload) {
+  const crew = [payload.driver_name, payload.assistant_name].filter(Boolean).join(' / ');
+  const photos = payload.proof_photo_paths || [];
+  return [
+    `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${payload.ce_hub_order_ref}`,
+    `Completion time: ${payload.delivered_time || '-'}`,
+    `Driver: ${crew || '-'}; vehicle: ${payload.vehicle_plate || '-'}`,
+    ...(payload.order_lines || []).map(line => {
+      const delivered = line.delivered_serial_numbers?.length ? `; delivered serials ${line.delivered_serial_numbers.join(', ')}` : '';
+      const undelivered = line.undelivered_serial_numbers?.length ? `; undelivered serials ${line.undelivered_serial_numbers.join(', ')}` : '';
+      return `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.actual_delivered_qty ?? '-'}, undelivered ${line.undelivered_qty ?? '-'}${delivered}${undelivered}`;
+    }),
+    payload.remarks && `Undelivered reason: ${payload.remarks}`,
+    payload.delivery_notes && payload.delivery_notes !== payload.remarks && `Notes: ${payload.delivery_notes}`,
+    `Proof: ${photos.length} photo${photos.length === 1 ? '' : 's'}${payload.signature_captured ? ', customer signature captured in CE Hub' : ', no signature'}`,
+    ...photos.map(path => `Photo: ${proofLink(path)}`),
+  ];
+}
+
+async function postOdooDeliveryResultNote(odooOrderRef, payload) {
+  if (!process.env.ODOO_URL || !odooOrderRef) throw new Error('Delivery result synchronization blocked: Odoo URL or DO reference missing.');
+  // Rows queued before this change carry no order reference to deduplicate on.
+  if (!payload?.ce_hub_order_ref) return { log_note: 'skipped_legacy_payload' };
+  const pickingId = await findPickingId(odooOrderRef);
+  const marker = `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${payload.ce_hub_order_ref}`;
+  const existing = await callModel('mail.message', 'search_read', [[
+    ['model', '=', 'stock.picking'], ['res_id', '=', pickingId], ['body', 'ilike', payload.ce_hub_order_ref],
+  ]], { fields: ['id'], limit: 1 });
+  if (!Array.isArray(existing)) throw new Error('Invalid Odoo Log Note lookup response.');
+  if (existing.length) return { log_note: 'existing' };
+  const messageId = await postOdooLogNote(pickingId, deliveryResultNoteLines(payload));
+  if (!Number.isInteger(messageId) && messageId !== true) throw new Error(`Odoo did not acknowledge the delivery result Log Note (${marker}).`);
+  return { log_note: 'posted' };
 }
 
 /**
@@ -507,6 +591,8 @@ module.exports = {
   pushDeliveryStatus,
   writeOdooDeliveryStatus,
   triggerOdooFailureNotification,
+  postOdooDeliveryResultNote,
+  deliveryResultNoteLines,
   writeOdooExtendedFields,
   writeOdooOrderLines,
   getOrdersForDeliveryDate,

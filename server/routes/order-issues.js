@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
+const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 
 // GET all orders with issues
 router.get('/', async (req, res) => {
@@ -73,7 +74,7 @@ router.get('/:id', async (req, res) => {
 
 
 // PUT update issue status for a specific order
-router.put('/:id/status', async (req, res) => {
+router.put('/:id/status', requireReviewAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { issue_status } = req.body;

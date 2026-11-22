@@ -513,6 +513,7 @@ async function roadDistancesKm(origin, destinations) {
 module.exports = {
   planRoutes,
   roadDistancesKm,
+  groupNearbyOrders,
   geocodeAddress,
   resolveOrderCoords,
   getOrderAddress,

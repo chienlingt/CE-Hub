@@ -425,7 +425,7 @@ router.get('/delivery-issues', async (req, res) => {
 });
 
 // PATCH /:id/escalation-ack — admin acknowledges a driver escalation
-router.patch('/:id/escalation-ack', async (req, res) => {
+router.patch('/:id/escalation-ack', requireReviewAdmin, async (req, res) => {
   try {
     const order = await prisma.orders.findUnique({ where: { id: req.params.id } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -984,7 +984,7 @@ router.patch('/:id/status', async (req, res) => {
 });
 
 // PATCH /:id - Reassign order to different timeslot (admin only)
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireReviewAdmin, async (req, res) => {
   try {
     const { time_slot_id, force_truck_tone, scheduled_start_date_time, scheduled_end_date_time } = req.body;
 
@@ -1373,6 +1373,45 @@ router.get('/:id/loading-status', async (req, res) => {
   } catch (err) {
     console.error('GET /api/orders/:id/loading-status error', err);
     res.status(500).json({ error: 'Failed to fetch loading status', details: err.message });
+  }
+});
+
+// GET /:id/failure-history — FR-05-003: every recorded failure across this order and
+// its replacement chain (rescheduled_from / rescheduled_to), oldest first. Read-only.
+router.get('/:id/failure-history', async (req, res) => {
+  try {
+    const link = { select: { id: true, odoo_order_ref: true, rescheduled_from_order_id: true } };
+    let start = await prisma.orders.findUnique({ where: { id: req.params.id }, ...link });
+    if (!start) return res.status(404).json({ error: 'Order not found' });
+    const seen = new Set([start.id]);
+    while (start.rescheduled_from_order_id && !seen.has(start.rescheduled_from_order_id)) {
+      const parent = await prisma.orders.findUnique({ where: { id: start.rescheduled_from_order_id }, ...link });
+      if (!parent) break;
+      seen.add(parent.id);
+      start = parent;
+    }
+    const chain = new Map([[start.id, start]]);
+    for (let frontier = [start.id]; frontier.length;) {
+      const children = await prisma.orders.findMany({ where: { rescheduled_from_order_id: { in: frontier } }, ...link });
+      frontier = children.filter(child => !chain.has(child.id)).map(child => child.id);
+      children.forEach(child => chain.set(child.id, child));
+    }
+    const events = await prisma.delivery_failure_events.findMany({
+      where: { order_id: { in: [...chain.keys()] } }, orderBy: { created_at: 'asc' },
+    });
+    const driverIds = [...new Set(events.map(e => e.confirmed_by).filter(Boolean))];
+    const drivers = new Map((await prisma.employees.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } }))
+      .map(d => [d.id, d.name]));
+    res.json(events.map(e => ({
+      id: e.id, order_id: e.order_id, do_ref: chain.get(e.order_id)?.odoo_order_ref || null,
+      is_current_order: e.order_id === req.params.id,
+      failure_reason: e.failure_reason, failure_desc: e.failure_desc, evidence_urls: e.evidence_urls || [],
+      confirmed_by: e.confirmed_by, driver_name: drivers.get(e.confirmed_by) || null,
+      odoo_sync_status: e.odoo_sync_status, created_at: e.created_at,
+    })));
+  } catch (err) {
+    console.error('GET /api/orders/:id/failure-history error', err);
+    res.status(500).json({ error: 'Failed to fetch failure history', details: err.message });
   }
 });
 
@@ -1831,15 +1870,16 @@ const { confirmFailure } = require('../services/deliveryFailureService');
 
 // PATCH /:id/issue — two paths:
 //   1. confirm_failure: true  → A5 driver failure confirmation (deliveryFailureService)
-//   2. no flag               → admin triage: update issue_status / item statuses (no A6)
-router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
+//   2. no flag               → admin triage: update issue_status / item statuses (no A6).
+//      Admin login required (NFR-04); the driver failure path stays open to drivers.
+const isConfirmFailure = body => body?.confirm_failure === true || body?.confirm_failure === 'true';
+router.patch('/:id/issue', upload.array('files', 5),
+  (req, res, next) => (isConfirmFailure(req.body) ? next() : requireReviewAdmin(req, res, next)),
+  async (req, res) => {
   const orderId = req.params.id;
 
   // ── Path 1: A5 driver failure confirmation ─────────────────────────────────
-  const rawBody = req.body.confirm_failure;
-  const isConfirmFailure = rawBody === true || rawBody === 'true';
-
-  if (isConfirmFailure) {
+  if (isConfirmFailure(req.body)) {
     try {
       const {
         issue_reason,
@@ -1914,7 +1954,7 @@ router.patch('/:id/issue', upload.array('files', 5), async (req, res) => {
     // Audit trail — stamp who/when only on the transition INTO resolved,
     // not on every subsequent save of an already-resolved case.
     if (issue_status === 'resolved' && existing?.issue_status !== 'resolved') {
-      data.resolved_by = resolved_by || null;
+      data.resolved_by = req.reviewAdmin?.id || resolved_by || null;
       data.resolved_at = new Date();
     }
 

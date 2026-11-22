@@ -13,7 +13,7 @@
 //   access         building access hours leave room for the visit
 //   do_cap         booked DOs < max_dos_per_slot
 //   team           a delivery team is free (B.4 block-offs, driver on leave)
-//   installer      an installer team is free, when an item needs one
+//   installer      a free delivery team has an installer, when an item needs one
 //   truck          a truck is free (B.4 block-offs)
 //   truck_load     booked volume + this DO fits the free trucks (when known)
 //   visit_length   the visit fits the session (plus grace)
@@ -21,7 +21,8 @@
 // Then ranking: earliest date, most nearby DOs (road km <= nearby_km), most room.
 
 const { APPOINTMENT_SESSIONS } = require('./odooAppointmentSessions');
-const { truckBlock, teamBlock } = require('./fleetAvailabilitySpec');
+const { truckBlock } = require('./fleetAvailabilitySpec');
+const { crewsForSession } = require('./crewSpec');
 
 const SESSIONS = Object.keys(APPOINTMENT_SESSIONS);
 const SESSION_LABELS = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' };
@@ -50,7 +51,7 @@ const CHECK_LABELS = {
   [CHECK.ACCESS]: 'Building access hours do not fit',
   [CHECK.DO_CAP]: 'Session is full',
   [CHECK.TEAM]: 'No delivery team free',
-  [CHECK.INSTALLER]: 'No installer team free',
+  [CHECK.INSTALLER]: 'No free team has an installer',
   [CHECK.TRUCK]: 'No truck free',
   [CHECK.TRUCK_LOAD]: 'Not enough truck space',
   [CHECK.VISIT_LENGTH]: 'Visit is longer than the session',
@@ -216,7 +217,7 @@ function accessFits(building, session, minutes) {
  * @param {{service_minutes:number, requires_installer:boolean, volume_cm3:number|null}} args.job
  * @param {object|null} args.building matched buildings row
  * @param {Array<{id, tone, volume_cm3}>} args.trucks
- * @param {Array} args.teams          loadTeams() shape (kind, available_flag, truck, members)
+ * @param {Array} args.teams          crewService.loadCrews() shape (kind, available_flag, truck, members with role_name)
  * @param {Array} args.blockoffs      resource_blockoffs rows
  * @param {Array<{order_id, date, session, service_minutes, volume_cm3}>} args.bookings  open DOs
  * @param {Set<string>} [args.closedSessions] 'date|session' keys whose slots are all closed
@@ -264,20 +265,18 @@ function evaluateWindows({
       else pass(CHECK.DO_CAP, `${booked.length} of ${cap} DOs booked`);
 
       // 4-6. Teams and trucks free in this session (B.4).
+      // Crews per crewSpec: a delivery team with its own unblocked truck; an
+      // installation needs one with an installer member who is not on leave.
       const freeTrucks = trucks.filter(t => !truckBlock(t, date, session, blockoffs));
-      const freeTruckIds = new Set(freeTrucks.map(t => t.id));
-      const deliveryTeams = teams.filter(t => t.kind !== 'installer' && t.available_flag !== false
-        && !teamBlock(t, date, session, blockoffs)
-        && (!t.truck || freeTruckIds.has(t.truck.id)));
-      const installerTeams = teams.filter(t => t.kind === 'installer' && t.available_flag !== false
-        && !teamBlock(t, date, session, blockoffs));
+      const deliveryTeams = crewsForSession(teams, date, session, blockoffs);
+      const installerCrews = deliveryTeams.filter(t => t.has_installer);
 
       if (deliveryTeams.length) pass(CHECK.TEAM, `${deliveryTeams.length} free`);
       else fail(CHECK.TEAM, 'Every delivery team is blocked off or has no free truck');
 
       if (job.requires_installer) {
-        if (installerTeams.length) pass(CHECK.INSTALLER, `${installerTeams.length} free`);
-        else fail(CHECK.INSTALLER, 'Every installer team is blocked off');
+        if (installerCrews.length) pass(CHECK.INSTALLER, `${installerCrews.length} free with an installer`);
+        else fail(CHECK.INSTALLER, 'No free delivery team has an installer');
       }
 
       if (freeTrucks.length) pass(CHECK.TRUCK, `${freeTrucks.length} free`);
