@@ -64,7 +64,9 @@ router.use(async (req, res, next) => {
         const expected = unit.assigned_serial;
         if (managed && item.serial_tracking !== 'none' && !expected) fail(409, 'This unit has no Odoo-assigned serial.', 'ODOO_SERIAL_MISSING');
         if (expected && expected.trim().toLowerCase() !== serial.toLowerCase()) fail(400, `Serial mismatch. Expected: ${expected}`, 'SERIAL_MISMATCH');
-        Object.assign(unit, { handling_status: 'loaded', loaded_serial: serial, loaded_at: new Date().toISOString(), loaded_by: employee_id || null });
+        // Matching ignores case and spaces, so save the assigned spelling ("ST-1001"), not what was typed ("st-1001").
+        // A unit with no assigned serial keeps what was scanned.
+        Object.assign(unit, { handling_status: 'loaded', loaded_serial: expected?.trim() || serial, loaded_at: new Date().toISOString(), loaded_by: employee_id || null });
         milestone = 'Loaded';
       }
       const updated = await tx.order_products.update({ where: { id: item.id }, data: summarizeUnits(units), include: { products: true } });
