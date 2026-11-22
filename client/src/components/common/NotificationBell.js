@@ -136,11 +136,22 @@ export default function NotificationBell({ userId, enableToasts = false, reviewC
   const fetchNotifications = useCallback(async (signal) => {
     if (!userId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/notifications?user_id=${encodeURIComponent(userId)}&limit=15`, { signal });
+      const user = encodeURIComponent(userId);
+      // The list is only the latest 15, so the red number comes from the server's real unread count.
+      const [res, countRes] = await Promise.all([
+        fetch(`${API_BASE}/api/notifications?user_id=${user}&limit=15`, { signal }),
+        fetch(`${API_BASE}/api/notifications/unread-count?user_id=${user}`, { signal }).catch(() => null),
+      ]);
       if (!res.ok) return;
       const data = await res.json();
       if (signal?.aborted) return;
       if (!Array.isArray(data)) return;
+      let total = data.filter(n => !n.is_read).length; // fallback if the count request fails
+      try {
+        const body = countRes?.ok ? await countRes.json() : null;
+        if (Number.isInteger(body?.count) && body.count >= 0) total = body.count;
+      } catch { /* keep the fallback */ }
+      if (signal?.aborted) return;
       if (seenRef.current && enableToasts) {
         const incoming = data.filter(n => !n.is_read && !seenRef.current.has(n.id));
         incoming.forEach(n => {
@@ -155,7 +166,7 @@ export default function NotificationBell({ userId, enableToasts = false, reviewC
       if (!seenRef.current) seenRef.current = new Set();
       data.forEach(n => seenRef.current.add(n.id));
       setNotifications(data);
-      setUnreadCount(data.filter(n => !n.is_read).length);
+      setUnreadCount(total);
     } catch (err) {
       // fail silently — bell is non-critical
     }
