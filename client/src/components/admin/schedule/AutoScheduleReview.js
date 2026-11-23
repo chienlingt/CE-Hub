@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { API_BASE_URL as REACT_APP_API_BASE_URL } from '../../../utils/apiBaseUrl';
+import { adminSessionHeaders } from '../../../utils/adminSessionHeaders';
 
 export default function AutoScheduleReview() {
   const navigate = useNavigate();
@@ -73,7 +74,7 @@ export default function AutoScheduleReview() {
     try {
       const response = await fetch(`${REACT_APP_API_BASE_URL}/api/scheduler/run`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() }
       });
 
       const data = await response.json();

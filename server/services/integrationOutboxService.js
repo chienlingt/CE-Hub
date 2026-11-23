@@ -19,6 +19,7 @@
 
 const prisma = require('../prismaClient');
 const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { pickNextStop } = require('./nextStopSpec');
 
 const MAX_ATTEMPTS   = parseInt(process.env.OUTBOX_MAX_ATTEMPTS || '8', 10);
 // Backoff delays in minutes: attempt 1→1m, 2→5m, 3→15m, 4→60m, 5+→60m
@@ -163,6 +164,40 @@ async function enqueueOnTheWayNotifications(timeSlotId, activeOrders, slotMeta =
 }
 
 /**
+ * FR-03-003: queue the On-the-Way event for the next open stop on a slot only.
+ * Called on departure (Stop 1) and after each stop is delivered or failed.
+ * The idempotency key order:{id}:on_the_way means a customer is told at most once.
+ *
+ * @param {string} timeSlotId
+ * @returns {Promise<string|null>} the order id that was queued, or null
+ */
+async function enqueueNextOnTheWay(timeSlotId) {
+  if (!timeSlotId) return null;
+  const slot = await prisma.time_slots.findUnique({
+    where: { id: timeSlotId },
+    select: {
+      id: true, date: true, time_window_start: true, time_window_end: true, slot_status: true,
+      orders: {
+        select: {
+          id: true, order_status: true, truck_loading_sequence: true, scheduled_start_date_time: true,
+          odoo_order_ref: true, delivery_address: true,
+          customers: { select: { id: true, full_name: true, phone: true, email: true } },
+        },
+      },
+    },
+  });
+  if (!slot || slot.slot_status !== 'out_for_delivery') return null;
+  const next = pickNextStop(slot.orders);
+  if (!next) return null;
+  await enqueueOnTheWayNotifications(slot.id, [next], {
+    date: slot.date,
+    time_window_start: slot.time_window_start,
+    time_window_end: slot.time_window_end,
+  });
+  return next.id;
+}
+
+/**
  * Fetch the next batch of pending outbox rows ready to process.
  *
  * @param {number} limit
@@ -226,6 +261,7 @@ module.exports = {
   enqueueSlotDepartureSideEffects,
   enqueueSlotEndTripSideEffects,
   enqueueOnTheWayNotifications,
+  enqueueNextOnTheWay,
   fetchPendingBatch,
   markProcessed,
   recordFailure,

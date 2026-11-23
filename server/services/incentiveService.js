@@ -16,6 +16,7 @@
 // force at that moment, so later rule changes never rewrite history.
 
 const prisma = require('../prismaClient');
+const { matchItemType } = require('./itemTypeSpec');
 
 const COMPLETED_STATUSES = ['delivered', 'completed'];
 
@@ -84,9 +85,10 @@ function resolveCrew(order) {
 
 /**
  * Rates for these item names (Map item_key -> points). Names not listed yet are
- * added at 0 points and flagged needs_review, so every item seen on an order
- * shows up in Information > Item for an admin to price. Safe to call
- * concurrently: the unique key makes a duplicate insert a no-op.
+ * added at 0 points with no item type (needs review) and a keyword suggestion,
+ * so every item seen on an order shows up in Information > Item for an admin
+ * to classify. Safe to call concurrently: the unique key makes a duplicate
+ * insert a no-op.
  */
 async function ensureItemRates(names, db = prisma) {
   const wanted = new Map();
@@ -98,9 +100,12 @@ async function ensureItemRates(names, db = prisma) {
   const find = () => db.item_point_rates.findMany({ where: { item_key: { in: [...wanted.keys()] } } });
   let rows = await find();
   const known = new Set(rows.map(row => row.item_key));
-  const missing = [...wanted].filter(([key]) => !known.has(key))
-    .map(([item_key, item_name]) => ({ item_key, item_name, points_per_item: 0, needs_review: true }));
-  if (missing.length) {
+  const missingNames = [...wanted].filter(([key]) => !known.has(key));
+  if (missingNames.length) {
+    const types = await db.item_types.findMany({ where: { active: true }, select: { id: true, keywords: true, active: true } });
+    const missing = missingNames.map(([item_key, item_name]) => ({
+      item_key, item_name, points_per_item: 0, suggested_item_type_id: matchItemType(item_name, types),
+    }));
     await db.item_point_rates.createMany({ data: missing, skipDuplicates: true });
     rows = await find();
   }

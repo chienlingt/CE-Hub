@@ -45,11 +45,18 @@
  * @property {(args: {dateKey: string, start: string, end: string, truckId: string, teamId: string|null}) => Promise<object>} createSlot
  *   A lorry has no slot in a window until it carries a DO there; the Board
  *   creates one on the first drop. Resolves to the normalized slot.
- * @property {(input: {address: string, sizeBand: string, installation: boolean, notBefore: string|null}) => Promise<{options: object[], reasons: string[], notCounted: number, addressMatched: boolean}>} recommendSlots
+ * @property {(input: {address: string, items: {name: string, quantity: number, dismantle: boolean}[], notBefore: string|null}) => Promise<{options: object[], reasons: string[], notes: string[], notCounted: number, addressMatched: boolean, building: string|null, job: {serviceMinutes: number, requiresInstaller: boolean}|null}>} recommendSlots
  *   Advisory slot recommendation for an order Odoo has not synced yet. Writes nothing.
- * @property {(b: {resourceType: 'truck'|'team', resourceId: string, startDate: string, endDate: string, reason: string, note?: string}) => Promise<object>} addBlockoff
- *   Dated truck/team unavailability. Rejects with `fieldErrors` when invalid.
- * @property {(id: string) => Promise<void>} removeBlockoff
+ *   Live: POST /api/scheduler/recommend. Mock: the client rules in utils/schedule/recommendSlots.js.
+ * @property {() => Promise<{name: string, itemType: string|null, requiresInstaller: boolean}[]>} listRecommendItems
+ *   Product names for the Find a slot picker. Live: the Information > Item list.
+ * @property {(query: string) => Promise<{key: string, kind: 'building'|'past', text: string, mainText: string, secondaryText: string, buildingId: string|null, location: object|null}[]>} searchAddresses
+ *   Find a slot address type-ahead from CE Hub buildings and past deliveries.
+ * @property {(address: string) => Promise<{formattedAddress: string, lat: number, lon: number, precise: boolean, confirmable: boolean}[]>} checkAddress
+ *   "Check address": Google Geocoding matches for the user to confirm (live only).
+ *
+ * Block-offs are read-only here (config.blockoffs); they are created and
+ * removed under Information › Fleet Availability (services/fleetAvailabilityApi.js).
  *
  * loadConfig resolves to the client config shape (utils/schedule/schedulerConfigMapping.js);
  * saveConfig takes a partial of it and rejects with `fieldErrors` on invalid values.
@@ -58,7 +65,7 @@
 export const GATEWAY_METHODS = [
   'loadSnapshot', 'loadConfig', 'saveConfig', 'commitMoves',
   'runAutoSchedule', 'approveOrders', 'rejectOrders', 'unapproveOrders', 'createSlot', 'recommendSlots',
-  'addBlockoff', 'removeBlockoff',
+  'listRecommendItems', 'searchAddresses', 'checkAddress',
 ];
 
 /** Dev guard: fail loudly rather than at the first missing call. */

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import { adminSessionHeaders } from '../../utils/adminSessionHeaders';
 
 const REASON_STYLES = {
   'Customer Unreachable': 'bg-orange-100 text-orange-800 border-orange-200',
@@ -87,7 +88,7 @@ function CaseDetail({ order, onClose, onResolved, highlightId }) {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${order.id}/issue`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body:    JSON.stringify({ issue_status: 'resolved' }),
       });
       if (!res.ok) throw new Error('Failed');

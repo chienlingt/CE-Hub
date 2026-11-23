@@ -8,7 +8,7 @@ const { optimizeScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('../service
 const {
   enqueueSlotDepartureSideEffects,
   enqueueSlotEndTripSideEffects,
-  enqueueOnTheWayNotifications,
+  enqueueNextOnTheWay,
 } = require('../services/integrationOutboxService');
 const { verifySecret } = require('../middleware/odooWebhookAuth');
 const { MAX_DAYS, parseDays, getAvailability } = require('../services/availabilityService');
@@ -44,7 +44,8 @@ router.get('/active', async (req, res) => {
   try {
     const { date: dateParam } = req.query;
 
-    // Resolve today in Asia/Kuala_Lumpur    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }); // 'YYYY-MM-DD'
+    // Resolve today in Asia/Kuala_Lumpur
+    const todayKL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }); // 'YYYY-MM-DD'
 
     const where = { slot_status: 'out_for_delivery' };
     if (!dateParam || dateParam === 'today') {
@@ -381,13 +382,10 @@ router.post('/:id/depart', async (req, res) => {
       console.error('[Depart] enqueueSlotDepartureSideEffects failed:', e.message)
     );
 
-    // Enqueue customer on-the-way notifications (A.3.4)
-    enqueueOnTheWayNotifications(timeSlot.id, activeOrders, {
-      date:             timeSlot.date,
-      time_window_start: timeSlot.time_window_start,
-      time_window_end:  timeSlot.time_window_end,
-    }).catch(e =>
-      console.error('[Depart] enqueueOnTheWayNotifications failed:', e.message)
+    // FR-03-003: only the first stop's customer is told on departure; the next
+    // customer is told as each stop is delivered or failed.
+    enqueueNextOnTheWay(timeSlot.id).catch(e =>
+      console.error('[Depart] enqueueNextOnTheWay failed:', e.message)
     );
 
     res.json({

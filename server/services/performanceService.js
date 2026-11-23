@@ -12,6 +12,7 @@ const prisma = require('../prismaClient');
 const {
   ruleInForce, itemKey, ensureItemRates, readItemRates, lineName, computeOrderPoints, resolveCrew, awardOrder, COMPLETED_STATUSES,
 } = require('./incentiveService');
+const { matchItemType, itemTypeInput, itemTypeRow, pointsField, minutesField } = require('./itemTypeSpec');
 
 const ROLES = ['driver', 'assistant', 'installer'];
 const MAX_ADJUSTMENT = 10000;
@@ -284,32 +285,83 @@ async function createRule(input, adminId, db = prisma) {
   return db.incentive_rules.create({ data: { ...ruleValues(input), created_by: adminId || null, effective_from: new Date(), active: true } });
 }
 
-// ── Items (Information > Item): item name -> points per item.
-// The list fills itself from order lines: a new item starts at 0 points and is
-// flagged needs_review until an admin saves it. Deleting an item removes the
-// row; if the item is still on an order it comes back at 0 for review. Earned
-// points never change.
+// ── Items (Information > Item): one row per product name found on order lines,
+// assigned to an item type. The list fills itself from order lines: a new name
+// starts unclassified (needs review) at 0 points, with a keyword suggestion an
+// admin can accept. Unclassified names cannot have their points or times
+// edited; giving a name a type fills in the type's default points if it has
+// none yet. A product's own install/dismantle time (null = follow its type)
+// is for one-off products; moving it to another type clears them.
+// Earned points never change.
 
-function itemInput(input) {
-  const name = typeof input?.item_name === 'string' ? input.item_name.trim().replace(/\s+/g, ' ') : '';
-  if (!name || name.length > 255) throw httpError(400, 'INVALID_ITEM', 'Item name is required (max 255 characters).');
-  const raw = input?.points_per_item;
-  const points = Number(raw);
-  if (raw === '' || raw == null || !Number.isFinite(points) || points < 0 || points > 100000) throw httpError(400, 'INVALID_POINTS', 'Point per item must be a number from 0 to 100000.');
-  return { item_name: name, item_key: itemKey(name), points_per_item: round2(points) };
+const ITEM_TYPE_SELECT = { id: true, name: true, install_minutes: true, dismantle_minutes: true, requires_installer: true, default_points: true, active: true };
+
+const itemRow = row => ({
+  id: row.id,
+  item_name: row.item_name,
+  points_per_item: row.points_per_item,
+  // The product's own times; null = follow the item type.
+  install_minutes: row.install_minutes ?? null,
+  dismantle_minutes: row.dismantle_minutes ?? null,
+  needs_review: !row.item_type_id,
+  item_type_id: row.item_type_id ?? null,
+  item_type: row.item_type ?? null,
+  suggested_item_type: row.item_type_id ? null : (row.suggested_item_type?.active ? { id: row.suggested_item_type.id, name: row.suggested_item_type.name } : null),
+  classification_source: row.classification_source ?? null,
+});
+
+async function pickUpOrderItems(db) {
+  const lines = await db.order_products.groupBy({ by: ['odoo_product_name'], where: { odoo_product_name: { not: null } } });
+  await ensureItemRates(lines.map(line => line.odoo_product_name), db);
 }
 
-const itemRow = row => ({ id: row.id, item_name: row.item_name, points_per_item: row.points_per_item, needs_review: !!row.needs_review });
+/**
+ * Recompute keyword suggestions for every unclassified name, so new or edited
+ * keywords show up straight away. Only changed rows are written.
+ */
+async function refreshSuggestions(db = prisma) {
+  const [types, rows] = await Promise.all([
+    db.item_types.findMany({ where: { active: true }, select: { id: true, keywords: true, active: true } }),
+    db.item_point_rates.findMany({ where: { item_type_id: null }, select: { id: true, item_name: true, suggested_item_type_id: true } }),
+  ]);
+  const changes = new Map();
+  for (const row of rows) {
+    const suggestion = matchItemType(row.item_name, types);
+    if (suggestion !== (row.suggested_item_type_id ?? null)) {
+      const key = suggestion ?? '';
+      changes.set(key, [...(changes.get(key) || []), row.id]);
+    }
+  }
+  for (const [suggestion, ids] of changes) {
+    await db.item_point_rates.updateMany({ where: { id: { in: ids } }, data: { suggested_item_type_id: suggestion || null } });
+  }
+}
+
+async function listItemTypes(db = prisma) {
+  const [types, counts] = await Promise.all([
+    db.item_types.findMany({ orderBy: { name: 'asc' } }),
+    db.item_point_rates.groupBy({ by: ['item_type_id'], where: { item_type_id: { not: null } }, _count: { _all: true } }),
+  ]);
+  const countById = new Map(counts.map(c => [c.item_type_id, c._count._all]));
+  return types.map(type => itemTypeRow(type, countById.get(type.id) || 0));
+}
 
 async function listItemRates(db = prisma) {
   // Pick up items from order lines first, so new ones appear for review.
-  const lines = await db.order_products.groupBy({ by: ['odoo_product_name'], where: { odoo_product_name: { not: null } } });
-  await ensureItemRates(lines.map(line => line.odoo_product_name), db);
-  const rows = await db.item_point_rates.findMany({ orderBy: { item_name: 'asc' } });
-  return { pending_review: rows.filter(row => row.needs_review).length, items: rows.map(itemRow) };
+  await pickUpOrderItems(db);
+  await refreshSuggestions(db);
+  const [rows, itemTypes] = await Promise.all([
+    db.item_point_rates.findMany({
+      orderBy: { item_name: 'asc' },
+      include: { item_type: { select: ITEM_TYPE_SELECT }, suggested_item_type: { select: { id: true, name: true, active: true } } },
+    }),
+    listItemTypes(db),
+  ]);
+  const items = rows.map(itemRow);
+  return { pending_review: items.filter(item => item.needs_review).length, items, item_types: itemTypes };
 }
 
-// Header badge: how many items still need an admin to set points. New items are
+// Header badge: how many items still need an admin to classify. New items are
 // picked up from order lines here too, but at most once a minute, so a busy
 // header poll never rescans order_products.
 const PENDING_SYNC_MS = 60000;
@@ -319,49 +371,137 @@ async function countPendingItems(db = prisma, now = Date.now()) {
   if (now - lastItemSync >= PENDING_SYNC_MS) {
     lastItemSync = now;
     try {
-      const lines = await db.order_products.groupBy({ by: ['odoo_product_name'], where: { odoo_product_name: { not: null } } });
-      await ensureItemRates(lines.map(line => line.odoo_product_name), db);
+      await pickUpOrderItems(db);
     } catch (error) {
       lastItemSync = 0; // retry on the next poll
       throw error;
     }
   }
-  return { pending_review: await db.item_point_rates.count({ where: { needs_review: true } }) };
+  return { pending_review: await db.item_point_rates.count({ where: { item_type_id: null } }) };
 }
 
-function duplicateItem(error) {
-  return error.code === 'P2002' ? httpError(409, 'ITEM_EXISTS', 'An item with this name already exists.') : error;
+async function findItem(id, db) {
+  if (!isUuid(id)) throw httpError(400, 'INVALID_ITEM', 'Invalid item id.');
+  const row = await db.item_point_rates.findUnique({ where: { id } });
+  if (!row) throw httpError(404, 'ITEM_NOT_FOUND', 'Item not found.');
+  return row;
 }
 
-async function createItem(input, adminId, db = prisma) {
-  const data = itemInput(input);
-  try {
-    return itemRow(await db.item_point_rates.create({ data: { ...data, needs_review: false, updated_by: adminId || null } }));
-  } catch (error) {
-    throw duplicateItem(error);
-  }
+async function findItemType(id, db) {
+  if (!isUuid(id)) throw httpError(400, 'INVALID_ITEM_TYPE', 'Invalid item type id.');
+  const type = await db.item_types.findUnique({ where: { id } });
+  if (!type) throw httpError(404, 'ITEM_TYPE_NOT_FOUND', 'Item type not found.');
+  return type;
 }
 
+async function itemById(id, db) {
+  return itemRow(await db.item_point_rates.findUnique({
+    where: { id },
+    include: { item_type: { select: ITEM_TYPE_SELECT }, suggested_item_type: { select: { id: true, name: true, active: true } } },
+  }));
+}
+
+/**
+ * Change a product's item type, points and/or own times.
+ * Body: { item_type_id?, points_per_item?, install_minutes?, dismantle_minutes? }.
+ * A new type must be active. Points and times can only be set on a classified
+ * product; a time of null (or blank) goes back to following the type.
+ */
 async function updateItem(id, input, adminId, db = prisma) {
-  if (!isUuid(id)) throw httpError(400, 'INVALID_ITEM', 'Invalid item id.');
-  const data = itemInput(input);
-  try {
-    return itemRow(await db.item_point_rates.update({ where: { id }, data: { ...data, needs_review: false, updated_by: adminId || null } }));
-  } catch (error) {
-    if (error.code === 'P2025') throw httpError(404, 'ITEM_NOT_FOUND', 'Item not found.');
-    throw duplicateItem(error);
+  const row = await findItem(id, db);
+  const has = key => Object.prototype.hasOwnProperty.call(input ?? {}, key);
+  const data = {};
+
+  let typeId = row.item_type_id;
+  if (has('item_type_id') && input.item_type_id !== row.item_type_id) {
+    const type = await findItemType(input.item_type_id, db);
+    if (!type.active) throw httpError(409, 'ITEM_TYPE_INACTIVE', `"${type.name}" is inactive. Reactivate it in Manage item types first.`);
+    typeId = type.id;
+    Object.assign(data, {
+      item_type_id: type.id, suggested_item_type_id: null, classification_source: 'admin',
+      install_minutes: null, dismantle_minutes: null,
+    });
+    if (!has('points_per_item') && !(row.points_per_item > 0)) data.points_per_item = type.default_points;
   }
+  if (has('points_per_item')) {
+    if (!typeId) throw httpError(409, 'ITEM_NOT_CLASSIFIED', 'Choose an item type before setting points.');
+    data.points_per_item = pointsField(input.points_per_item);
+  }
+  for (const [key, label] of [['install_minutes', 'Install time'], ['dismantle_minutes', 'Dismantle time']]) {
+    if (!has(key)) continue;
+    if (!typeId) throw httpError(409, 'ITEM_NOT_CLASSIFIED', 'Choose an item type before setting times.');
+    data[key] = minutesField(input[key], label);
+  }
+  if (!Object.keys(data).length) return itemById(id, db);
+  await db.item_point_rates.update({ where: { id }, data: { ...data, updated_by: adminId || null } });
+  return itemById(id, db);
 }
 
-async function deleteItem(id, db = prisma) {
-  if (!isUuid(id)) throw httpError(400, 'INVALID_ITEM', 'Invalid item id.');
-  const result = await db.item_point_rates.deleteMany({ where: { id } });
-  if (!result.count) throw httpError(404, 'ITEM_NOT_FOUND', 'Item not found.');
-  return { deleted: true };
+/**
+ * Accept keyword suggestions: the given ids, or every unclassified product
+ * with a suggestion. Points are filled from the type's default where the
+ * product has none yet.
+ */
+async function acceptSuggestions(ids, adminId, db = prisma) {
+  if (ids !== undefined && (!Array.isArray(ids) || !ids.every(isUuid))) throw httpError(400, 'INVALID_ITEM', 'ids must be a list of item ids.');
+  const rows = await db.item_point_rates.findMany({
+    where: { item_type_id: null, suggested_item_type_id: { not: null }, ...(ids && { id: { in: ids } }) },
+    include: { suggested_item_type: true },
+  });
+  let accepted = 0;
+  for (const row of rows) {
+    const type = row.suggested_item_type;
+    if (!type?.active) continue;
+    const result = await db.item_point_rates.updateMany({
+      where: { id: row.id, item_type_id: null },
+      data: {
+        item_type_id: type.id,
+        suggested_item_type_id: null,
+        classification_source: 'suggestion',
+        ...(!(row.points_per_item > 0) && { points_per_item: type.default_points }),
+        updated_by: adminId || null,
+      },
+    });
+    accepted += result.count;
+  }
+  return { accepted };
+}
+
+function duplicateItemType(error) {
+  return error.code === 'P2002' ? httpError(409, 'ITEM_TYPE_EXISTS', 'An item type with this name already exists.') : error;
+}
+
+async function createItemType(input, adminId, db = prisma) {
+  const data = itemTypeInput(input);
+  delete data.active;
+  let type;
+  try {
+    type = await db.item_types.create({ data: { ...data, updated_by: adminId || null } });
+  } catch (error) {
+    throw duplicateItemType(error);
+  }
+  await refreshSuggestions(db);
+  return itemTypeRow(type);
+}
+
+/** Edit, deactivate ({active:false}) or reactivate. Assigned products keep their type. */
+async function updateItemType(id, input, adminId, db = prisma) {
+  await findItemType(id, db);
+  const data = itemTypeInput(input, { partial: true });
+  let type;
+  try {
+    type = await db.item_types.update({ where: { id }, data: { ...data, updated_by: adminId || null } });
+  } catch (error) {
+    throw duplicateItemType(error);
+  }
+  if ('keywords' in data || 'active' in data) await refreshSuggestions(db);
+  const productCount = await db.item_point_rates.count({ where: { item_type_id: id } });
+  return itemTypeRow(type, productCount);
 }
 
 module.exports = {
   ROLES, estimateUnawarded, resetItemSyncThrottle: () => { lastItemSync = 0; }, parseRange, adjustmentTotals, orderPointsFor, rankRows,
   getRanking, getEmployeePerformance, getOrderPoints,
-  setExtraPoints, getRules, createRule, listItemRates, countPendingItems, createItem, updateItem, deleteItem,
+  setExtraPoints, getRules, createRule, listItemRates, countPendingItems, updateItem, acceptSuggestions,
+  listItemTypes, createItemType, updateItemType, refreshSuggestions,
 };

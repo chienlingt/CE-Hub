@@ -440,16 +440,25 @@ model scheduler_config {
   planning_run_offset_minutes Int       @default(60)
   base_delivery_minutes       Int       @default(15)
   fallback_install_minutes    Int       @default(0)
-  service_time_catalogue      Json      @default("[]")
+  nearby_km                   Int       @default(10)
   updated_by                  String?   @db.Uuid
 }
 
-// Dated unavailability for a truck or team (leave, MC, events, maintenance).
-// Polymorphic on resource_type, so no foreign key; the route checks the id exists.
+// Dated unavailability (public holidays, events, leave, MC, maintenance).
+// resource_type: fleet (every truck and team), truck_type (every truck whose
+// tonnage key is scope_value: "1", "3", "unknown"), truck, team or employee
+// (resource_id; an employee row is one staff member's leave or MC).
+// Fleet and truck_type rows are matched when checked, so trucks and teams added
+// later are covered. Polymorphic, so no foreign key; the route checks ids exist.
+// Rows saved in one submission share group_id. Rules: services/fleetAvailabilitySpec.js.
 model resource_blockoffs {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  resource_type String   @db.VarChar(10)
-  resource_id   String   @db.Uuid
+  resource_type String   @db.VarChar(12)
+  resource_id   String?  @db.Uuid
+  scope_value   String?  @db.VarChar(20)
+  // Any of morning, afternoon, evening (odooAppointmentSessions.js); all three = full day.
+  sessions      String[] @default(["morning", "afternoon", "evening"])
+  group_id      String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   start_date    DateTime @db.Date
   end_date      DateTime @db.Date
   reason        String   @db.VarChar(20)
@@ -459,6 +468,7 @@ model resource_blockoffs {
 
   @@index([resource_type, resource_id, start_date])
   @@index([start_date, end_date])
+  @@index([group_id])
 }
 
 model complaint {
@@ -668,8 +678,77 @@ model item_point_rates {
   item_key        String   @unique @db.VarChar(255)
   item_name       String   @db.VarChar(255)
   points_per_item Float
-  // True for items found on order lines and not yet set by an admin (0 points).
-  needs_review    Boolean  @default(false)
-  updated_by      String?  @db.Uuid
-  updated_at      DateTime @default(now()) @updatedAt
+  // Unclassified (item_type_id null) = needs admin review: the scheduler uses
+  // the fallback install time and a new item earns 0 points until classified.
+  item_type_id           String?     @db.Uuid
+  // Keyword match waiting for an admin to accept it. Never used for timing.
+  suggested_item_type_id String?     @db.Uuid
+  // This product's own times. null = follow the item type (then the fallback).
+  install_minutes        Int?
+  dismantle_minutes      Int?
+  // How item_type_id was set: admin | suggestion | odoo (reserved for the GCA push).
+  classification_source  String?     @db.VarChar(20)
+  updated_by             String?     @db.Uuid
+  updated_at             DateTime    @default(now()) @updatedAt
+  item_type              item_types? @relation("item_type_assigned", fields: [item_type_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  suggested_item_type    item_types? @relation("item_type_suggested", fields: [suggested_item_type_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+}
+
+// Item types (Information > Item > Manage item types). Service time for the
+// scheduler: base delivery (scheduler_config) + install + dismantle per unit.
+// Each size is its own type. Rules: services/itemTypeSpec.js.
+model item_types {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String             @unique @db.VarChar(80)
+  // null = not confirmed yet; scheduler_config.fallback_install_minutes is used.
+  install_minutes    Int?
+  // Only counted on order lines with dismantle_required.
+  dismantle_minutes  Int?
+  requires_installer Boolean            @default(false)
+  // Copied into a product's points when it is given this type and has none yet.
+  default_points     Float              @default(0)
+  // Each keyword is a set of words that must all appear in the product name.
+  keywords           String[]           @default([])
+  // Inactive: hidden from the picker and suggestions; assigned products keep it.
+  active             Boolean            @default(true)
+  updated_by         String?            @db.Uuid
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @default(now()) @updatedAt
+  items              item_point_rates[] @relation("item_type_assigned")
+  suggested_items    item_point_rates[] @relation("item_type_suggested")
+}
+
+// B.1 planning run (fixed assignment at the cutoff): one row per run.
+// services/planningService.js; plan ~/.claude/plans/b1-planning-run.md.
+model planning_runs {
+  id          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  plan_date   String                   @db.VarChar(10)
+  trigger     String                   @db.VarChar(10) // cron | manual
+  dry_run     Boolean                  @default(false)
+  status      String                   @db.VarChar(10) // running | completed | failed
+  summary     Json?
+  error       String?
+  created_by  String?                  @db.Uuid
+  started_at  DateTime                 @default(now()) @db.Timestamp(6)
+  finished_at DateTime?                @db.Timestamp(6)
+  deferrals   planning_run_deferrals[]
+
+  @@index([plan_date, started_at])
+}
+
+// A booked DO the run could not place, why, and a suggested alternative.
+model planning_run_deferrals {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id            String        @db.Uuid
+  order_id          String        @db.Uuid
+  session           String        @db.VarChar(10)
+  reason_code       String        @db.VarChar(30)
+  reason_detail     String?       @db.VarChar(300)
+  suggested_date    String?       @db.VarChar(10)
+  suggested_session String?       @db.VarChar(10)
+  created_at        DateTime      @default(now()) @db.Timestamp(6)
+  run               planning_runs @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@index([run_id])
+  @@index([order_id])
 }

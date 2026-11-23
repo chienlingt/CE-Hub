@@ -276,7 +276,7 @@ export default function ManageOrders() {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${assigningOrder.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...adminSessionHeaders() },
         body: JSON.stringify({ time_slot_id: selectedTimeslot })
       });
 

@@ -6,6 +6,7 @@
 
 const prisma = require('../prismaClient');
 const { APPOINTMENT_SESSIONS, sessionForWindow } = require('./odooAppointmentSessions');
+const { fleetClosed } = require('./fleetAvailabilitySpec');
 
 const DEFAULT_DAYS = 30;
 const MAX_DAYS = 90;
@@ -59,7 +60,12 @@ function closedSessions(slots) {
   return new Set([...seen].filter(key => !open.has(key)));
 }
 
-function buildAvailability({ now, days = DEFAULT_DAYS, slots = [] }) {
+/**
+ * A session is unavailable when its slots are all closed, or when block-offs
+ * (B.4 Fleet Availability) leave no truck free. Only that yes/no leaves this
+ * module: no counts or reasons (FRD v1.2 §12).
+ */
+function buildAvailability({ now, days = DEFAULT_DAYS, slots = [], trucks = [], blockoffs = [] }) {
   const { first, last } = dateRange(now, days);
   const closed = closedSessions(slots);
   const dates = [];
@@ -70,7 +76,7 @@ function buildAvailability({ now, days = DEFAULT_DAYS, slots = [] }) {
         session,
         start,
         end,
-        available: !closed.has(`${date}|${session}`),
+        available: !closed.has(`${date}|${session}`) && !fleetClosed(trucks, date, session, blockoffs),
       })),
     });
   }
@@ -84,11 +90,17 @@ function buildAvailability({ now, days = DEFAULT_DAYS, slots = [] }) {
 
 async function getAvailability({ days = DEFAULT_DAYS, now = new Date() } = {}) {
   const { first, last } = dateRange(now, days);
-  const slots = await prisma.time_slots.findMany({
-    where: { date: { gte: first, lte: last } },
-    select: { date: true, time_window_start: true, available_flag: true, slot_status: true },
-  });
-  return buildAvailability({ now, days, slots });
+  const [slots, trucks, blockoffs] = await Promise.all([
+    prisma.time_slots.findMany({
+      where: { date: { gte: first, lte: last } },
+      select: { date: true, time_window_start: true, available_flag: true, slot_status: true },
+    }),
+    prisma.trucks.findMany({ select: { id: true, tone: true } }),
+    prisma.resource_blockoffs.findMany({
+      where: { start_date: { lte: new Date(`${last}T00:00:00Z`) }, end_date: { gte: new Date(`${first}T00:00:00Z`) } },
+    }),
+  ]);
+  return buildAvailability({ now, days, slots, trucks, blockoffs });
 }
 
 module.exports = { DEFAULT_DAYS, MAX_DAYS, dateRange, parseDays, closedSessions, buildAvailability, getAvailability };

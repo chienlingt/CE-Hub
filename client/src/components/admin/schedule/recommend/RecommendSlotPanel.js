@@ -1,29 +1,63 @@
-import React, { useState } from 'react';
-import { Info } from 'lucide-react';
+import React, { useEffect, useId, useState } from 'react';
+import { Info, Plus, X } from 'lucide-react';
 import SlideOver from '../../../common/SlideOver';
 import Button from '../../../common/Button';
 import RecommendationCard from './RecommendationCard';
+import AddressCombobox, { EMPTY_ADDRESS } from './AddressCombobox';
 import { FOCUS_RING } from '../../../common/tokens';
 
-const FIELD = `w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 ${FOCUS_RING}`;
+const BOX = `rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 ${FOCUS_RING}`;
+const FIELD = `w-full ${BOX}`;
+const MAX_LINES = 20;
+const emptyLine = () => ({ name: '', quantity: 1, dismantle: false });
 
 /**
- * Slide-over form for "Find a slot". Inputs: delivery address, installation,
- * optional not-before date (CE Hub has no item master data). Nothing is saved.
+ * Slide-over form for "Find a slot". Inputs: delivery address, the items
+ * (product name + quantity, optional dismantle of an old unit) and an optional
+ * not-before date. Nothing is saved.
  *
- * `onRecommend(input)` should resolve to `{ options, notCounted }` or
- * `{ options: [], reasons }`. Until the gateway method exists it is omitted and
- * the panel says so.
+ * `onRecommend({ address, buildingId, location, items, notBefore })` resolves to
+ * `{ options, reasons, notes, addressMatched, building, job, notCounted }`.
+ * `loadItems()` resolves to the Information > Item list
+ * (`[{ name, itemType, requiresInstaller }]`) for the product-name suggestions.
+ * `searchAddresses(query)` and `checkAddress(text)` feed the address box
+ * (CE Hub suggestions, then a Google check); see AddressCombobox.
  */
-export default function RecommendSlotPanel({ open, onClose, bands, onRecommend, onShowOnBoard }) {
-  const [address, setAddress] = useState('');
-  const [sizeKey, setSizeKey] = useState('');
-  const [installation, setInstallation] = useState(false);
+export default function RecommendSlotPanel({
+  open, onClose, loadItems, searchAddresses, checkAddress, onRecommend, onShowOnBoard,
+}) {
+  const listId = useId();
+  const [items, setItems] = useState(null); // null = not loaded yet
+  const [itemsError, setItemsError] = useState(null);
+
+  useEffect(() => {
+    if (!open || items !== null || !loadItems) return undefined;
+    let cancelled = false;
+    loadItems()
+      .then(list => { if (!cancelled) { setItems(list); setItemsError(null); } })
+      .catch(err => { if (!cancelled) setItemsError(err?.message || 'Could not load the item list.'); });
+    return () => { cancelled = true; };
+  }, [open, items, loadItems]);
+
+  const known = new Set((items ?? []).map(i => i.name.toLowerCase()));
+  const [address, setAddress] = useState(EMPTY_ADDRESS);
+  const [lines, setLines] = useState([emptyLine()]);
   const [notBefore, setNotBefore] = useState('');
   const [status, setStatus] = useState('idle'); // idle | loading | done | error
   const [result, setResult] = useState(null);
 
-  const canSubmit = address.trim().length > 0 && Boolean(sizeKey) && status !== 'loading';
+  const filled = lines.filter(l => l.name.trim());
+  const canSubmit = address.text.trim().length > 0 && filled.length > 0 && status !== 'loading';
+
+  const reset = () => { setStatus('idle'); setResult(null); };
+  const updateLine = (index, patch) => {
+    setLines(prev => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
+    reset();
+  };
+  const removeLine = index => {
+    setLines(prev => (prev.length === 1 ? [emptyLine()] : prev.filter((_, i) => i !== index)));
+    reset();
+  };
 
   const submit = async event => {
     event.preventDefault();
@@ -32,9 +66,10 @@ export default function RecommendSlotPanel({ open, onClose, bands, onRecommend, 
     setStatus('loading');
     try {
       const res = await onRecommend({
-        address: address.trim(),
-        sizeBand: sizeKey,
-        installation,
+        address: address.text.trim(),
+        buildingId: address.buildingId,
+        location: address.location,
+        items: filled.map(l => ({ name: l.name.trim(), quantity: l.quantity, dismantle: l.dismantle })),
         notBefore: notBefore || null,
       });
       setResult(res);
@@ -44,8 +79,6 @@ export default function RecommendSlotPanel({ open, onClose, bands, onRecommend, 
       setStatus('error');
     }
   };
-
-  const reset = () => { setStatus('idle'); setResult(null); };
 
   return (
     <SlideOver
@@ -66,47 +99,82 @@ export default function RecommendSlotPanel({ open, onClose, bands, onRecommend, 
       <form id="recommend-slot-form" onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor="rec-address" className="mb-1 block text-xs font-medium text-gray-700">Delivery address</label>
-          <textarea
-            id="rec-address" rows={3} className={FIELD}
-            placeholder="e.g. 12 Jln Kiara 1, Bukit Jalil, Kuala Lumpur"
+          <AddressCombobox
+            id="rec-address"
             value={address}
-            onChange={e => { setAddress(e.target.value); reset(); }}
+            search={searchAddresses}
+            check={checkAddress}
+            onChange={next => { setAddress(next); reset(); }}
           />
         </div>
 
         <fieldset>
-          <legend className="mb-1 text-xs font-medium text-gray-700">Order size</legend>
-          <div className="grid grid-cols-3 gap-2">
-            {bands.map(b => (
-              <label
-                key={b.key}
-                className={[
-                  'flex cursor-pointer flex-col rounded-md border p-2 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500',
-                  sizeKey === b.key ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50',
-                ].join(' ')}
-              >
-                <input
-                  type="radio" name="rec-size" value={b.key} className="sr-only"
-                  checked={sizeKey === b.key}
-                  onChange={() => { setSizeKey(b.key); reset(); }}
-                />
-                <span className="font-medium">{b.label}</span>
-                <span className="mt-0.5 text-[11px] leading-tight text-gray-500">{b.hint}</span>
-              </label>
+          <legend className="mb-1 text-xs font-medium text-gray-700">Items</legend>
+          <datalist id={listId}>
+            {(items ?? []).map(i => (
+              <option key={i.name} value={i.name}>
+                {[i.itemType ?? 'Unclassified', i.requiresInstaller ? 'installer' : null].filter(Boolean).join(' · ')}
+              </option>
             ))}
-          </div>
-          <p className="mt-1 text-[11px] text-gray-500">Approximate — there is no item master data to measure from.</p>
+          </datalist>
+          <ul className="space-y-2">
+            {lines.map((line, i) => (
+              <li key={i} className="rounded-md border border-gray-200 p-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    aria-label={`Item ${i + 1} product name`}
+                    list={listId}
+                    className={`${BOX} min-w-0 flex-1`}
+                    placeholder="Product name"
+                    value={line.name}
+                    onChange={e => updateLine(i, { name: e.target.value })}
+                  />
+                  <input
+                    aria-label={`Item ${i + 1} quantity`}
+                    type="number" min={1} max={99}
+                    className={`${BOX} w-16 shrink-0`}
+                    value={line.quantity}
+                    onChange={e => updateLine(i, { quantity: Math.min(99, Math.max(1, Number(e.target.value) || 1)) })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeLine(i)}
+                    aria-label={`Remove item ${i + 1}`}
+                    className={`rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 ${FOCUS_RING}`}
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+                <label className="mt-1.5 flex items-center gap-2 text-xs text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={line.dismantle}
+                    onChange={e => updateLine(i, { dismantle: e.target.checked })}
+                    className={`h-3.5 w-3.5 rounded border-gray-300 ${FOCUS_RING}`}
+                  />
+                  Dismantle the old unit
+                </label>
+                {items && line.name.trim() && !known.has(line.name.trim().toLowerCase()) && (
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    Not on Information &gt; Item, so the fallback install time is used.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+          {lines.length < MAX_LINES && (
+            <Button
+              type="button" variant="ghost" size="sm" icon={Plus} className="mt-1"
+              onClick={() => { setLines(prev => [...prev, emptyLine()]); reset(); }}
+            >
+              Add item
+            </Button>
+          )}
+          <p className="mt-1 text-[11px] text-gray-500">
+            Suggestions are the products on Information &gt; Item; their item types set install time and installer need.
+          </p>
+          {itemsError && <p className="mt-1 text-[11px] text-amber-700">{itemsError}</p>}
         </fieldset>
-
-        <label className="flex items-center gap-2 text-sm text-gray-800">
-          <input
-            type="checkbox"
-            checked={installation}
-            onChange={e => { setInstallation(e.target.checked); reset(); }}
-            className={`h-4 w-4 rounded border-gray-300 ${FOCUS_RING}`}
-          />
-          Installation needed
-        </label>
 
         <div>
           <label htmlFor="rec-not-before" className="mb-1 block text-xs font-medium text-gray-700">
@@ -123,35 +191,48 @@ export default function RecommendSlotPanel({ open, onClose, bands, onRecommend, 
             {result?.message}
           </p>
         )}
-        {status === 'done' && result && (result.options?.length ? (
+        {status === 'done' && result && (
           <>
-            <ul className="space-y-2">
-              {result.options.map((option, i) => (
-                <RecommendationCard key={option.key ?? i} option={option} rank={i + 1} onShowOnBoard={onShowOnBoard} />
-              ))}
-            </ul>
-            <p className="mt-2 text-[11px] text-amber-700">
-              Size is approximate — confirm with the warehouse before promising a date.
-            </p>
+            {result.job && (
+              <p className="mb-2 text-xs text-gray-700">
+                Estimated visit <strong className="font-semibold">{result.job.serviceMinutes} min</strong>
+                {result.job.requiresInstaller ? ' · needs an installer team' : ''}
+              </p>
+            )}
+            {result.options?.length ? (
+              <ul className="space-y-2">
+                {result.options.map((option, i) => (
+                  <RecommendationCard key={option.key ?? i} option={option} rank={i + 1} onShowOnBoard={onShowOnBoard} />
+                ))}
+              </ul>
+            ) : (
+              <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                <p className="text-sm font-medium text-gray-900">No slot found in the next 14 days</p>
+                {result.reasons?.length > 0 && (
+                  <ul className="mt-1 list-disc pl-4 text-xs text-gray-600">
+                    {result.reasons.map(r => <li key={r}>{r}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+            {result.locatedAs && (
+              <p className="mt-2 text-[11px] text-gray-500">Located as: {result.locatedAs}</p>
+            )}
             <p className="mt-1 text-[11px] text-gray-500">
               {result.addressMatched
-                ? `Matched to ${result.building}; its access window was checked.`
-                : 'Address not matched to a known building — access window not checked.'}
+                ? `Matched to ${result.building}; its access hours were checked.`
+                : 'Address not matched to a known building — access hours not checked.'}
             </p>
-            {result.notCounted > 0 && (
-              <p className="mt-2 text-[11px] text-gray-500">{result.notCounted} unscheduled DOs not counted.</p>
-            )}
-          </>
-        ) : (
-          <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-            <p className="text-sm font-medium text-gray-900">No slot found in the next 14 days</p>
-            {result.reasons?.length > 0 && (
-              <ul className="mt-1 list-disc pl-4 text-xs text-gray-600">
-                {result.reasons.map(r => <li key={r}>{r}</li>)}
+            {result.notes?.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-[11px] text-amber-700">
+                {result.notes.map(n => <li key={n}>{n}</li>)}
               </ul>
             )}
-          </div>
-        ))}
+            {result.notCounted > 0 && (
+              <p className="mt-1 text-[11px] text-gray-500">{result.notCounted} unscheduled DOs not counted.</p>
+            )}
+          </>
+        )}
       </div>
     </SlideOver>
   );

@@ -19,7 +19,7 @@ import { assertGateway } from './scheduleGateway';
 import { normalizeSnapshot, normalizeSlot } from '../../utils/schedule/scheduleNormalize';
 import { buildWorkingRange } from '../../utils/schedule/weekRange';
 import {
-  configFromServer, patchToServer, fieldErrorsFromServer, blockoffToServer, blockoffFromServer,
+  configFromServer, patchToServer, fieldErrorsFromServer,
 } from '../../utils/schedule/schedulerConfigMapping';
 import { todayLocalDateKey } from '../../utils/dateKey';
 
@@ -65,6 +65,31 @@ function requestError(status, data, fallback) {
   err.code = data?.code ?? null;
   if (data?.errors) err.fieldErrors = fieldErrorsFromServer(data.errors);
   return err;
+}
+
+// Server session -> the Board's window id (utils/schedule/slotWindows.js).
+const SESSION_WINDOW = { morning: 'am', afternoon: 'pm', evening: 'night' };
+
+/** POST /api/scheduler/recommend body -> the shape RecommendSlotPanel reads. */
+export function recommendationFromServer(data = {}) {
+  return {
+    options: (data.options ?? []).map(o => ({
+      key: o.key,
+      dateKey: o.date,
+      windowId: SESSION_WINDOW[o.session] ?? null,
+      label: o.label,
+      reason: o.reason,
+    })),
+    reasons: (data.reasons ?? []).map(r => `${r.label} — ruled out ${r.count} of ${r.of} sessions`),
+    notes: data.notes ?? [],
+    addressMatched: Boolean(data.building),
+    building: data.building?.name ?? null,
+    locatedAs: data.located_as ?? null,
+    job: data.job
+      ? { serviceMinutes: data.job.service_minutes, requiresInstaller: Boolean(data.job.requires_installer) }
+      : null,
+    notCounted: 0,
+  };
 }
 
 const unwrap = (result) => (Array.isArray(result) ? result : (result?.data ?? []));
@@ -156,19 +181,6 @@ export const liveScheduleGateway = {
     return liveScheduleGateway.loadConfig();
   },
 
-  async addBlockoff(blockoff) {
-    const { ok, status, data } = await rawRequest('scheduler/blockoffs', {
-      method: 'POST', body: blockoffToServer(blockoff),
-    });
-    if (!ok) throw requestError(status, data, 'Could not save the block-off.');
-    return blockoffFromServer(data.blockoff);
-  },
-
-  async removeBlockoff(id) {
-    const { ok, status, data } = await rawRequest(`scheduler/blockoffs/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!ok) throw requestError(status, data, 'Could not remove the block-off.');
-  },
-
   async commitMoves(moves = []) {
     const applied = [];
     const rejected = [];
@@ -242,10 +254,55 @@ export const liveScheduleGateway = {
     return normalizeSlot(data);
   },
 
-  // Needs an engine endpoint that does not exist yet; fail specifically rather
-  // than recommend from a partial client-side view of the live schedule.
-  async recommendSlots() {
-    throw new Error('Slot recommendation is not available on live data yet — it needs an engine endpoint.');
+  // Information > Item names for the Find a slot picker (admin session).
+  async listRecommendItems() {
+    const { ok, status, data } = await rawRequest('scheduler/recommend/items');
+    if (!ok) {
+      if (status === 401 || status === 403) throw new Error('Finding a slot needs an Admin login; sign in again as an Admin.');
+      throw new Error(data?.details || data?.error || 'Could not load items.');
+    }
+    return (data.items ?? []).map(i => ({ name: i.name, itemType: i.item_type, requiresInstaller: i.requires_installer }));
+  },
+
+  // Find a slot address box, step 1: CE Hub buildings and past delivery addresses.
+  async searchAddresses(query) {
+    const { ok, data } = await rawRequest(`scheduler/recommend/addresses?${new URLSearchParams({ q: query })}`);
+    if (!ok) throw new Error(data?.error || 'Address suggestions failed.');
+    return (data.suggestions ?? []).map(s => ({
+      key: s.key,
+      kind: s.kind,
+      text: s.text,
+      mainText: s.main_text,
+      secondaryText: s.secondary_text,
+      buildingId: s.building_id ?? null,
+      location: s.location ?? null,
+    }));
+  },
+
+  // Step 2, "Check address": Google Geocoding matches for the user to confirm.
+  async checkAddress(address) {
+    const { ok, status, data } = await rawRequest('scheduler/recommend/check-address', { method: 'POST', body: { address } });
+    if (!ok) {
+      if (status === 401 || status === 403) throw new Error('Checking an address needs an Admin login; sign in again as an Admin.');
+      throw new Error(data?.error || 'Address check failed.');
+    }
+    return (data.candidates ?? []).map(c => ({
+      formattedAddress: c.formatted_address, lat: c.lat, lon: c.lon, precise: c.precise, confirmable: c.confirmable,
+    }));
+  },
+
+  // B.1 Part 1 on the server (POST /api/scheduler/recommend, admin session).
+  async recommendSlots({ address, buildingId = null, location = null, items = [], notBefore = null } = {}) {
+    const { ok, status, data } = await rawRequest('scheduler/recommend', {
+      method: 'POST',
+      body: { address, building_id: buildingId, location, items, not_before: notBefore || null },
+    });
+    if (!ok) {
+      if (status === 401 || status === 403) throw new Error('Finding a slot needs an Admin login; sign in again as an Admin.');
+      const fieldMsg = data?.errors ? Object.entries(data.errors).map(([k, v]) => `${k} ${v}`).join('; ') : null;
+      throw new Error(fieldMsg || data?.details || data?.error || 'Could not get a recommendation.');
+    }
+    return recommendationFromServer(data);
   },
 
   async approveOrders(orderIds = []) {

@@ -83,7 +83,8 @@ async function sendDeliveryFailureNotifications(orderId) {
     }
   }
 
-  // Customer failure WhatsApp is requested through ORDER_FAILED -> Odoo.
+  // The customer's Failed Delivery WhatsApp is sent manually from Odoo (FRD INT-13)
+  // using the failure data ORDER_FAILED delivers.
   // Keep internal admin/salesperson notifications, but never duplicate the
   // customer message using CE Hub's WhatsApp provider.
 

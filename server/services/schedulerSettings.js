@@ -3,10 +3,11 @@
 // The one place B.1 settings are read and written. The new scheduling engine
 // should call getSchedulerSettings() rather than reading scheduler_config or
 // keeping its own constants. Rules and defaults live in schedulerSettingsSpec.js.
+// Item types (install/dismantle per product) live in item_types; per-order
+// service time is services/serviceTime.js.
 
 const prisma = require('../prismaClient');
 const {
-  DEFAULT_SERVICE_TIME_CATALOGUE,
   DEFAULT_WAREHOUSE,
   slotWindows,
   cronFromCutoff,
@@ -34,7 +35,6 @@ async function getSettingsRow() {
       warehouse_address: DEFAULT_WAREHOUSE.address,
       warehouse_postal: DEFAULT_WAREHOUSE.postal,
       cron_expression: cronFromCutoff(),
-      service_time_catalogue: DEFAULT_SERVICE_TIME_CATALOGUE,
     },
   });
 }

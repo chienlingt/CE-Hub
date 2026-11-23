@@ -135,18 +135,6 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
       return config;
     },
 
-    addBlockoff: async (blockoff) => {
-      await gateway.addBlockoff(blockoff);
-      const config = await gateway.loadConfig();
-      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
-    },
-
-    removeBlockoff: async (id) => {
-      await gateway.removeBlockoff(id);
-      const config = await gateway.loadConfig();
-      dispatch({ type: ACTIONS.PATCH_CONFIG, payload: config });
-    },
-
     runAutoSchedule: async () => {
       const result = await gateway.runAutoSchedule();
       dispatch({ type: ACTIONS.APPLY_AUTO_RUN, payload: result });
@@ -163,6 +151,9 @@ export function ScheduleProvider({ children, anchorDateKey = null }) {
 
     /** Advisory only: asks the gateway, touches no state. */
     recommendSlots: (input) => gateway.recommendSlots(input),
+    listRecommendItems: () => gateway.listRecommendItems(),
+    searchAddresses: (query) => gateway.searchAddresses(query),
+    checkAddress: (address) => gateway.checkAddress(address),
 
     approveOrders: async (orderIds) => {
       const result = await gateway.approveOrders(orderIds);

@@ -4,19 +4,22 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const { scheduleOrders } = require('../services/scheduler');
 const { getSchedulerSettings, getSettingsView, updateSchedulerSettings, SettingsValidationError } = require('../services/schedulerSettings');
-const { validateBlockoff } = require('../services/schedulerSettingsSpec');
+const { rowToApi, klDateSession, teamBlock } = require('../services/fleetAvailabilitySpec');
+const { loadTeams } = require('../services/fleetAvailabilityService');
 const { geocodeAddress } = require('../services/googleRoutingService');
 const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 const { updateSchedulerCron } = require('../schedulerCron');
+const { validateRequest: validateRecommendRequest } = require('../services/slotRecommendSpec');
+const { recommendSlots } = require('../services/slotRecommendService');
+const { suggestAddresses, geocodeCandidates } = require('../services/addressLookupService');
+const { runPlanning, listRuns, PlanningError } = require('../services/planningService');
 
-const dateKey = d => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
-const blockoffToApi = row => ({ ...row, start_date: dateKey(row.start_date), end_date: dateKey(row.end_date) });
 
 /**
  * POST /api/scheduler/run
  * Manually trigger the scheduler
  */
-router.post('/run', async (req, res) => {
+router.post('/run', requireReviewAdmin, async (req, res) => {
   try {
     console.log('Manual scheduler run triggered via API');
 
@@ -94,8 +97,134 @@ router.put('/config', requireReviewAdmin, async (req, res) => {
 });
 
 /**
- * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=truck|team
- * Truck/team unavailability overlapping the range (all when no range given).
+ * POST /api/scheduler/recommend
+ * B.1 Part 1: which date + session could take a new DO. Advisory; books nothing.
+ * Body: { address, items: [{ name, quantity, dismantle? }], not_before?, days? }
+ * Admin session only (it calls Google per request).
+ */
+/**
+ * POST /api/scheduler/plan  { date: 'YYYY-MM-DD', dry_run?: boolean }
+ * B.1 Part 2 planning run for one date: packs booked DOs into team trips
+ * ('assigned', admin approves), asks B.2 to sequence them and records DOs that
+ * could not be placed, with a reason and a suggested alternative.
+ * dry_run previews the packing only (nothing written, travel estimated).
+ */
+router.post('/plan', requireReviewAdmin, async (req, res) => {
+  const date = typeof req.body?.date === 'string' ? req.body.date : '';
+  const dryRun = req.body?.dry_run === true;
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10); // KL
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD', code: 'INVALID_REQUEST' });
+  }
+  if (date < today) {
+    return res.status(400).json({ success: false, error: 'Cannot plan a past date', code: 'PAST_DATE' });
+  }
+  try {
+    const result = await runPlanning({ date, dryRun, trigger: 'manual', createdBy: req.reviewAdmin?.id ?? null });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    if (error instanceof PlanningError) {
+      return res.status(error.status).json({ success: false, error: error.message, code: error.code });
+    }
+    console.error('POST /api/scheduler/plan error', error);
+    res.status(500).json({ success: false, error: 'Planning run failed', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/plan/runs?date=YYYY-MM-DD
+ * Recent planning runs (newest first) with their summaries.
+ */
+router.get('/plan/runs', requireReviewAdmin, async (req, res) => {
+  const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
+  try {
+    res.json({ success: true, runs: await listRuns({ date }) });
+  } catch (error) {
+    console.error('GET /api/scheduler/plan/runs error', error);
+    res.status(500).json({ success: false, error: 'Could not load planning runs', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/recommend/items
+ * Product names on Information > Item, for the Find a slot picker. Read-only
+ * (unlike /api/performance/items, which also picks up new order lines).
+ */
+router.get('/recommend/items', requireReviewAdmin, async (req, res) => {
+  try {
+    const rows = await prisma.item_point_rates.findMany({
+      orderBy: { item_name: 'asc' },
+      select: { item_name: true, item_type: { select: { name: true, requires_installer: true } } },
+    });
+    res.json({
+      success: true,
+      items: rows.map(r => ({
+        name: r.item_name,
+        item_type: r.item_type?.name ?? null,
+        requires_installer: Boolean(r.item_type?.requires_installer),
+      })),
+    });
+  } catch (error) {
+    console.error('GET /api/scheduler/recommend/items error', error);
+    res.status(500).json({ success: false, error: 'Could not load items', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/recommend/addresses?q=happy
+ * Type-ahead for the Find a slot address box from CE Hub's own data: buildings,
+ * then past delivery addresses. No Google call.
+ */
+router.get('/recommend/addresses', requireReviewAdmin, async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (q.length < 2 || q.length > 200) {
+    return res.status(400).json({ success: false, error: 'q must be 2 to 200 characters', code: 'INVALID_REQUEST' });
+  }
+  try {
+    res.json({ success: true, suggestions: await suggestAddresses(q) });
+  } catch (error) {
+    console.error('GET /api/scheduler/recommend/addresses error', error);
+    res.status(500).json({ success: false, error: 'Could not load address suggestions', details: error.message });
+  }
+});
+
+/**
+ * POST /api/scheduler/recommend/check-address  { address }
+ * "Check address": Google Geocoding matches (up to 3), each flagged precise,
+ * for the user to confirm. Writes nothing.
+ */
+router.post('/recommend/check-address', requireReviewAdmin, async (req, res) => {
+  const address = typeof req.body?.address === 'string' ? req.body.address.trim() : '';
+  if (address.length < 3 || address.length > 300) {
+    return res.status(400).json({ success: false, error: 'address must be 3 to 300 characters', code: 'INVALID_REQUEST' });
+  }
+  try {
+    res.json({ success: true, candidates: await geocodeCandidates(address) });
+  } catch (error) {
+    if (error.code !== 'NO_KEY') console.error('POST /api/scheduler/recommend/check-address error', error.message);
+    res.status(502).json({ success: false, error: error.message, code: error.code ?? 'GOOGLE_ERROR' });
+  }
+});
+
+router.post('/recommend', requireReviewAdmin, async (req, res) => {
+  // Step 1. Validate the request; steps 2-9 are in slotRecommendService.recommendSlots.
+  const { value, errors } = validateRecommendRequest(req.body ?? {});
+  if (!value) {
+    return res.status(400).json({ success: false, error: 'Invalid recommendation request', code: 'INVALID_REQUEST', errors });
+  }
+  try {
+    const result = await recommendSlots(value);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('POST /api/scheduler/recommend error', error);
+    res.status(500).json({ success: false, error: 'Could not recommend a slot', details: error.message });
+  }
+});
+
+/**
+ * GET /api/scheduler/blockoffs?from=YYYY-MM-DD&to=YYYY-MM-DD&resource_type=fleet|truck_type|truck|team|employee
+ * Block-off rows overlapping the range (all when no range given), for the
+ * schedule board. They are created and removed under /api/fleet-availability.
  */
 router.get('/blockoffs', async (req, res) => {
   try {
@@ -106,56 +235,10 @@ router.get('/blockoffs', async (req, res) => {
     if (isDate(to)) where.start_date = { lte: new Date(`${to}T00:00:00Z`) };
     if (isDate(from)) where.end_date = { gte: new Date(`${from}T00:00:00Z`) };
     const rows = await prisma.resource_blockoffs.findMany({ where, orderBy: [{ start_date: 'asc' }] });
-    res.json({ success: true, blockoffs: rows.map(blockoffToApi) });
+    res.json({ success: true, blockoffs: rows.map(rowToApi) });
   } catch (error) {
     console.error('GET /api/scheduler/blockoffs error', error);
     res.status(500).json({ success: false, error: 'Failed to fetch block-offs', details: error.message });
-  }
-});
-
-/**
- * POST /api/scheduler/blockoffs
- * Admin session required. The truck or team must exist.
- */
-router.post('/blockoffs', requireReviewAdmin, async (req, res) => {
-  try {
-    const { value, errors } = validateBlockoff(req.body ?? {});
-    if (Object.keys(errors).length) {
-      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF', errors });
-    }
-    const model = value.resource_type === 'truck' ? prisma.trucks : prisma.teams;
-    const exists = await model.findUnique({ where: { id: value.resource_id }, select: { id: true } });
-    if (!exists) {
-      return res.status(400).json({ success: false, error: 'Invalid block-off', code: 'INVALID_BLOCKOFF',
-        errors: { resource_id: `no ${value.resource_type} with this id` } });
-    }
-    const row = await prisma.resource_blockoffs.create({
-      data: {
-        ...value,
-        start_date: new Date(`${value.start_date}T00:00:00Z`),
-        end_date: new Date(`${value.end_date}T00:00:00Z`),
-        created_by: req.reviewAdmin?.id ?? null,
-      },
-    });
-    res.status(201).json({ success: true, blockoff: blockoffToApi(row) });
-  } catch (error) {
-    console.error('POST /api/scheduler/blockoffs error', error);
-    res.status(500).json({ success: false, error: 'Failed to create block-off', details: error.message });
-  }
-});
-
-/**
- * DELETE /api/scheduler/blockoffs/:id
- * Admin session required.
- */
-router.delete('/blockoffs/:id', requireReviewAdmin, async (req, res) => {
-  try {
-    const { count } = await prisma.resource_blockoffs.deleteMany({ where: { id: req.params.id } });
-    if (!count) return res.status(404).json({ success: false, error: 'Block-off not found' });
-    res.json({ success: true });
-  } catch (error) {
-    console.error('DELETE /api/scheduler/blockoffs error', error);
-    res.status(500).json({ success: false, error: 'Failed to delete block-off', details: error.message });
   }
 });
 
@@ -191,7 +274,7 @@ router.get('/status', async (req, res) => {
  * PUT /api/orders/:id/reschedule
  * Move an order to a different timeslot
  */
-router.put('/orders/:id/reschedule', async (req, res) => {
+router.put('/orders/:id/reschedule', requireReviewAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { time_slot_id } = req.body;
@@ -297,10 +380,30 @@ router.get('/installation-schedules', async (req, res) => {
  * PUT /api/installation-schedules/:id
  * Update installation schedule status
  */
-router.put('/installation-schedules/:id', async (req, res) => {
+router.put('/installation-schedules/:id', requireReviewAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, estimated_arrival_time, installation_team_id } = req.body;
+
+    // B.4: an installer team blocked for that date and session cannot be assigned.
+    if (installation_team_id) {
+      const current = await prisma.installation_schedules.findUnique({ where: { id }, select: { estimated_arrival_time: true } });
+      const when = klDateSession(estimated_arrival_time || current?.estimated_arrival_time);
+      if (when) {
+        const rows = await prisma.resource_blockoffs.findMany({
+          where: { start_date: { lte: new Date(`${when.date}T00:00:00Z`) }, end_date: { gte: new Date(`${when.date}T00:00:00Z`) } },
+        });
+        const team = rows.length ? (await loadTeams()).find(t => t.id === installation_team_id) : null;
+        const block = teamBlock(team ?? installation_team_id, when.date, when.session, rows);
+        if (block) {
+          const who = block.staff ? ` (${block.staff.name})` : '';
+          return res.status(400).json({
+            success: false, code: 'TEAM_BLOCKED',
+            error: `This team is blocked on ${when.date} (${when.session}): ${block.reason}${who}${block.note ? ` - ${block.note}` : ''}.`,
+          });
+        }
+      }
+    }
 
     const updateData = { updated_at: new Date() };
 

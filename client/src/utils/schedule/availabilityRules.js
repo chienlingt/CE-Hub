@@ -3,11 +3,16 @@
 // Two sources of unavailability:
 //   1. trucks.off_day — a free-text weekday name that exists in the schema today
 //      (e.g. "Sunday"), applying every week.
-//   2. Block-offs — dated leave/MC/event/maintenance for a truck or team, set by
-//      the logistics admin (Meeting §4) and stored in resource_blockoffs
+//   2. Block-offs — public holidays, leave, MC, events and maintenance, set
+//      under Information › Fleet Availability and stored in resource_blockoffs
 //      (GET /api/scheduler/blockoffs). The gateway puts them on config.blockoffs.
+//      A row can cover the whole fleet, a truck type, one truck, one team or one
+//      staff member (leave/MC: a team is out when its driver, or every
+//      installer, is), for one or more sessions; matching is shared with
+//      utils/fleet/fleetRules.js.
 
 import { parseDateKey } from './weekRange';
+import { truckBlock, teamBlock } from '../fleet/fleetRules';
 
 const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -23,14 +28,21 @@ export function truckOffDayMatches(truck, dateKey) {
   return raw.includes(weekday) || raw.includes(weekday.slice(0, 3));
 }
 
-const REASON_LABELS = { leave: 'Leave', mc: 'MC', event: 'Event', maintenance: 'Maintenance', other: 'Blocked' };
+const REASON_LABELS = {
+  public_holiday: 'Public holiday', leave: 'Leave', mc: 'MC', event: 'Event', maintenance: 'Maintenance', other: 'Blocked',
+};
 
-/** Block-off covering this resource on this date, if any. */
-export function blockoffFor(resourceType, resourceId, dateKey, blockoffs = []) {
-  if (!Array.isArray(blockoffs)) return null;
-  return blockoffs.find(b => b?.resourceType === resourceType
-    && b?.resourceId === resourceId
-    && dateKey >= b.startDate && dateKey <= b.endDate) ?? null;   // yyyy-mm-dd compares lexically
+/**
+ * Block-off covering this truck or team on this date, if any.
+ * With `session` (morning | afternoon | evening) a row blocking that session
+ * counts; without it only a full-day row does. `tone` lets a truck match
+ * truck-type rows.
+ */
+export function blockoffFor(resourceType, resourceId, dateKey, blockoffs = [], { tone = null, session } = {}) {
+  if (!Array.isArray(blockoffs) || !resourceId) return null;
+  if (resourceType === 'truck') return truckBlock({ id: resourceId, tone }, dateKey, session, blockoffs);
+  if (resourceType === 'team') return teamBlock(resourceId, dateKey, session, blockoffs);
+  return null;
 }
 
 function blockoffReason(b) {
@@ -41,10 +53,10 @@ function blockoffReason(b) {
 /**
  * @returns {{available: boolean, reason: string|null}}
  */
-export function truckAvailableOn(truck, dateKey, config = {}) {
+export function truckAvailableOn(truck, dateKey, config = {}, session) {
   if (!truck) return { available: true, reason: null };
 
-  const blocked = blockoffFor('truck', truck.id, dateKey, config.blockoffs);
+  const blocked = blockoffFor('truck', truck.id, dateKey, config.blockoffs, { tone: truck.tone ?? null, session });
   if (blocked) return { available: false, reason: blockoffReason(blocked) };
   if (truckOffDayMatches(truck, dateKey)) {
     return { available: false, reason: `Off day (${truck.offDay})` };
@@ -56,11 +68,14 @@ export function truckAvailableOn(truck, dateKey, config = {}) {
  * Dated MC/leave comes from block-offs; `available_flag` is the standing switch.
  * @returns {{available: boolean, reason: string|null}}
  */
-export function teamAvailableOn(team, dateKey, config = {}) {
+export function teamAvailableOn(team, dateKey, config = {}, session) {
   if (!team) return { available: true, reason: null };
 
-  const blocked = blockoffFor('team', team.id, dateKey, config.blockoffs);
-  if (blocked) return { available: false, reason: blockoffReason(blocked) };
+  const blocked = Array.isArray(config.blockoffs) && team.id ? teamBlock(team, dateKey, session, config.blockoffs) : null;
+  if (blocked) {
+    const who = !blocked.staff ? '' : blocked.staff.role === 'Driver' ? ' (driver out)' : ' (all installers out)';
+    return { available: false, reason: `${blockoffReason(blocked)}${who}` };
+  }
   if (team.availableFlag === false) {
     return { available: false, reason: 'Marked unavailable' };
   }

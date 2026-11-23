@@ -68,6 +68,19 @@ async function mergeOrderLines(orderId, newLines = [], odooOrderRef = null, db =
  * Returns a result object; never throws for expected business conditions
  * (missing ref, order already in motion) — only throws on unexpected DB errors.
  */
+// Optional `replaces_do_ref` on a NEW DO: the failed DO it replaces (FRD INT-10 leaves
+// replacement DOOs to Odoo's downstream process; field name pending GCA). Linked only when
+// that DO exists here and is Failed; otherwise the order is still created, unlinked.
+async function findReplacedOrder(db, replacesRef, newRef) {
+  if (replacesRef == null || replacesRef === '') return null;
+  const original = typeof replacesRef === 'string' && replacesRef !== newRef
+    ? await db.orders.findFirst({ where: { odoo_order_ref: replacesRef }, select: { id: true, order_status: true } })
+    : null;
+  if (original?.order_status === 'Failed') return original;
+  console.warn(`[OdooIngest] ${newRef}: replaces_do_ref ${JSON.stringify(replacesRef)} is not a failed CE Hub DO; created without a link.`);
+  return null;
+}
+
 async function ingestOrder(payload, db, { createOnly = false, approvedChange = false } = {}) {
   const {
     name: odoo_order_ref,
@@ -173,6 +186,7 @@ async function ingestOrder(payload, db, { createOnly = false, approvedChange = f
   }
 
   const building = await resolveBuilding(delivery_address, delivery_zip, partner_name, db);
+  const replaced = await findReplacedOrder(db, payload.replaces_do_ref, odoo_order_ref);
 
   const productLines = preparation.map(line => ({ ...line,
     ...summarizeUnits(mergePreparationUnits(null, line)),
@@ -199,14 +213,21 @@ async function ingestOrder(payload, db, { createOnly = false, approvedChange = f
       salesperson_name:          salesperson_name    || null,
       salesperson_phone:         salesperson_phone   || null,
       assignment_status:         'unassigned',
+      rescheduled_from_order_id: replaced?.id || null,
       created_at:                new Date(),
       updated_at:                new Date(),
       ...(productLines.length > 0 && { order_products: { create: productLines } }),
     },
   });
 
+  if (replaced) {
+    // Same as POST /api/orders: the replacement resolves the original failure case.
+    const now = new Date();
+    await db.orders.update({ where: { id: replaced.id }, data: { issue_status: 'resolved', resolved_at: now, updated_at: now } });
+  }
+
   await queueAddress(getOrderAddress(order), db);
-  return { success: true, action: 'created', order_id: order.id };
+  return { success: true, action: 'created', order_id: order.id, ...(replaced && { replaces_order_id: replaced.id }) };
 }
 
 async function withPreparationLock(work) {

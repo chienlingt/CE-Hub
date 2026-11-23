@@ -27,7 +27,6 @@ import { badgeClass } from '../../common/tokens';
 import { useAuth } from '../../../contexts/AuthContext';
 
 import { todayLocalDateKey } from '../../../utils/dateKey';
-import { sizeBands } from '../../../utils/schedule/sizeBands';
 import { selectTrayBlocks } from '../../../utils/schedule/scheduleSelectors';
 
 export const SCHEDULE_EDIT_PERMISSION = 'schedule_edit';
@@ -182,7 +181,9 @@ function WorkspaceInner() {
         <RecommendSlotPanel
           open={findOpen}
           onClose={() => setParams({ find: null })}
-          bands={sizeBands(state.entities.trucks.allIds.map(id => state.entities.trucks.byId[id]))}
+          loadItems={actions.listRecommendItems}
+          searchAddresses={actions.searchAddresses}
+          checkAddress={actions.checkAddress}
           onRecommend={actions.recommendSlots}
           onShowOnBoard={option => setParams({ find: null, date: option.dateKey, highlight: option.windowId })}
         />

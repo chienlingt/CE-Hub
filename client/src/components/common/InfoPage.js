@@ -149,9 +149,14 @@ function InfoModal({
                                 className="border border-gray-300 p-2 rounded-md w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 required={field.required}
                                 placeholder={field.placeholder}
+                                step={field.step}
                             />
                         )}
-                        {field.guidance && <div className="text-xs text-gray-400 mt-1">{field.guidance}</div>}
+                        {(() => {
+                            // guidance may be a function of the current form values (e.g. a live unit conversion).
+                            const text = typeof field.guidance === 'function' ? field.guidance(formData) : field.guidance;
+                            return text ? <div className="text-xs text-gray-400 mt-1">{text}</div> : null;
+                        })()}
                         {formErrors[field.key] && <div className="text-xs text-red-500 mt-1">{formErrors[field.key]}</div>}
                         </div>
                     ))}
@@ -277,7 +282,9 @@ export default function InfoPage({
         }
         
         setModalData(prev => {
-            const newData = { ...prev, [name]: val };
+            // A field may auto-fill sibling fields from its new value (e.g. truck tonnage → dimensions).
+            const derived = typeof field?.onValueChange === 'function' ? field.onValueChange(val, prev) : null;
+            const newData = { ...prev, ...(derived || {}), [name]: val };
             const errors = validate(newData);
             setFormErrors(errors);
             return newData;

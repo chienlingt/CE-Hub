@@ -9,6 +9,7 @@ import { projectStopTimes } from './accessWindowRules';
 import { isSlotLocked, slotLifecycle, lockReason } from './lockRules';
 import { teamCapabilitySummary } from './skillRules';
 import { truckAvailableOn, teamAvailableOn } from './availabilityRules';
+import { sessionForStart } from '../fleet/fleetRules';
 import { issueLabel, ISSUE, makeIssue } from './issueCodes';
 import { isLockedStatus, isTerminalStatus } from './orderStatus';
 import { withDefaults } from './gracePeriod';
@@ -158,10 +159,10 @@ export function selectSlotLaneVM(state, slotId, cache = {}) {
     truck,
     truckPlate: truck?.plate ?? null,
     truckTone: truck?.tone ?? null,
-    truckAvailable: truckAvailableOn(truck, slot.dateKey, cfg),
+    truckAvailable: truckAvailableOn(truck, slot.dateKey, cfg, sessionForStart(slot.start) ?? undefined),
     team,
     teamName: team?.name ?? null,
-    teamAvailable: teamAvailableOn(team, slot.dateKey, cfg),
+    teamAvailable: teamAvailableOn(team, slot.dateKey, cfg, sessionForStart(slot.start) ?? undefined),
     storedTeam,
     crewChanged,
     crew,
@@ -222,13 +223,17 @@ export const newSlotId = (dateKey, windowId, truckId) => `${NEW_SLOT_PREFIX}${da
 export const isNewSlotId = (slotId) => typeof slotId === 'string' && slotId.startsWith(NEW_SLOT_PREFIX);
 
 /** A window's times on a date: from that day's real slots, else the standard ones. */
+// The standard window always wins: a stray real slot (e.g. 00:30-12:20 written
+// straight through POST /api/time-slots) must not relabel the column, nor be
+// copied into the would-be slots that dragging into an empty cell creates.
+// Real slot times are only a fallback for windows outside the standard three.
 function windowTimes(state, dateKey, windowId, c) {
+  const standard = SLOT_WINDOWS.find(w => w.id === windowId);
+  if (standard) return { start: standard.start, end: standard.end };
   const real = (c.slotIdsByDate[dateKey] ?? [])
     .map(id => state.entities.slots.byId[id])
     .find(slot => getSlotWindowId(slot) === windowId);
-  if (real) return { start: real.start, end: real.end };
-  const standard = SLOT_WINDOWS.find(w => w.id === windowId);
-  return standard ? { start: standard.start, end: standard.end } : null;
+  return real ? { start: real.start, end: real.end } : null;
 }
 
 /** A real slot, or the would-be slot behind an empty cell. */

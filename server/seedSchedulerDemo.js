@@ -150,7 +150,7 @@ const ROSTER_SIZES = { 1: 8, 2: 8, [PEAK_WEEKDAY]: 4, 4: 8, 5: 8 };
 // retailer: small and medium boxes, dominated by airconds and laundry. The sofa
 // and the wardrobe are deliberately absent — cycling all eight products evenly
 // would put a 2.1 m3 sofa or a 3.2 m3 wardrobe on one order in four, which no
-// real DO mix does and which would silently blow every 1-ton lorry's 7.6 m3 load
+// real DO mix does and which would silently blow every 1-ton lorry's 6.3 m3 load
 // box on an ordinary Tuesday.
 const ROUTINE_MIX = [
   'aircond', 'washer', 'dryer', 'tv', 'aircond', 'washer',
@@ -160,8 +160,8 @@ const ROUTINE_MIX = [
 // The peak day, cell by cell: [{ dos, sofas }] per position, per window.
 // `sofas` is how many of that slot's orders carry an L-shape sofa (2.14 m3 each)
 // instead of a routine box, which is what drives the volume meter into its amber
-// and red bands. Positions 0-1 are 3-ton lorries (15.96 m3), 2-3 are 1-ton
-// (7.62 m3) — see peakRoster() — so the same sofa count means very different
+// and red bands. Positions 0-1 are 3-ton lorries (19.92 m3), 2-3 are 1-ton
+// (6.33 m3) — see peakRoster() — so the same sofa count means very different
 // things across a row, which is the comparison the grid exists to make.
 //
 // The 26-DO cell is the one slot in the week over the 25-DO cap KF and Mr Lee
@@ -234,8 +234,10 @@ const FLEET = [
 // off_day of 'Sunday' would never render the "— off —" cell it exists to show.
 
 const TONE_DIMENSIONS = {
-  3: { length_cm: 420, width_cm: 190, height_cm: 200 },
-  1: { length_cm: 280, width_cm: 160, height_cm: 170 },
+  // Standard Malaysian lorry boxes: 3-ton 14 x 7 x 7.2 ft, 1-ton 9 x 5 x 5 ft
+  // (same presets as Information > Truck).
+  3: { length_cm: 427, width_cm: 213, height_cm: 219 },
+  1: { length_cm: 274, width_cm: 152, height_cm: 152 },
 };
 
 const ZONE_NAMES = ['Petaling Jaya', 'Klang', 'Shah Alam', 'Cheras'];
@@ -404,7 +406,7 @@ const PRODUCTS = [
   },
   {
     // The bulky one: 280 x 90 x 85 = 2.14 m3 each, against a 1-ton load box of
-    // 280 x 160 x 170 = 7.6 m3. Four of these already overflow it, which is why
+    // 274 x 152 x 152 = 6.3 m3. Three of these already overflow it, which is why
     // the exception pool orders 3-6 at a time.
     key: 'sofa', product_name: 'NOVA 3-Seater L-Shape Sofa',
     package_length_cm: 280, package_width_cm: 90, package_height_cm: 85,
@@ -1032,7 +1034,7 @@ async function main() {
   });
 
   // 8 x bulky sofas in quantities of 3-6. At 2.14 m3 a unit against a 1-ton load
-  // box of 7.6 m3, anything from 4 up cannot physically fit on a 1-ton lorry, so
+  // box of 6.3 m3, anything from 3 up cannot physically fit on a 1-ton lorry, so
   // these force a 3-ton or get refused -> TRUCK_VOLUME_EXCEEDED.
   const bulkQuantities = [3, 4, 5, 6, 4, 5, 3, 6];
   bulkQuantities.forEach((quantity, i) => {

@@ -1,10 +1,8 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Settings, Save, RotateCcw, Truck, Clock, Gauge, Wrench, Info, MapPin, CalendarOff } from 'lucide-react';
+import { Settings, Save, RotateCcw, Clock, Gauge, Info, MapPin } from 'lucide-react';
 import ScheduleProvider, { useScheduleState, useScheduleActions } from './ScheduleProvider';
 import BufferField from './settings/BufferField';
 import ConfigImpactPreview from './settings/ConfigImpactPreview';
-import ServiceTimeCatalogue from './settings/ServiceTimeCatalogue';
-import BlockoffEditor from './settings/BlockoffEditor';
 import Button from '../../common/Button';
 import EmptyState from '../../common/EmptyState';
 import { badgeClass, FOCUS_RING } from '../../common/tokens';
@@ -167,8 +165,6 @@ function SettingsInner() {
 
   const disabled = !canEdit || saving;
   const runAt = addMinutes(working.planningCutoff, working.planningRunOffsetMinutes) ?? working.planningRunAt;
-  const trucks = state.entities.trucks.allIds.map(id => state.entities.trucks.byId[id]);
-  const teams = state.entities.teams.allIds.map(id => state.entities.teams.byId[id]);
 
   return (
     <div className="p-4 sm:p-6">
@@ -215,7 +211,7 @@ function SettingsInner() {
           <Section
             icon={Gauge}
             title="Slot capacity"
-            description="The most DOs that can be booked into one delivery window."
+            description="The most DOs one delivery window can take, and what counts as nearby when recommending a slot."
           >
             <BufferField
               label="Maximum DOs per slot"
@@ -226,6 +222,16 @@ function SettingsInner() {
               unit="DO"
               disabled={disabled}
               error={errors.maxDOsPerSlot}
+            />
+            <BufferField
+              label="Nearby distance"
+              hint="When recommending a slot, booked DOs within this road distance of the new address count as nearby."
+              value={working.nearbyKm}
+              onChange={v => patch('nearbyKm', v)}
+              {...range('nearby_km', [1, 50])}
+              unit="km"
+              disabled={disabled}
+              error={errors.nearbyKm}
             />
           </Section>
 
@@ -271,66 +277,7 @@ function SettingsInner() {
             />
           </Section>
 
-          <Section
-            icon={Wrench}
-            title="Service durations"
-            description="Service time per order is base delivery + installation + dismantling."
-          >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <BufferField
-                label="Base delivery time"
-                hint="Per order, added to any installation."
-                value={working.duration?.baseDeliveryMinutes}
-                onChange={v => patchNested('duration', 'baseDeliveryMinutes', v)}
-                {...range('base_delivery_minutes', [1, 120])}
-                disabled={disabled}
-                error={errors['duration.baseDeliveryMinutes']}
-              />
-              <BufferField
-                label="Fallback install time"
-                hint="When an item type has no confirmed install time."
-                value={working.duration?.fallbackInstallMinutes}
-                onChange={v => patchNested('duration', 'fallbackInstallMinutes', v)}
-                {...range('fallback_install_minutes', [0, 480])}
-                disabled={disabled}
-                error={errors['duration.fallbackInstallMinutes']}
-              />
-            </div>
-            <ServiceTimeCatalogue
-              rows={working.serviceTimeCatalogue ?? []}
-              onChange={rows => patch('serviceTimeCatalogue', rows)}
-              range={spec.catalogue_minutes ?? { min: 0, max: 480 }}
-              disabled={disabled}
-              error={errors.serviceTimeCatalogue}
-            />
-          </Section>
 
-          <Section
-            icon={Truck}
-            title="Fleet and availability"
-            description="Fleet counts come from the Trucks list. Block a lorry or team for leave, MC, events or maintenance here."
-          >
-            <div className="flex flex-wrap gap-2">
-              {(saved.fleet ?? []).length === 0 && <span className="text-xs text-gray-500">No trucks recorded.</span>}
-              {(saved.fleet ?? []).map(f => (
-                <span key={String(f.tone)} className="rounded border border-gray-200 px-2 py-1 text-xs tabular-nums text-gray-700">
-                  <span className="font-semibold text-gray-900">{f.count}</span> × {f.tone != null ? `${f.tone}-ton` : 'unknown tonnage'}
-                </span>
-              ))}
-            </div>
-            <h3 className="flex items-center gap-1.5 pt-1 text-xs font-semibold text-gray-700">
-              <CalendarOff className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" /> Block-offs
-            </h3>
-            <BlockoffEditor
-              blockoffs={saved.blockoffs ?? []}
-              trucks={trucks}
-              teams={teams}
-              reasons={spec.blockoff_reasons}
-              onAdd={actions.addBlockoff}
-              onRemove={actions.removeBlockoff}
-              disabled={!canEdit}
-            />
-          </Section>
         </div>
 
         <div className="min-w-0 space-y-3">

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
+const { requireReviewAdmin } = require('../middleware/odooApprovalAuth');
 
 // GET /api/settings/:key
 router.get('/:key', async (req, res) => {
@@ -49,7 +50,7 @@ router.get('/', async (req, res) => {
 });
 
 // PUT /api/settings/:key - Update setting (admin only)
-router.put('/:key', async (req, res) => {
+router.put('/:key', requireReviewAdmin, async (req, res) => {
   try {
     const { key } = req.params;
     const { value } = req.body;

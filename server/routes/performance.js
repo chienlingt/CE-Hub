@@ -26,11 +26,14 @@ router.use(requireReviewAdmin);
 
 router.get('/rules', handle(() => service.getRules()));
 router.post('/rules', handle(req => service.createRule(req.body, req.reviewAdmin.id)));
+// Information > Item: products (names from order lines) and their item types.
 router.get('/items', handle(() => service.listItemRates()));
 router.get('/items/pending', handle(() => service.countPendingItems()));
-router.post('/items', handle(req => service.createItem(req.body, req.reviewAdmin.id)));
+router.post('/items/accept-suggestions', handle(req => service.acceptSuggestions(req.body?.ids, req.reviewAdmin.id)));
 router.put('/items/:id', handle(req => service.updateItem(req.params.id, req.body, req.reviewAdmin.id)));
-router.delete('/items/:id', handle(req => service.deleteItem(req.params.id)));
+router.get('/item-types', handle(() => service.listItemTypes()));
+router.post('/item-types', handle(req => service.createItemType(req.body, req.reviewAdmin.id)));
+router.put('/item-types/:id', handle(req => service.updateItemType(req.params.id, req.body, req.reviewAdmin.id)));
 
 router.get('/', handle(req => service.getRanking({ ...range(req), team: req.query.team, role: req.query.role })));
 router.get('/employees/:id', handle(req => service.getEmployeePerformance(req.params.id, range(req))));
