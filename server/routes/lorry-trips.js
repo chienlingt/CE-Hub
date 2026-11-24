@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
+const { withCrewChangeNotice, slotIdsForTruck } = require('../services/odooCrewChangeService');
 
 router.get('/', async (req, res) => {
   try {
@@ -38,11 +39,13 @@ router.put('/:id', async (req, res) => {
     const updateData = { ...data };
     if (truck) updateData.truck_id = truck;
 
-    const lorryTrip = await prisma.lorry_trips.update({
+    // FRD INT-07: a changed trip crew or truck is a driver change for the slot's DOs.
+    const existing = await prisma.lorry_trips.findUnique({ where: { id: req.params.id }, select: { time_slot_id: true } });
+    const lorryTrip = await withCrewChangeNotice(existing?.time_slot_id ? [existing.time_slot_id] : [], () => prisma.lorry_trips.update({
       where: { id: req.params.id },
       data: updateData,
       include: { trucks: true }
-    });
+    }));
     res.json(lorryTrip);
   } catch (err) {
     console.error('PUT /api/lorry-trips/:id error', err);

@@ -6,14 +6,21 @@
 // Dispatches each row to the appropriate handler based on event_type / target.
 // On success → marks processed. On failure → increments attempts and schedules retry.
 //
-// Handlers:
+// CE Hub -> Odoo callbacks (FRD INT-04, INT-07..INT-11) have two transports, chosen by
+// ODOO_CALLBACK_TRANSPORT (docs/odoo-callback-spec.md):
+//   http — every callback row is posted as one envelope to ODOO_CALLBACK_URL
+//          (odooCallbackEnvelope.js + odooCallbackTransport.js)
+//   rpc  — default; the JSON-RPC field writes and Log Notes below
+//
+// Handlers (rpc):
 //   target: 'odoo'          — SLOT_STATUS_CHANGED → writeOdooDeliveryStatus + writeOdooExtendedFields
-//                             (Delivered also posts the INT-08/09 result Log Note)
-//                             (Loaded/Arrived also get writeOdooOrderLines via RPC, or the
-//                             whole event via webhook instead if ODOO_USE_WEBHOOK=true —
-//                             see odooWebhookService.js)
+//                             (first event of an attempt posts the attempt Log Note; Delivered
+//                             posts the INT-08/09 result Log Note and attaches the proof files;
+//                             Loaded/Arrived/Delivered also get writeOdooOrderLines)
 //                             ORDER_FAILED (A5.3)     → triggerOdooFailureNotification: x_delivery_status='failed'
 //                                                       + attempt Log Note (FRD INT-07/INT-10) + extended fields
+//                                                       + evidence attachments
+//                             DRIVER_CHANGED          → driver/vehicle fields + crew-change Log Note (INT-07)
 //                             ORDER_SCHEDULED         → writeOdooDeliveryStatus('Scheduled' — no-op) + extended fields
 //                             ORDER_APPROVAL_CANCELLED → clears the confirmed appointment (extended fields)
 //                             (both legacy — no longer enqueued; kept so queued rows drain)
@@ -25,9 +32,12 @@
 const {
   writeOdooDeliveryStatus, writeOdooExtendedFields, writeOdooOrderLines, triggerOdooFailureNotification,
   writeOdooAppointmentResult, writeOdooAppointmentDecision, postOdooDeliveryResultNote,
+  postOdooAttemptNote, writeOdooDriverChange, attachOdooFiles,
 } = require('./services/odooService');
-const { sendOdooStatusWebhook, shouldUseWebhook } = require('./services/odooWebhookService');
 const { assertOutboundLineIdentity } = require('./services/odooLineIdentity');
+const { buildEnvelope, CALLBACK_ROW_TYPES } = require('./services/odooCallbackEnvelope');
+const { sendCallback, callbackTransport } = require('./services/odooCallbackTransport');
+const { proofFilesFor } = require('./services/odooProofFiles');
 const {
   fetchPendingBatch,
   markProcessed,
@@ -57,17 +67,15 @@ async function handleOdoo(row) {
 
   // Validate old queued line IDs before any external status/line write.
   if (['Loaded', 'Arrived'].includes(status)) assertOutboundLineIdentity(payload);
-  if (shouldUseWebhook(status)) {
-    await sendOdooStatusWebhook(payload);
-    console.log(`[OutboxWorker] Odoo webhook sync: ${odooRef} → ${status}`);
-    return;
-  }
 
-  const statusResult = await writeOdooDeliveryStatus(odooRef, status);
+  const reopenFailed = await reopensFailedAttempt(payload);
+  const statusResult = await writeOdooDeliveryStatus(odooRef, status, { reopenFailed });
   if (statusResult?.status_ignored) {
     console.log(`[OutboxWorker] Ignored older status ${status} for ${odooRef}`);
     return;
   }
+  // FRD INT-07: the first status of each delivery attempt opens its Log Note history.
+  if (['Picked', 'Loaded', 'Delivering', 'Arrived'].includes(status)) await postOdooAttemptNote(odooRef, payload);
   await writeOdooExtendedFields(odooRef, payload);
   // Line JSON (placeholder field, behind ODOO_SEND_EXTENDED_FIELDS, non-fatal); on
   // Delivered it carries the delivered/undelivered quantities and serials (INT-08/09).
@@ -76,8 +84,42 @@ async function handleOdoo(row) {
   }
   // INT-08/09 result record: Log Note on the DO, retried if Odoo refuses it.
   let note = '';
-  if (status === 'Delivered') note = ` (Log Note ${(await postOdooDeliveryResultNote(odooRef, payload)).log_note})`;
+  if (status === 'Delivered') {
+    const attached = await attachOdooFiles(odooRef, await proofFilesFor(payload));
+    note = ` (Log Note ${(await postOdooDeliveryResultNote(odooRef, payload)).log_note}, ${attached.attached} file(s) attached)`;
+  }
   console.log(`[OutboxWorker] Odoo sync: ${odooRef} → ${status}${note}`);
+}
+
+// An event from a newer delivery attempt may move the DO off `failed`: true when the
+// order's latest failure belongs to an earlier attempt than this event.
+async function reopensFailedAttempt(payload) {
+  if (!(payload?.attempt_no > 1) || !payload.ce_hub_order_ref) return false;
+  const latest = await prisma.delivery_failure_events.findFirst({
+    where: { order_id: payload.ce_hub_order_ref }, orderBy: { created_at: 'desc' }, select: { attempt_no: true },
+  });
+  return !!latest && latest.attempt_no < payload.attempt_no;
+}
+
+// ── DRIVER_CHANGED handler — FRD INT-07 driver change ─────────────────────
+async function handleDriverChanged(row) {
+  const payload = row.payload || {};
+  const result = await writeOdooDriverChange(payload.do_ref, payload, row.id);
+  console.log(`[OutboxWorker] DRIVER_CHANGED: ${payload.do_ref} crew updated (Log Note ${result.log_note})`);
+}
+
+// ── HTTP transport — one envelope per callback row ────────────────────────
+async function handleCallbackHttp(row) {
+  const envelope = buildEnvelope(row, { files: await proofFilesFor(row.payload) });
+  if (!envelope) {
+    console.log(`[OutboxWorker] ${row.event_type} (${row.payload?.status || '-'}) has no Odoo callback; skipped.`);
+    return;
+  }
+  const result = await sendCallback(envelope);
+  if (envelope.event_type === 'failed' && row.payload?.failure_event_id) {
+    await prisma.delivery_failure_events.updateMany({ where: { id: row.payload.failure_event_id }, data: { odoo_sync_status: 'synced' } });
+  }
+  console.log(`[OutboxWorker] Callback ${envelope.event_type} → ${envelope.do_ref}: HTTP ${result.status}${result.duplicate ? ' (already received)' : ''}`);
 }
 
 // ── A5.3: ORDER_FAILED handler — write Failed status to Odoo ──────────────
@@ -85,6 +127,7 @@ async function handleOdoo(row) {
 async function handleOrderFailed(row) {
   const payload = row.payload || {};
   const result = await triggerOdooFailureNotification(payload);
+  await attachOdooFiles(payload.do_ref || payload.odooRef, await proofFilesFor(payload));
   if (payload.failure_event_id) await prisma.delivery_failure_events.updateMany({
     where: { id: payload.failure_event_id }, data: { odoo_sync_status: 'synced' },
   });
@@ -179,6 +222,9 @@ async function handleInternal(row) {
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 async function dispatchRow(row) {
+  if (row.target === 'odoo' && callbackTransport() === 'http' && CALLBACK_ROW_TYPES.includes(row.event_type)) {
+    return handleCallbackHttp(row);
+  }
   switch (row.event_type) {
     case 'SLOT_STATUS_CHANGED':
       if (row.target === 'odoo') return handleOdoo(row);
@@ -193,6 +239,8 @@ async function dispatchRow(row) {
       return handleAppointmentConfirmation(row);
     case 'APPOINTMENT_CHANGE_DECISION':
       return handleAppointmentChangeDecision(row);
+    case 'DRIVER_CHANGED':
+      return handleDriverChanged(row);
     case 'CUSTOMER_ON_THE_WAY':
     case 'CUSTOMER_D1_REMINDER':
       return handleCustomerMessageRetired(row);
@@ -225,7 +273,7 @@ async function runOutboxWorker() {
         await markProcessed(row.id);
       } catch (err) {
         console.error(`[OutboxWorker] Row ${row.id} (${row.event_type}) failed:`, err.message);
-        await recordFailure(row.id, err.message, row.attempts);
+        await recordFailure(row.id, err.message, row.attempts, { permanent: err.permanent === true });
       }
     }
   } catch (err) {
@@ -235,4 +283,4 @@ async function runOutboxWorker() {
   }
 }
 
-module.exports = { runOutboxWorker };
+module.exports = { runOutboxWorker, dispatchRow };

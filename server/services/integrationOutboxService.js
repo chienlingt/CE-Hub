@@ -9,7 +9,7 @@
 // Idempotency key convention:
 //   slot:{timeSlotId}:depart         — slot-level departure
 //   slot:{timeSlotId}:end_trip       — slot-level trip completion
-//   order:{orderId}:odoo:{status}    — per-order Odoo status write-back
+//   order:{orderId}:a{attempt}:...  — per-order Odoo delivery events (see odooEventOutbox.js)
 //   order:{orderId}:on_the_way       — customer on-the-way event (message sent by Odoo, not CE Hub)
 //   order:{orderId}:odoo:appointment:{status}:{suffix} — FRD INT-04 confirmation result
 //   odoo-change:{requestId}:decision — FRD INT-11 edit/cancel decision
@@ -18,7 +18,7 @@
 //   then status → 'dead' for manual review.
 
 const prisma = require('../prismaClient');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
 const { pickNextStop } = require('./nextStopSpec');
 
 const MAX_ATTEMPTS   = parseInt(process.env.OUTBOX_MAX_ATTEMPTS || '8', 10);
@@ -91,12 +91,8 @@ async function enqueueSlotDepartureSideEffects(timeSlotId, activeOrders) {
   // Per-order Odoo write-back
   for (const order of activeOrders) {
     if (order.odoo_order_ref) {
-      await enqueue({
-        eventType:      'SLOT_STATUS_CHANGED',
-        target:         'odoo',
-        payload:        await buildOdooEventPayload(order.id, 'Delivering'),
-        idempotencyKey: `order:${order.id}:odoo:Delivering`,
-      });
+      await enqueueOdooStatusEvent(prisma, order.id, 'Delivering')
+        .catch(err => console.error('[Outbox] Delivering enqueue failed:', err.message));
     }
   }
 }
@@ -119,12 +115,8 @@ async function enqueueSlotEndTripSideEffects(timeSlotId, slotOrders) {
 
   for (const order of slotOrders) {
     if (order.odoo_order_ref && order.order_status === 'Delivered') {
-      await enqueue({
-        eventType:      'SLOT_STATUS_CHANGED',
-        target:         'odoo',
-        payload:        await buildOdooEventPayload(order.id, order.order_status),
-        idempotencyKey: `order:${order.id}:odoo:${order.order_status}`,
-      });
+      await enqueueOdooStatusEvent(prisma, order.id, order.order_status)
+        .catch(err => console.error('[Outbox] Delivered enqueue failed:', err.message));
     }
   }
 }
@@ -226,11 +218,13 @@ async function markProcessed(id) {
 }
 
 /**
- * Record a failed attempt and schedule retry or mark dead.
+ * Record a failed attempt and schedule retry or mark dead. A permanent failure
+ * (e.g. the Odoo callback receiver answered 4xx) goes dead at once: retrying the
+ * same envelope cannot succeed.
  */
-async function recordFailure(id, errorMessage, currentAttempts) {
+async function recordFailure(id, errorMessage, currentAttempts, { permanent = false } = {}) {
   const nextAttempt = currentAttempts + 1;
-  const isDead      = nextAttempt >= MAX_ATTEMPTS;
+  const isDead      = permanent || nextAttempt >= MAX_ATTEMPTS;
 
   return prisma.integration_outbox.update({
     where: { id },

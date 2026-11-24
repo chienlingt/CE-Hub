@@ -2,7 +2,7 @@ const router = require('express').Router();
 const prisma = require('../prismaClient');
 const { unitsFor, expandUnits, summarizeUnits } = require('../services/orderProductUnits');
 const { enqueue } = require('../services/integrationOutboxService');
-const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('../services/odooEventOutbox');
 const { isOdooManaged, preparationProblem } = require('../services/odooPreparation');
 
 // Serial edits and scans share one transaction/lock, including single-unit lines.
@@ -75,10 +75,7 @@ router.use(async (req, res, next) => {
       return { updated: expandUnits(updated)[index], orderId: item.order_id, milestone };
     }, { timeout: 15000 });
     if (result.milestone) {
-      buildOdooEventPayload(result.orderId, result.milestone).then(payload => enqueue({
-        eventType: 'SLOT_STATUS_CHANGED', target: 'odoo', payload,
-        idempotencyKey: `order:${result.orderId}:odoo:${result.milestone}`,
-      })).catch(error => console.error('[Unit scan] Outbox enqueue failed:', error.message));
+      enqueueOdooStatusEvent(prisma, result.orderId, result.milestone).catch(error => console.error('[Unit scan] Outbox enqueue failed:', error.message));
     }
     res.json({ success: true, orderProduct: result.updated });
   } catch (error) {

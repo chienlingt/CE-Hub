@@ -10,6 +10,9 @@
 //   - Auth:            employee_id present → must match assigned driver; absent → admin desk entry
 //   - Eligible:        order_status must be Delivering or In Progress
 //   - Item outcomes:   every line item must be failed; mixed outcomes use partial delivery (INT-09)
+//   - Unit outcomes:   each unit is undelivered (default) or damaged; a damaged unit points to at
+//                      least one uploaded evidence photo (FRD INT-10, see damagedUnits.js)
+//   - Attempt:         the failure event records orders.number_of_attempts (FRD INT-07 history)
 //   - Cases routing:   never set is_complaint_submitted (→ Order Issues, not Delivery Issues)
 //   - Idempotency:     409 if order already Failed with a delivery_failure_events row
 //   - A6 trigger:      fires once via sendDeliveryFailureNotifications; Odoo via outbox only
@@ -17,7 +20,9 @@
 
 const prisma = require('../prismaClient');
 const { sendDeliveryFailureNotifications } = require('./notificationService');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
+const { unitsFor } = require('./orderProductUnits');
+const { classifyFailedLine } = require('./damagedUnits');
 
 // FR-05-001 — five permitted failure reasons; "Other" requires a description
 const FAILURE_REASONS = [
@@ -66,7 +71,9 @@ function assertAllItemsFailed(orderProducts, items) {
  * @param {{
  *   issue_reason: string,
  *   issue_desc: string,
- *   order_products_status: Array<{ id: number, item_delivery_status: string, delivered_quantity?: number }>,
+ *   order_products_status: Array<{ id: number, item_delivery_status: string, delivered_quantity?: number,
+ *     units?: Array<{ serial_number?: string, unit_number?: number, outcome: 'undelivered'|'damaged',
+ *                     reason?: string, photo_indexes?: number[] }> }>,
  *   employee_id?: string,
  *   evidence_paths?: string[],
  * }} params
@@ -151,8 +158,9 @@ async function confirmFailure(orderId, {
     throw err;
   }
 
-  // ── 7. Item outcomes — every line failed ─────────────────────────────────
+  // ── 7. Item outcomes — every line failed; units undelivered or damaged ──
   assertAllItemsFailed(order.order_products, order_products_status);
+  const unitEntries = new Map(order_products_status.map(item => [String(item.id), item.units]));
 
   // ── 8. Persist (all writes in one logical block) ───────────────────────────
   const now = new Date();
@@ -181,25 +189,22 @@ async function confirmFailure(orderId, {
     });
     for (const item of order_products_status) {
       const owned = currentLines.get(String(item.id));
+      const units = classifyFailedLine(unitsFor(owned), unitEntries.get(String(item.id)), evidence_paths, owned.id);
       await tx.order_products.update({
         where: { id: owned.id },
-        data: { item_delivery_status: 'failed', delivered_quantity: 0 },
+        data: { item_delivery_status: 'failed', delivered_quantity: 0, unit_scans: units },
       });
     }
     const failure = await tx.delivery_failure_events.create({
       data: { order_id: orderId, failure_reason: issue_reason, failure_desc: issue_desc || null,
         evidence_urls: evidence_paths, confirmed_by: employee_id || null,
+        attempt_no: current.number_of_attempts > 0 ? current.number_of_attempts : 1,
         odoo_sync_status: current.odoo_order_ref ? 'pending' : 'not_applicable', created_at: now },
     });
     if (current.odoo_order_ref) {
-      const payload = await buildOdooEventPayload(orderId, 'Failed', tx);
-      const key = `order:${orderId}:failure:${failure.id}:odoo`;
-      await tx.integration_outbox.upsert({
-        where: { idempotency_key: key }, update: {},
-        create: { event_type: 'ORDER_FAILED', target: 'odoo', idempotency_key: key,
-          status: 'pending', attempts: 0, next_retry_at: now,
-          payload: { ...payload, ce_hub_order_ref: orderId, failure_event_id: failure.id,
-            customer_notification_requested: true, notification_owner: 'odoo' } },
+      await enqueueOdooStatusEvent(tx, orderId, 'Failed', {
+        eventType: 'ORDER_FAILED', keySuffix: `failure:${failure.id}`,
+        extraPayload: { failure_event_id: failure.id, customer_notification_requested: true, notification_owner: 'odoo' },
       });
     }
     return updated;
