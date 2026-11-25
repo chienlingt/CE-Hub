@@ -225,15 +225,34 @@ async function applyAppointmentDecision(tx, request, decision) {
   const blockers = appointmentBlockers(order, cancelOrder);
   if (blockers.length) throw preparationError(blockers.join(' '), 'APPOINTMENT_LOCKED', 409);
 
+  // A Failed DO going back to Pending starts its next delivery attempt (FRD INT-07):
+  // its Odoo events get new attempt-scoped keys and the last attempt's unit outcomes
+  // are cleared, while delivery_failure_events keeps the history.
+  const newAttempt = !cancelOrder && order.order_status === 'Failed';
+  if (newAttempt) await startNextAttempt(tx, order);
   await tx.orders.update({ where: { id: order.id }, data: {
     time_slot_id: null, scheduled_start_date_time: null, scheduled_end_date_time: null,
     assignment_status: 'unassigned', order_status: cancelOrder ? 'Cancelled' : 'Pending',
     ...(cancelOrder && { employee_id: null }),
+    ...(newAttempt && { number_of_attempts: (order.number_of_attempts > 0 ? order.number_of_attempts : 1) + 1 }),
     appointment_status: 'cancelled',
     appointment_message: request.payload?.reason || null, appointment_confirmed_at: null,
     updated_at: new Date(),
   } });
   return { order, previousSlotId: order.time_slot_id };
+}
+
+async function startNextAttempt(tx, order) {
+  for (const item of order.order_products || []) {
+    const units = unitsFor(item).map(unit => {
+      const { delivery_outcome: _o, undelivered_reason: _r, damage_evidence: _e, ...rest } = unit;
+      return rest;
+    });
+    await tx.order_products.update({
+      where: { id: item.id },
+      data: { unit_scans: units, item_delivery_status: 'pending', delivered_quantity: null },
+    });
+  }
 }
 
 async function finishAppointmentDecision(reviewed, effect) {

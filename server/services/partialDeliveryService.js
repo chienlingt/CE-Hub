@@ -12,15 +12,18 @@
 //   - Load gate:     only a loaded unit can be delivered; a loaded unit the customer
 //                    refused stays on the van and is marked undelivered
 //   - Arrival gate:  the driver must have marked the order as arrived (deliveryGates.js)
-//   - Reasons:       every undelivered unit carries a reason (unit_scans[i].undelivered_reason);
+//   - Reasons:       every non-delivered unit carries a reason (unit_scans[i].undelivered_reason);
 //                    they are rolled into delivery_notes, which Odoo receives as `remarks`
+//   - Damaged:       a non-delivered unit is "undelivered" (returned intact) or "damaged"
+//                    (outcome: 'damaged' on its reason entry); a damaged unit needs at least one
+//                    photo from the `damage_photos` upload (photo_indexes). See damagedUnits.js.
 //   - POD:           photo or signature required, same as full completion (FR-04-003)
 //   - Idempotency:   same outcome again -> replay (no new outbox row); different outcome -> 409
-//   - No damaged-serial field is sent (documented FRD deviation)
 
 const prisma = require('../prismaClient');
 const { unitsFor } = require('./orderProductUnits');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
+const { outcomeOf, damageEvidenceFor, withOutcome, DEFAULT_DAMAGE_REASON } = require('./damagedUnits');
 const { ELIGIBLE_STATUSES } = require('./deliveryFailureService');
 const { upsertEmployeeLocation } = require('./deliveryLifecycleService');
 const { runPostDeliverySteps } = require('./deliveryCompletionService');
@@ -51,12 +54,14 @@ function isSerialTracked(item, units) {
 
 // Map each undelivered_reasons entry to a unit position. Entries name the unit by
 // serial_number (serial-tracked lines) or 1-based unit_number.
-function reasonsByPosition(value, units, serialIndex, lineId) {
+function reasonsByPosition(value, units, serialIndex, lineId, damagePhotoPaths = []) {
   if (value === undefined || value === null) return new Map();
   if (!Array.isArray(value)) throw fail(400, 'INVALID_REASONS', `Line ${lineId}: undelivered_reasons must be a list.`);
   const reasons = new Map();
   for (const entry of value) {
-    const reason = typeof entry?.reason === 'string' ? entry.reason.trim() : '';
+    const outcome = outcomeOf(entry, lineId);
+    const reason = typeof entry?.reason === 'string' && entry.reason.trim()
+      ? entry.reason.trim() : outcome === 'damaged' ? DEFAULT_DAMAGE_REASON : '';
     if (!reason || reason.length > MAX_REASON_LENGTH) {
       throw fail(400, 'INVALID_REASONS', `Line ${lineId}: each reason must be 1–${MAX_REASON_LENGTH} characters.`);
     }
@@ -65,7 +70,9 @@ function reasonsByPosition(value, units, serialIndex, lineId) {
       : Number.isInteger(entry.unit_number) && entry.unit_number >= 1 && entry.unit_number <= units.length ? entry.unit_number - 1 : undefined;
     if (position === undefined) throw fail(400, 'INVALID_REASONS', `Line ${lineId}: a reason names a unit that is not on this line.`);
     if (reasons.has(position)) throw fail(400, 'INVALID_REASONS', `Line ${lineId}: a unit has more than one reason.`);
-    reasons.set(position, reason);
+    const evidence = outcome === 'damaged'
+      ? damageEvidenceFor(entry, damagePhotoPaths, lineId, units[position].assigned_serial || `#${position + 1}`) : [];
+    reasons.set(position, { reason, outcome, evidence });
   }
   return reasons;
 }
@@ -77,10 +84,12 @@ function reasonsByPosition(value, units, serialIndex, lineId) {
  * @param {Array} orderProducts - order_products rows for the order
  * @param {Array} lines - request lines: { order_product_id, delivered_serial_numbers?,
  *                        undelivered_serial_numbers?, delivered_quantity?,
- *                        undelivered_reasons?: [{ serial_number? | unit_number?, reason }] }
+ *                        undelivered_reasons?: [{ serial_number? | unit_number?, reason,
+ *                          outcome?: 'undelivered'|'damaged', photo_indexes?: number[] }] }
+ * @param {{ damagePhotoPaths?: string[] }} [options] - stored paths of the damage_photos upload
  * @returns {{ lines: Array<{ id, units, deliveredQty, status }>, signature: string }}
  */
-function planPartialDelivery(orderProducts, lines) {
+function planPartialDelivery(orderProducts, lines, { damagePhotoPaths = [] } = {}) {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw fail(400, 'INVALID_LINES', 'lines must list every order line.');
   }
@@ -105,7 +114,7 @@ function planPartialDelivery(orderProducts, lines) {
     if (serialTracked && units.some(unit => !unit.assigned_serial)) {
       throw fail(400, 'SERIAL_NOT_ASSIGNED', `Line ${id}: every unit needs an assigned serial before a partial result can be classified.`);
     }
-    const reasons = reasonsByPosition(input.undelivered_reasons, units, serialIndex, id);
+    const reasons = reasonsByPosition(input.undelivered_reasons, units, serialIndex, id, damagePhotoPaths);
 
     if (serialTracked) {
       const deliveredSerials = cleanSerials(input.delivered_serial_numbers, 'delivered_serial_numbers', id);
@@ -159,10 +168,9 @@ function planPartialDelivery(orderProducts, lines) {
     planned.push({
       id: item.id,
       units: units.map((unit, position) => {
-        const { undelivered_reason: _stale, ...rest } = unit;
-        return delivered[position]
-          ? { ...rest, delivery_outcome: 'delivered' }
-          : { ...rest, delivery_outcome: 'undelivered', undelivered_reason: reasons.get(position) };
+        if (!delivered[position]) return withOutcome(unit, reasons.get(position));
+        const { undelivered_reason: _r, damage_evidence: _e, ...rest } = unit;
+        return { ...rest, delivery_outcome: 'delivered' };
       }),
       deliveredQty,
       status: deliveredQty > 0 ? 'delivered' : 'failed',
@@ -190,6 +198,8 @@ function signatureOf(lines) {
     line.deliveredQty,
     line.units.filter(unit => unit.delivery_outcome === 'delivered' && unit.assigned_serial)
       .map(unit => norm(unit.assigned_serial)).sort(),
+    line.units.map((unit, position) => unit.delivery_outcome === 'damaged' ? norm(unit.assigned_serial || `#${position + 1}`) : null)
+      .filter(Boolean).sort(),
   ]));
 }
 
@@ -202,22 +212,24 @@ function storedSignature(orderProducts) {
 }
 
 /**
- * Order-level delivery_notes for a partial: one entry per undelivered unit, then the
- * driver's own remarks. Odoo receives this as `remarks` on the Delivered event.
- * e.g. "Undelivered: Washer (SN-B) - Damaged; Fridge #2 - Customer refused. Driver: left at guard"
+ * Order-level delivery_notes for a partial: one entry per undelivered unit, then one per
+ * damaged unit, then the driver's own remarks. Odoo receives this as `remarks`.
+ * e.g. "Undelivered: Fridge #2 - Customer refused. Damaged: Washer (SN-B) - Dented door. Driver: left at guard"
  */
 function composePartialRemarks(orderProducts, plannedLines, driverRemarks) {
   const byId = new Map(orderProducts.map(item => [item.id, item]));
-  const entries = plannedLines.flatMap(line => {
+  const entriesFor = outcome => plannedLines.flatMap(line => {
     const item = byId.get(line.id);
     const name = item?.products?.product_name || item?.odoo_product_name || `Item ${line.id}`;
-    return line.units.flatMap((unit, position) => unit.delivery_outcome !== 'undelivered' ? [] : [
+    return line.units.flatMap((unit, position) => unit.delivery_outcome !== outcome ? [] : [
       `${name} ${unit.assigned_serial ? `(${unit.assigned_serial})` : line.units.length > 1 ? `#${position + 1}` : ''}`.trim()
         + ` - ${unit.undelivered_reason}`,
     ]);
   });
+  const sections = [['Undelivered', entriesFor('undelivered')], ['Damaged', entriesFor('damaged')]]
+    .filter(([, entries]) => entries.length).map(([label, entries]) => `${label}: ${entries.join('; ')}.`);
   const driver = typeof driverRemarks === 'string' && driverRemarks.trim() ? ` Driver: ${driverRemarks.trim()}` : '';
-  return `Undelivered: ${entries.join('; ')}.${driver}`;
+  return `${sections.join(' ')}${driver}`;
 }
 
 function isCrewMember(order, employeeId) {
@@ -234,12 +246,13 @@ function isCrewMember(order, employeeId) {
  *
  * @param {string} orderId
  * @param {{ employee_id: string, lines: Array, remarks?: string, latitude?: number, longitude?: number,
- *           photoFiles?: Array<{ filename: string }>, signatureDataUrl?: string }} params
+ *           photoFiles?: Array<{ filename: string }>, damagePhotoFiles?: Array<{ filename: string }>,
+ *           signatureDataUrl?: string }} params
  * @returns {Promise<{ order, replayed: boolean, isPartial: true, lines }>}
  * @throws Error with .statusCode / .code for HTTP responses
  */
 async function completePartialDelivery(orderId, {
-  employee_id, lines, remarks, latitude, longitude, photoFiles = [], signatureDataUrl,
+  employee_id, lines, remarks, latitude, longitude, photoFiles = [], damagePhotoFiles = [], signatureDataUrl,
 } = {}) {
   const order = await prisma.orders.findUnique({
     where: { id: orderId },
@@ -260,7 +273,8 @@ async function completePartialDelivery(orderId, {
     throw fail(403, 'NOT_ASSIGNED_DRIVER', 'Forbidden: only the assigned driver or assistant can record a partial delivery.');
   }
 
-  const plan = planPartialDelivery(order.order_products, lines);
+  const damagePhotoPaths = damagePhotoFiles.map(file => evidenceFilePath(orderId, 'status', file.filename));
+  const plan = planPartialDelivery(order.order_products, lines, { damagePhotoPaths });
 
   const hasSignature = !!(signatureDataUrl && signatureDataUrl.startsWith('data:image'));
   if (photoFiles.length === 0 && !hasSignature) {
@@ -315,17 +329,8 @@ async function completePartialDelivery(orderId, {
     }
 
     const updated = await tx.orders.findUnique({ where: { id: orderId } });
-    if (updated.odoo_order_ref) {
-      const key = `order:${orderId}:delivered:odoo`;
-      await tx.integration_outbox.upsert({
-        where: { idempotency_key: key }, update: {},
-        create: {
-          event_type: 'SLOT_STATUS_CHANGED', target: 'odoo', idempotency_key: key,
-          status: 'pending', attempts: 0, next_retry_at: now,
-          payload: await buildOdooEventPayload(orderId, 'Delivered', tx),
-        },
-      });
-    }
+    // Same attempt-scoped key as a normal Delivered event, so one order never has two.
+    if (updated.odoo_order_ref) await enqueueOdooStatusEvent(tx, orderId, 'Delivered');
     return updated;
   }, { timeout: 15000 });
 

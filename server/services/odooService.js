@@ -68,12 +68,12 @@ async function callModel(model, method, args = [], kwargs = {}) {
  * @param {number} odooPickingId - stock.picking integer id (from push payload `id`)
  * @param {string} localStatus   - CE Hub status string
  */
-// Shared CE Hub → Odoo x_delivery_status mapping.
-// Completed has no Odoo counterpart — it returns null (no-op).
+// Shared CE Hub → Odoo x_delivery_status mapping: the six FRD v1.2 operational
+// statuses only. Unloaded stays internal to CE Hub (Arrived means "all unloaded");
+// Completed has no Odoo counterpart — both return null (no-op).
 const CE_HUB_STATUS_MAP = {
   Picked:     'picked',
   Loaded:     'loaded',
-  Unloaded:   'unloaded',
   Delivering: 'in_transit',
   Arrived:    'arrived',
   Delivered:  'delivered',
@@ -81,9 +81,11 @@ const CE_HUB_STATUS_MAP = {
 };
 
 // A delayed/retried Picked or Arrived event must not roll back a later state.
-// Explicit post-failure corrections/re-attempts require a separate agreed flow.
-function canAdvanceDeliveryStatus(current, next) {
+// The one agreed reversal: an event from a NEWER delivery attempt may move a DO off
+// `failed` (FRD INT-07 multiple attempts; see odooEventOutbox.js). Delivered is final.
+function canAdvanceDeliveryStatus(current, next, { reopenFailed = false } = {}) {
   if (current === next) return false;
+  if (current === 'failed' && reopenFailed && next !== 'failed') return true;
   if (['delivered', 'failed'].includes(current)) return false;
   const rank = { picked: 1, loaded: 2, in_transit: 3, arrived: 4, unloaded: 4, delivered: 5, failed: 5 };
   return rank[current] == null || rank[next] >= rank[current];
@@ -108,7 +110,7 @@ async function pushDeliveryStatus(odooPickingId, localStatus) {
  * @param {string} odooOrderRef  - DO number stored in orders.odoo_order_ref
  * @param {string} localStatus   - CE Hub status (Picked|Loaded|Arrived|Delivering|Delivered|Failed); Completed is a no-op
  */
-async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
+async function writeOdooDeliveryStatus(odooOrderRef, localStatus, { reopenFailed = false } = {}) {
   if (!process.env.ODOO_URL || !odooOrderRef) return null;
 
   const odooStatus = CE_HUB_STATUS_MAP[localStatus];
@@ -120,7 +122,7 @@ async function writeOdooDeliveryStatus(odooOrderRef, localStatus) {
   );
 
   if (!pickings?.length) return null;
-  if (!canAdvanceDeliveryStatus(pickings[0].x_delivery_status, odooStatus)) return pickings[0].x_delivery_status === odooStatus ? null : { status_ignored: true };
+  if (!canAdvanceDeliveryStatus(pickings[0].x_delivery_status, odooStatus, { reopenFailed })) return pickings[0].x_delivery_status === odooStatus ? null : { status_ignored: true };
 
   return callModel('stock.picking', 'write', [[pickings[0].id], { x_delivery_status: odooStatus }]);
 }
@@ -158,10 +160,32 @@ function failureLogNoteLines(payload) {
     `Driver: ${crew || '-'}${payload.driver_ref ? ` (CE Hub ${payload.driver_ref})` : ''}`,
     `Vehicle: ${payload.vehicle_plate || '-'}${payload.vehicle_ref ? ` (CE Hub ${payload.vehicle_ref})` : ''}`,
     `Trip reference: ${payload.trip_ref || '-'}; slot reference: ${payload.slot_ref || '-'}`,
-    ...(payload.order_lines || []).map(line =>
-      `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.actual_delivered_qty ?? 0}` +
-      `${line.serial_numbers?.length ? `, undelivered serials ${line.serial_numbers.join(', ')}` : ''}`),
+    payload.attempt_ref && `Delivery attempt: ${payload.attempt_no} (${payload.attempt_ref})`,
+    ...(payload.order_lines || []).map(resultLineText),
+    ...damagedLines(payload),
   ];
+}
+
+// One line of a delivery result: disjoint delivered / undelivered / damaged
+// quantities and serials. Older payloads without the split fall back to serial_numbers.
+function resultLineText(line) {
+  if (line.damaged_qty === undefined) {
+    return `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.actual_delivered_qty ?? 0}` +
+      `${line.serial_numbers?.length ? `, undelivered serials ${line.serial_numbers.join(', ')}` : ''}`;
+  }
+  const list = (label, serials) => (serials?.length ? `; ${label} serials ${serials.join(', ')}` : '');
+  return `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.delivered_qty ?? line.actual_delivered_qty ?? '-'}, ` +
+    `undelivered ${line.undelivered_qty ?? '-'}, damaged ${line.damaged_qty ?? 0}` +
+    list('delivered', line.delivered_serial_numbers) + list('undelivered', line.undelivered_serial_numbers) +
+    list('damaged', line.damaged_serial_numbers);
+}
+
+// FRD INT-10 damaged stock: one line per damaged unit with its reason, for the RMA follow-up.
+function damagedLines(payload) {
+  return (payload.order_lines || []).flatMap(line => (line.exceptions || [])
+    .filter(exception => exception.outcome === 'damaged')
+    .map(exception => `Damaged: line ${line.order_line_id} ${exception.serial_number ? `serial ${exception.serial_number}` : `unit #${exception.unit_number}`}` +
+      ` - ${exception.reason || 'no reason'} (${(exception.evidence_paths || []).length} photo${(exception.evidence_paths || []).length === 1 ? '' : 's'})`));
 }
 
 // Driver confirmation hands the failure to Odoo. Per FRD v1.2 INT-13/AC-14 the
@@ -209,6 +233,10 @@ async function triggerOdooFailureNotification(payload) {
   return { ...(alreadyFailed ? { already_failed: true } : { triggered: true }), log_note: logNote, notification_owner: 'odoo' };
 }
 
+function resultReference(payload) {
+  return payload.attempt_ref || payload.ce_hub_order_ref;
+}
+
 // FRD INT-08/INT-09 delivery result as a Log Note on the DO: delivered and
 // undelivered quantity and serials per Odoo line, completion time, notes and proof
 // references. It works before GCA confirms any custom field; Odoo's own line
@@ -222,14 +250,17 @@ function deliveryResultNoteLines(payload) {
   const crew = [payload.driver_name, payload.assistant_name].filter(Boolean).join(' / ');
   const photos = payload.proof_photo_paths || [];
   return [
-    `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${payload.ce_hub_order_ref}`,
+    `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${resultReference(payload)}`,
     `Completion time: ${payload.delivered_time || '-'}`,
     `Driver: ${crew || '-'}; vehicle: ${payload.vehicle_plate || '-'}`,
+    payload.attempt_ref && `Delivery attempt: ${payload.attempt_no} (${payload.attempt_ref}); trip ${payload.trip_ref || '-'}`,
     ...(payload.order_lines || []).map(line => {
+      if (line.damaged_qty !== undefined) return resultLineText(line);
       const delivered = line.delivered_serial_numbers?.length ? `; delivered serials ${line.delivered_serial_numbers.join(', ')}` : '';
       const undelivered = line.undelivered_serial_numbers?.length ? `; undelivered serials ${line.undelivered_serial_numbers.join(', ')}` : '';
       return `Line ${line.order_line_id}: quantity ${line.quantity}, delivered ${line.actual_delivered_qty ?? '-'}, undelivered ${line.undelivered_qty ?? '-'}${delivered}${undelivered}`;
     }),
+    ...damagedLines(payload),
     payload.remarks && `Undelivered reason: ${payload.remarks}`,
     payload.delivery_notes && payload.delivery_notes !== payload.remarks && `Notes: ${payload.delivery_notes}`,
     `Proof: ${photos.length} photo${photos.length === 1 ? '' : 's'}${payload.signature_captured ? ', customer signature captured in CE Hub' : ', no signature'}`,
@@ -242,9 +273,11 @@ async function postOdooDeliveryResultNote(odooOrderRef, payload) {
   // Rows queued before this change carry no order reference to deduplicate on.
   if (!payload?.ce_hub_order_ref) return { log_note: 'skipped_legacy_payload' };
   const pickingId = await findPickingId(odooOrderRef);
-  const marker = `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${payload.ce_hub_order_ref}`;
+  const marker = `CE Hub delivery result: ${payload.is_partial ? 'partial delivery' : 'full delivery'}. Reference: ${resultReference(payload)}`;
+  // The result reference is per attempt, so a later attempt's result is never mistaken
+  // for an earlier attempt's note.
   const existing = await callModel('mail.message', 'search_read', [[
-    ['model', '=', 'stock.picking'], ['res_id', '=', pickingId], ['body', 'ilike', payload.ce_hub_order_ref],
+    ['model', '=', 'stock.picking'], ['res_id', '=', pickingId], ['body', 'ilike', `Reference: ${resultReference(payload)}`],
   ]], { fields: ['id'], limit: 1 });
   if (!Array.isArray(existing)) throw new Error('Invalid Odoo Log Note lookup response.');
   if (existing.length) return { log_note: 'existing' };
@@ -442,6 +475,7 @@ async function writeOdooExtendedFields(odooOrderRef, payload) {
     x_failure_reason:       payload?.failure_reason  || false,
     x_driver_name:          payload?.driver_name     || false,
     x_assistant_name:       payload?.assistant_name  || false,
+    x_vehicle_plate:        payload?.vehicle_plate   || false,
   }]).catch(err => {
     console.error(`[Odoo] writeOdooExtendedFields failed for ${odooOrderRef} (non-fatal, extended fields unconfirmed):`, err.message);
     return null;
@@ -583,6 +617,94 @@ async function writeOdooAppointmentDecision(odooOrderRef, payload) {
   return true;
 }
 
+// ── FRD INT-07..INT-10 additions (JSON-RPC transport) ─────────────────────────
+
+// Post a Log Note unless one containing `marker` already exists on the picking, so a
+// retried outbox row never posts twice. The marker is written into the note itself.
+async function postOdooLogNoteOnce(pickingId, marker, lines) {
+  const existing = await callModel('mail.message', 'search_read', [[
+    ['model', '=', 'stock.picking'], ['res_id', '=', pickingId], ['body', 'ilike', marker],
+  ]], { fields: ['id'], limit: 1 });
+  if (!Array.isArray(existing)) throw new Error('Invalid Odoo Log Note lookup response.');
+  if (existing.length) return 'existing';
+  const messageId = await postOdooLogNote(pickingId, [...lines, marker]);
+  if (!Number.isInteger(messageId) && messageId !== true) throw new Error(`Odoo did not acknowledge the Log Note (${marker}).`);
+  return 'posted';
+}
+
+function crewLine(payload) {
+  const crew = [payload.driver_name, payload.assistant_name].filter(Boolean).join(' / ');
+  return `Driver: ${crew || '-'}${payload.driver_ref ? ` (CE Hub ${payload.driver_ref})` : ''}; ` +
+    `vehicle: ${payload.vehicle_plate || '-'}${payload.vehicle_ref ? ` (CE Hub ${payload.vehicle_ref})` : ''}`;
+}
+
+/**
+ * FRD INT-07 attempt history: one Log Note when a delivery attempt first reaches Odoo
+ * (its first Picked/Loaded/In Transit/Arrived event), with the attempt, trip and crew.
+ */
+async function postOdooAttemptNote(odooOrderRef, payload) {
+  if (!payload?.attempt_ref) return { log_note: 'skipped_legacy_payload' };
+  const pickingId = await findPickingId(odooOrderRef);
+  // Marker deliberately avoids the word "Reference": the delivery-result note is found by
+  // `Reference: <attempt_ref>` (case-insensitive), and must never match this note.
+  const note = await postOdooLogNoteOnce(pickingId, `CE Hub attempt: ${payload.attempt_ref}`, [
+    `CE Hub delivery attempt ${payload.attempt_no} started (first status: ${CE_HUB_STATUS_MAP[payload.status] || payload.status}).`,
+    `Event time: ${payload.occurred_at || '-'}`,
+    crewLine(payload),
+    `Trip reference: ${payload.trip_ref || '-'}; slot reference: ${payload.slot_ref || '-'}`,
+  ]);
+  return { log_note: note };
+}
+
+/**
+ * FRD INT-07 driver change: latest driver/vehicle on the DO (extended fields, when
+ * enabled) plus a traceable Log Note, deduplicated by the event's update reference.
+ */
+async function writeOdooDriverChange(odooOrderRef, payload, eventId) {
+  if (!process.env.ODOO_URL || !odooOrderRef) throw new Error('Driver change synchronization blocked: Odoo URL or DO reference missing.');
+  const pickingId = await findPickingId(odooOrderRef);
+  await writeOdooExtendedFields(odooOrderRef, payload);
+  const previous = payload.previous_crew || {};
+  const note = await postOdooLogNoteOnce(pickingId, `CE Hub update reference: ${eventId}`, [
+    'CE Hub delivery crew changed.',
+    `Now: ${crewLine(payload)}`,
+    `Before: driver ${previous.driver_name || '-'}${previous.assistant_name ? ` / ${previous.assistant_name}` : ''}; vehicle ${previous.vehicle_plate || '-'}`,
+    payload.attempt_ref && `Delivery attempt: ${payload.attempt_no} (${payload.attempt_ref})`,
+    `Changed at: ${payload.occurred_at || '-'}`,
+  ]);
+  return { log_note: note };
+}
+
+/**
+ * FRD §12 data points 26-27: signature, delivery photos and damage evidence as
+ * ir.attachment records on the DO. Files already attached under the same name are
+ * skipped, so a retry never duplicates them.
+ *
+ * @param {string} odooOrderRef
+ * @param {Array<{ filename: string, mimetype: string, base64: string }>} files - odooProofFiles.proofFilesFor()
+ */
+async function attachOdooFiles(odooOrderRef, files) {
+  if (!files?.length) return { attached: 0, existing: 0 };
+  const pickingId = await findPickingId(odooOrderRef);
+  const names = files.map(file => file.filename);
+  const existing = await callModel('ir.attachment', 'search_read', [[
+    ['res_model', '=', 'stock.picking'], ['res_id', '=', pickingId], ['name', 'in', names],
+  ]], { fields: ['name'] });
+  if (!Array.isArray(existing)) throw new Error('Invalid Odoo attachment lookup response.');
+  const have = new Set(existing.map(record => record.name));
+  let attached = 0;
+  for (const file of files) {
+    if (have.has(file.filename)) continue;
+    const id = await callModel('ir.attachment', 'create', [{
+      name: file.filename, datas: file.base64, mimetype: file.mimetype,
+      res_model: 'stock.picking', res_id: pickingId,
+    }]);
+    if (!Number.isInteger(id) && !(Array.isArray(id) && id.length)) throw new Error(`Odoo did not acknowledge attachment ${file.filename}.`);
+    attached += 1;
+  }
+  return { attached, existing: have.size };
+}
+
 module.exports = {
   authenticate,
   writeOdooAppointmentResult,
@@ -595,6 +717,11 @@ module.exports = {
   deliveryResultNoteLines,
   writeOdooExtendedFields,
   writeOdooOrderLines,
+  canAdvanceDeliveryStatus,
+  failureLogNoteLines,
+  postOdooAttemptNote,
+  writeOdooDriverChange,
+  attachOdooFiles,
   getOrdersForDeliveryDate,
   iterateOrdersForDeliveryDate,
   isOrderEligibleForDeliveryDate,

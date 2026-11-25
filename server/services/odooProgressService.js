@@ -1,6 +1,6 @@
 const { hasCompleteSerialAssignments, isOdooManaged } = require('./odooPreparation');
 const { unitsFor } = require('./orderProductUnits');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
 
 // Record the milestone in the same transaction as Odoo preparation. Keep
 // Pending/Scheduled intact: they are planning states used by B1 and the UI.
@@ -10,17 +10,8 @@ async function recordPickedMilestone(db, orderId) {
     || !['Pending', 'Scheduled', 'Loaded'].includes(order.order_status)) return null;
   const items = order.order_products || [];
   if (!hasCompleteSerialAssignments(items) || items.some(item => unitsFor(item).some(unit => unit.handling_status !== 'pending'))) return null;
-  const payload = await buildOdooEventPayload(orderId, 'Picked', db);
-  const key = `order:${orderId}:odoo:Picked`;
-  const row = await db.integration_outbox.upsert({
-    where: { idempotency_key: key }, update: {},
-    create: { event_type: 'SLOT_STATUS_CHANGED', target: 'odoo', payload,
-      idempotency_key: key, status: 'pending', attempts: 0, next_retry_at: new Date() },
-  });
   // Refresh a not-yet-attempted snapshot if Odoo corrects serials before loading.
-  await db.integration_outbox.updateMany({
-    where: { id: row.id, status: 'pending', attempts: 0 }, data: { payload },
-  });
+  const row = await enqueueOdooStatusEvent(db, orderId, 'Picked', { refreshPending: true });
   return row;
 }
 
