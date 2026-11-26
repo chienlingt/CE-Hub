@@ -173,13 +173,14 @@ function nearestNeighbour(orders, metrics) {
   return result;
 }
 
-function improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS) {
+// `fixed` = how many stops at the front must stay where they are (a stop the driver is already serving).
+function improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS, fixed = 0) {
   let best = evaluateSequence(seed, orders, slot, metrics, departureMs, graceSeconds);
   let changed = true;
   let passes = 0;
   while (changed && passes++ < 5) {
     changed = false;
-    for (let i = 0; i < seed.length - 1; i++) {
+    for (let i = fixed; i < seed.length - 1; i++) {
       for (let j = i + 1; j < seed.length; j++) {
         const candidate = [...best.sequence.slice(0, i), ...best.sequence.slice(i, j + 1).reverse(), ...best.sequence.slice(j + 1)];
         const evaluated = evaluateSequence(candidate, orders, slot, metrics, departureMs, graceSeconds);
@@ -190,7 +191,7 @@ function improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds = 
   return best;
 }
 
-function selectBestSequence(orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS) {
+function selectBestSequence(orders, slot, metrics, departureMs, graceSeconds = DEFAULT_GRACE_SECONDS, pinned = []) {
   const current = orders.map((_, i) => i).sort((a, b) =>
     Number(orders[b].truck_loading_sequence || 0) - Number(orders[a].truck_loading_sequence || 0));
   const earliestWindow = orders.map((_, i) => i).sort((a, b) => {
@@ -198,8 +199,10 @@ function selectBestSequence(orders, slot, metrics, departureMs, graceSeconds = D
     const bb = accessBounds(orders[b], slot).end || Infinity;
     return aa - bb;
   });
-  const seeds = [current, nearestNeighbour(orders, metrics), earliestWindow];
-  return seeds.map(seed => improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds))
+  // Pinned stops (already in progress) stay first, in their order; only the rest is searched.
+  const pin = seed => pinned.length ? [...pinned, ...seed.filter(index => !pinned.includes(index))] : seed;
+  const seeds = [current, nearestNeighbour(orders, metrics), earliestWindow].map(pin);
+  return seeds.map(seed => improveTwoOpt(seed, orders, slot, metrics, departureMs, graceSeconds, pinned.length))
     .sort((a, b) => a.score - b.score)[0];
 }
 
@@ -237,7 +240,7 @@ function reviewDetails(evaluation) {
       service_end_at: stop.service_end_at }));
 }
 
-async function persistPlan(slot, plan, stops = []) {
+async function persistPlan(slot, plan, stops = [], tail = []) {
   return prisma.$transaction(async tx => {
     // Serialize route commits, then reject calculations based on stale orders,
     // assignments, windows or another route version.
@@ -253,6 +256,8 @@ async function persistPlan(slot, plan, stops = []) {
       await tx.installation_schedules.updateMany({ where: { order_id: stop.order_id },
         data: { estimated_arrival_time: new Date(stop.eta), updated_at: new Date() } });
     }
+    // Stops left out of the route (unresolved address) load first: they take the lowest loading numbers.
+    for (const stop of tail) await tx.orders.update({ where: { id: stop.order_id }, data: { truck_loading_sequence: stop.loading_sequence } });
     await tx.time_slots.update({ where: { id: slot.id }, data: {
       route_plan: plan, route_version: { increment: 1 }, route_last_reason: plan.reason,
       ...(stops.length ? { route_polyline: plan.polyline || null, route_distance_m: plan.total_distance_m,
@@ -300,13 +305,23 @@ async function finalEvaluation(sequence, orders, slot, origin, departureMs, matr
   return { ...evaluateSequence(sequence, orders, slot, metrics, departureMs, graceSeconds), usedFallback, staticSeconds };
 }
 
+// No GPS from the phone: the driver is most likely at the stop they just finished, so route from there.
+async function lastCompletedStopCoords(slotId) {
+  const stop = await prisma.orders.findFirst({
+    where: { time_slot_id: slotId, order_status: { in: ['Delivered', 'Failed'] } },
+    orderBy: { updated_at: 'desc' },
+    include: { buildings: true, customers: true },
+  });
+  if (!stop) return null;
+  try { const coords = await resolveOrderCoords(stop); return validCoords(coords) ? coords : null; } catch { return null; }
+}
+
 async function calculateSlot(slot, options = {}, requestedIds = null) {
   const orders = slot.orders || [];
   if (!orders.length) return { applied: false, reason: 'NO_ACTIVE_ORDERS' };
-  if (orders.some(order => ['In Progress', 'Installing', 'Arrived'].includes(order.order_status) ||
-      (order.actual_arrival_date_time && !order.delivery_end_date_time))) {
-    return { applied: false, reason: 'ACTIVE_STOP_IN_PROGRESS' };
-  }
+  // A stop the driver is already serving stays first; only the stops after it are re-ordered.
+  const isActive = order => ['In Progress', 'Installing', 'Arrived'].includes(order.order_status) ||
+    Boolean(order.actual_arrival_date_time && !order.delivery_end_date_time);
   const { warehouseAddress = DEFAULT_WAREHOUSE_ADDRESS, warehouseCoords, originCoords, departureAt, dynamic = false,
     reason = 'initial_optimisation', allowAccessWindowViolation = false, preview = false } = options;
   // A preview only estimates a manual order: it never stores a plan or flags the run for review.
@@ -319,11 +334,14 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
   if (!Number.isFinite(departureMs) || (!onRoad && slotStart < Date.now())) {
     return review('PAST_OR_INVALID_SESSION', []);
   }
+  let originFromStop = null;
   if (onRoad && reason !== 'departure_traffic_check' && !originCoords) {
-    return review('CURRENT_LOCATION_REQUIRED', []);
+    originFromStop = await lastCompletedStopCoords(slot.id);
+    // Nothing completed yet and no location: there is no honest starting point.
+    if (!originFromStop) return review('CURRENT_LOCATION_REQUIRED', []);
   }
   let origin;
-  try { origin = (onRoad && originCoords) || warehouseCoords || await geocodeAddress(warehouseAddress); }
+  try { origin = (onRoad && originCoords) || originFromStop || warehouseCoords || await geocodeAddress(warehouseAddress); }
   catch { return review('WAREHOUSE_COORDINATES_UNAVAILABLE', []); }
   if (!validCoords(origin)) return review('INVALID_ORIGIN_COORDINATES', []);
   const resolved = [], unresolved = [];
@@ -335,16 +353,24 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     }
     catch { unresolved.push({ order_id: order.id, reason: 'UNRESOLVED_ADDRESS' }); }
   }
-  if (unresolved.length) return review('UNRESOLVED_ADDRESS', unresolved);
+  // A stop with no usable address cannot be routed. The others are still optimised and the
+  // unresolved one is flagged for review (a hand-picked order cannot be judged without it).
+  if (!resolved.length || (unresolved.length && requestedIds)) return review('UNRESOLVED_ADDRESS', unresolved);
   let matrix;
   try { matrix = await buildTravelMetricsMatrix([origin, ...resolved.map(order => order.coords)], departureMs); }
-  catch { matrix = { durations: Array.from({ length: orders.length + 1 }, () => Array(orders.length + 1).fill(null)),
-    distances: Array.from({ length: orders.length + 1 }, () => Array(orders.length + 1).fill(null)), usedFallback: true }; }
+  catch { matrix = { durations: Array.from({ length: resolved.length + 1 }, () => Array(resolved.length + 1).fill(null)),
+    distances: Array.from({ length: resolved.length + 1 }, () => Array(resolved.length + 1).fill(null)), usedFallback: true }; }
   fillFallbackMatrices([origin, ...resolved.map(order => order.coords)], matrix);
-  const baselineSequence = currentSequence(resolved);
+  const pinned = currentSequence(resolved).filter(index => isActive(resolved[index]));
+  const pinnedIds = new Set(pinned.map(index => resolved[index].id));
+  const baselineSequence = [...pinned, ...currentSequence(resolved).filter(index => !pinned.includes(index))];
   const proposedSequence = requestedIds
     ? requestedIds.map(id => resolved.findIndex(order => order.id === id))
-    : selectBestSequence(resolved, slot, matrix, departureMs, graceSeconds).sequence;
+    : selectBestSequence(resolved, slot, matrix, departureMs, graceSeconds, pinned).sequence;
+  // A hand-picked order may not move the stop that is in progress.
+  if (requestedIds && pinned.some((index, k) => proposedSequence[k] !== index)) {
+    return preview ? review('ACTIVE_STOP_IN_PROGRESS', []) : { applied: false, reason: 'ACTIVE_STOP_IN_PROGRESS' };
+  }
   const cache = new Map();
   if (preview && requestedIds) {
     const estimate = await finalEvaluation(proposedSequence, resolved, slot, origin, departureMs, matrix, cache, graceSeconds);
@@ -361,7 +387,9 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
   if (violations.length && requestedIds && !allowAccessWindowViolation) {
     return { applied: false, requires_confirmation: true, needs_review: true, violations };
   }
-  if (violations.length && !requestedIds) return review('NO_FEASIBLE_SEQUENCE', violations);
+  // A stop already in progress cannot be moved, so its own lateness does not stop the rest being optimised.
+  const blocking = violations.filter(violation => !pinnedIds.has(violation.order_id));
+  if (blocking.length && !requestedIds) return review('NO_FEASIBLE_SEQUENCE', blocking);
   const savedSeconds = baseline.travelSeconds - best.travelSeconds;
   const savedRatio = baseline.travelSeconds > 0 ? savedSeconds / baseline.travelSeconds : 0;
   const preventsViolation = baseline.hardViolationSeconds + baseline.slotViolationSeconds > best.hardViolationSeconds + best.slotViolationSeconds;
@@ -373,6 +401,11 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     // Refresh timing without sequence churn when the recommended route is kept.
     best = baseline;
   }
+  // Loading numbers stay unique: unresolved stops sit at the end of the route, so they load first.
+  const tailOrders = orders.filter(order => unresolved.some(item => item.order_id === order.id))
+    .sort((a, b) => Number(a.truck_loading_sequence || 0) - Number(b.truck_loading_sequence || 0));
+  const tail = tailOrders.map((order, index) => ({ order_id: order.id, loading_sequence: index + 1 }));
+  const stops = best.stops.map(stop => ({ ...stop, loading_sequence: stop.loading_sequence + tail.length }));
   const usedFallback = matrix.usedFallback || best.usedFallback;
   const geometry = usedFallback ? null : await computeOrderedRoute(origin, best.sequence.map(index => resolved[index]), departureMs).catch(() => null);
   const plan = {
@@ -381,16 +414,18 @@ async function calculateSlot(slot, options = {}, requestedIds = null) {
     traffic_model: usedFallback ? null : 'BEST_GUESS',
     traffic_departure_at: new Date(predictiveDeparture(departureMs)).toISOString(),
     traffic_basis: onRoad ? 'actual_departure' : 'session_forecast',
-    origin: { address: onRoad ? 'Current position' : warehouseAddress, latitude: origin.lat, longitude: origin.lon },
+    origin: { address: onRoad ? (originFromStop ? 'Last completed stop (location unavailable)' : 'Current position') : warehouseAddress, latitude: origin.lat, longitude: origin.lon },
     total_distance_m: best.distanceMeters, total_travel_time_s: best.travelSeconds,
     static_travel_time_s: usedFallback ? null : best.staticSeconds,
     predicted_traffic_delay_s: usedFallback ? null : Math.max(0, best.travelSeconds - best.staticSeconds),
     wait_time_s: best.waitSeconds, late_time_s: best.lateSeconds, hard_violation_s: best.hardViolationSeconds,
-    session_violation_s: best.slotViolationSeconds, feasibility: violations.length ? 'needs_review' : 'feasible',
+    session_violation_s: best.slotViolationSeconds, feasibility: violations.length || unresolved.length ? 'needs_review' : 'feasible',
+    ...(unresolved.length ? { review: { reason: 'UNRESOLVED_ADDRESS', issues: unresolved, checked_at: new Date().toISOString() } } : {}),
     violations, manual_override: Boolean(requestedIds && violations.length && allowAccessWindowViolation),
-    score: best.score, stops: best.stops, segments: best.segments, polyline: geometry?.polyline || null,
+    score: best.score, stops, segments: best.segments, polyline: geometry?.polyline || null,
   };
-  return { ...await persistPlan(slot, plan, best.stops), saved_seconds: savedSeconds, saved_ratio: savedRatio };
+  return { ...await persistPlan(slot, plan, stops, tail), saved_seconds: savedSeconds, saved_ratio: savedRatio,
+    ...(unresolved.length ? { reason: 'UNRESOLVED_ADDRESS', issues: unresolved } : {}) };
 }
 
 async function optimizeScheduledSlot(timeSlotId, options = {}) {
