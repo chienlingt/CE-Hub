@@ -12,8 +12,7 @@ const dayjs = require('dayjs');
 const { getCoordinatesFromAddress, calculateRoute } = require('../services/routingService');
 
 const { markOrderDelivering, markOrderDelivered, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
-const { enqueue } = require('../services/integrationOutboxService');
-const { buildOdooEventPayload } = require('../services/odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('../services/odooEventOutbox');
 const { completePartialDelivery } = require('../services/partialDeliveryService');
 
 const upload = require('../middleware/upload');
@@ -307,7 +306,8 @@ router.get('/completed-deliveries', async (req, res) => {
     const outboxRows = orderIds.length
       ? await prisma.integration_outbox.findMany({
           where: {
-            idempotency_key: { in: orders.map(o => `order:${o.id}:odoo:Delivered`) },
+            // Attempt-scoped keys: order:{id}:a{n}:odoo:Delivered (older rows: order:{id}:odoo:Delivered).
+            OR: orders.map(o => ({ idempotency_key: { startsWith: `order:${o.id}:`, endsWith: ':odoo:Delivered' } })),
           },
           orderBy: { created_at: 'desc' },
         })
@@ -315,7 +315,7 @@ router.get('/completed-deliveries', async (req, res) => {
 
     const outboxByOrder = {};
     for (const row of outboxRows) {
-      const match = row.idempotency_key.match(/^order:([^:]+):odoo:/);
+      const match = row.idempotency_key.match(/^order:([^:]+):/);
       if (match) outboxByOrder[match[1]] = outboxByOrder[match[1]] || row;
     }
 
@@ -1479,12 +1479,7 @@ router.post('/:id/dispatch', async (req, res) => {
     }
 
     if (updated.odoo_order_ref) {
-      enqueue({
-        eventType:      'SLOT_STATUS_CHANGED',
-        target:         'odoo',
-        payload:        { orderId: updated.id, odooRef: updated.odoo_order_ref, status: 'Delivering' },
-        idempotencyKey: `order:${updated.id}:odoo:Delivering`,
-      }).catch(e => console.error('[Dispatch] outbox enqueue failed:', e.message));
+      enqueueOdooStatusEvent(prisma, updated.id, 'Delivering').catch(e => console.error('[Dispatch] outbox enqueue failed:', e.message));
     }
 
     res.json({ success: true, order: updated, dispatched_by_name: dispatchedByName, dispatched_at: now });
@@ -1598,12 +1593,7 @@ router.post('/:id/deliver', upload.fields([
 
     // Enqueue Odoo write-back via outbox — never inline (A.3.2)
     if (updated.odoo_order_ref) {
-      buildOdooEventPayload(updated.id, 'Delivered').then(payload => enqueue({
-        eventType:      'SLOT_STATUS_CHANGED',
-        target:         'odoo',
-        payload,
-        idempotencyKey: `order:${updated.id}:odoo:Delivered`,
-      })).catch(e => console.error('[Deliver] outbox enqueue failed:', e.message));
+      enqueueOdooStatusEvent(prisma, updated.id, 'Delivered').catch(e => console.error('[Deliver] outbox enqueue failed:', e.message));
     }
 
     res.json({ success: true, order: updated, delivered_by_name: deliveredByName, delivered_at: now });
@@ -1618,10 +1608,13 @@ router.post('/:id/deliver', upload.fields([
 // POST /:id/partial-delivery — driver completes an order with only some units delivered (FRD INT-09).
 // Multipart: photos[] and/or signature_data_url (POD, required), employee_id, remarks?, latitude?,
 // longitude?, lines (JSON string): [{ order_product_id, delivered_serial_numbers?,
-//   undelivered_serial_numbers?, delivered_quantity?, undelivered_reasons?: [{ serial_number? | unit_number?, reason }] }]
+//   undelivered_serial_numbers?, delivered_quantity?, undelivered_reasons?: [{ serial_number? | unit_number?, reason,
+//   outcome?: 'undelivered'|'damaged', photo_indexes?: [n] }] }]. damage_photos[] holds the photos that
+//   damaged units point to by index (each damaged unit needs at least one).
 // Order becomes Delivered and a Delivered event with is_partial: true is queued for Odoo.
 router.post('/:id/partial-delivery', upload.fields([
   { name: 'photos', maxCount: 10 },
+  { name: 'damage_photos', maxCount: 10 },
 ]), async (req, res) => {
   try {
     const { employee_id, remarks, latitude, longitude, signature_data_url } = req.body || {};
@@ -1636,6 +1629,7 @@ router.post('/:id/partial-delivery', upload.fields([
       latitude:         Number.isFinite(lat) ? lat : null,
       longitude:        Number.isFinite(lng) ? lng : null,
       photoFiles:       req.files?.photos || [],
+      damagePhotoFiles: req.files?.damage_photos || [],
       signatureDataUrl: signature_data_url || null,
     });
     res.json({
@@ -1873,7 +1867,7 @@ const { confirmFailure } = require('../services/deliveryFailureService');
 //   2. no flag               → admin triage: update issue_status / item statuses (no A6).
 //      Admin login required (NFR-04); the driver failure path stays open to drivers.
 const isConfirmFailure = body => body?.confirm_failure === true || body?.confirm_failure === 'true';
-router.patch('/:id/issue', upload.array('files', 5),
+router.patch('/:id/issue', upload.array('files', 15),
   (req, res, next) => (isConfirmFailure(req.body) ? next() : requireReviewAdmin(req, res, next)),
   async (req, res) => {
   const orderId = req.params.id;

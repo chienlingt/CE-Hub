@@ -4,11 +4,13 @@
 // with confirm_failure: true per partner A6 documentation.
 // Every item is failed; if some units reached the customer, the driver completes the
 // order as a partial delivery via Update → Delivered instead (INT-09).
-import { useEffect, useRef, useState } from 'react';
+// Each unit comes back intact unless the driver marks it Damaged with a photo (FRD INT-10).
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import PhotoPicker from './PhotoPicker';
 import { FAILURE_REASONS, FAILURE_REASON_STYLES } from '../../utils/failureReasons';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
+import { failureUnits, buildFailurePayload } from '../../utils/partialDelivery';
 
 function apiUrl(path) {
   return `${API_BASE.replace(/\/$/, '')}/api/${path.replace(/^\/+/, '')}`;
@@ -32,6 +34,16 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
   const [submitting,   setSubmitting]   = useState(false);
   const [error,        setError]        = useState(null);
   const [confirmOpen,  setConfirmOpen]  = useState(false);
+  const [damage,       setDamage]       = useState({});   // unit key → { damaged, photos }
+  const units = useMemo(() => failureUnits(items), [items]);
+  const failure = useMemo(() => buildFailurePayload(items, damage, photoFiles.length), [items, damage, photoFiles.length]);
+
+  function toggleDamaged(key) {
+    setDamage(prev => ({ ...prev, [key]: prev[key]?.damaged ? { damaged: false, photos: [] } : { damaged: true, photos: [] } }));
+  }
+  function addDamagePhotos(key, files) {
+    setDamage(prev => ({ ...prev, [key]: { damaged: true, photos: [...(prev[key]?.photos || []), ...files] } }));
+  }
 
   // Location — captured best-effort on modal open
   const locationRef = useRef(null);
@@ -82,11 +94,10 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
       formData.append('issue_desc', desc);
       formData.append('issue_status', 'open');
       if (employeeId) formData.append('employee_id', employeeId);
-      formData.append(
-        'order_products_status',
-        JSON.stringify(items.map(i => ({ id: i.id, item_delivery_status: 'failed' })))
-      );
+      formData.append('order_products_status', JSON.stringify(failure.status));
+      // Evidence photos first, then damage photos: units point to them by index.
       photoFiles.forEach(f => formData.append('files', f));
+      failure.files.forEach(f => formData.append('files', f));
       if (loc) {
         formData.append('latitude',  String(loc.latitude));
         formData.append('longitude', String(loc.longitude));
@@ -113,7 +124,8 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
     }
   }
 
-  const canSubmit = reason && (!descRequired || desc.trim().length > 0) && items.length > 0;
+  const canSubmit = reason && (!descRequired || desc.trim().length > 0) && items.length > 0
+    && failure.missingPhotos.length === 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto">
@@ -206,7 +218,7 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
           {/* Items — all marked failed */}
           <div>
             <p className="text-xs font-semibold text-gray-700 mb-2">
-              Items <span className="text-gray-400 font-normal ml-1">(all will be marked failed)</span>
+              Items <span className="text-gray-400 font-normal ml-1">(all will be marked failed; mark any damaged unit)</span>
             </p>
             {loadingItems ? (
               <p className="text-xs text-gray-400">Loading items…</p>
@@ -214,15 +226,44 @@ export default function FailDeliveryModal({ order, employeeId, onClose, onSucces
               <p className="text-xs text-gray-400">No items found</p>
             ) : (
               <div className="space-y-2">
-                {items.map(item => (
-                  <div key={item.id} className="flex items-center justify-between gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                    <p className="text-xs text-gray-800 font-medium truncate flex-1">
-                      {item.products?.product_name || item.product_name || `Item ${item.id}`}
-                      {item.quantity > 1 && <span className="font-normal text-gray-400"> ×{item.quantity}</span>}
-                    </p>
-                    <span className="shrink-0 text-xs px-2 py-1 rounded border font-medium bg-red-100 text-red-700 border-red-200">Failed</span>
-                  </div>
-                ))}
+                {units.map(unit => {
+                  const state = damage[unit.key];
+                  return (
+                    <div key={unit.key} className={`rounded-lg px-3 py-2 space-y-2 ${state?.damaged ? 'bg-red-50' : 'bg-gray-50'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs text-gray-800 font-medium truncate">{unit.name}</p>
+                          <p className="font-mono text-[11px] text-gray-500 break-all">{unit.serial || `Unit #${unit.unit_number}`}</p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-pressed={!!state?.damaged}
+                          onClick={() => toggleDamaged(unit.key)}
+                          className={`shrink-0 text-xs px-2 py-1 rounded border font-medium ${state?.damaged
+                            ? 'bg-red-600 text-white border-red-600'
+                            : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                        >
+                          {state?.damaged ? 'Damaged' : 'Mark damaged'}
+                        </button>
+                      </div>
+                      {state?.damaged && (
+                        <div>
+                          <PhotoPicker
+                            onFilesSelected={files => addDamagePhotos(unit.key, files)}
+                            label="Photo of the damage"
+                            variant="issue"
+                            photosRequired
+                          />
+                          <p className={`mt-1 text-xs ${state.photos.length ? 'text-gray-600' : 'text-red-600'}`}>
+                            {state.photos.length
+                              ? `${state.photos.length} photo${state.photos.length === 1 ? '' : 's'} added`
+                              : 'A damaged unit needs at least one photo.'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <p className="mt-2 text-xs text-gray-500">

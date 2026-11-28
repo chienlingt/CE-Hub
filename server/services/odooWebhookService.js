@@ -1,5 +1,10 @@
 // server/services/odooWebhookService.js
 //
+// RETIRED (23 Nov 2026), kept for history only. Nothing imports this file, and
+// ODOO_USE_WEBHOOK no longer has any effect. All CE Hub → Odoo callbacks now use one
+// envelope and the ODOO_CALLBACK_TRANSPORT switch: see odooCallbackEnvelope.js,
+// odooCallbackTransport.js and docs/odoo-callback-spec.md.
+//
 // CE Hub → Odoo status callbacks over HTTP webhook (alternative transport to
 // the RPC field writes in odooService.js).
 //

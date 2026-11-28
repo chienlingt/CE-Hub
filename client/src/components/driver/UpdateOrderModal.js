@@ -9,7 +9,7 @@ import SignaturePad from './SignaturePad';
 import PhotoPicker from './PhotoPicker';
 import PartialDeliveryItems from './PartialDeliveryItems';
 import { allowedTransitions, isTerminal } from '../../utils/driverStatusMap';
-import { classifyUnits, deliveryMode, missingReasons, buildPartialLines } from '../../utils/partialDelivery';
+import { classifyUnits, deliveryMode, missingReasons, missingDamagePhotos, buildPartialLines, damagePhotoPlan } from '../../utils/partialDelivery';
 import { API_BASE_URL as API_BASE } from '../../utils/apiBaseUrl';
 
 function apiUrl(path) {
@@ -75,7 +75,7 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
   const mode        = units.length ? deliveryMode(units) : 'full';
   const isPartial   = isCompletion && mode === 'partial';
   const undelivered = units.filter(unit => !unit.delivered).length;
-  const reasonsOk   = !isPartial || missingReasons(units).length === 0;
+  const reasonsOk   = !isPartial || (missingReasons(units).length === 0 && missingDamagePhotos(units).length === 0);
   const itemsOk     = !isCompletion || (loadingItems !== null && mode !== 'none' && reasonsOk);
 
   function changeUnit(key, patch) {
@@ -114,6 +114,8 @@ export default function UpdateOrderModal({ order, employeeId, onClose, onSuccess
         form.append('lines', JSON.stringify(buildPartialLines(units)));
         if (notes) form.append('remarks', notes);
         for (const f of photoFiles) form.append('photos', f);
+        // INT-10: damaged units point to these by index (photo_indexes in lines).
+        for (const f of damagePhotoPlan(units).files) form.append('damage_photos', f);
         if (podMode === 'signature' && signatureDataUrl) {
           form.append('signature_data_url', signatureDataUrl);
         }

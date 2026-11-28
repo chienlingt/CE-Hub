@@ -17,12 +17,11 @@ const {
   upsertEmployeeLocation,
 } = require('./deliveryLifecycleService');
 const {
-  enqueue,
   enqueueSlotEndTripSideEffects,
   enqueueSlotDepartureSideEffects,
   enqueueNextOnTheWay,
 } = require('./integrationOutboxService');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -246,12 +245,7 @@ async function processDeliveryCompletion(orderId, {
   // ── Step 6: Odoo sync via outbox (A.4.4) ─────────────────────────────────
   let odooEnqueued = false;
   if (updatedOrder.odoo_order_ref) {
-    await enqueue({
-      eventType:      'SLOT_STATUS_CHANGED',
-      target:         'odoo',
-      payload:        await buildOdooEventPayload(orderId, finalStatus),
-      idempotencyKey: `order:${orderId}:odoo:${finalStatus}`,
-    }).catch(e => console.error('[A4] Odoo enqueue failed:', e.message));
+    await enqueueOdooStatusEvent(prisma, orderId, finalStatus).catch(e => console.error('[A4] Odoo enqueue failed:', e.message));
     odooEnqueued = true;
   }
 

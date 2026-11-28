@@ -11,8 +11,7 @@
 //   - Odoo:         event SLOT_STATUS_CHANGED with status "Arrived", queued once per order
 
 const prisma = require('../prismaClient');
-const { buildOdooEventPayload } = require('./odooPayloadBuilder');
-const { enqueue } = require('./integrationOutboxService');
+const { enqueueOdooStatusEvent } = require('./odooEventOutbox');
 const { ELIGIBLE_STATUSES } = require('./deliveryFailureService');
 const { upsertEmployeeLocation } = require('./deliveryLifecycleService');
 
@@ -34,7 +33,7 @@ function isCrewMember(order, employeeId) {
  * @returns {Promise<{ order: object, arrivedAt: Date, alreadyArrived: boolean }>}
  * @throws Error with .statusCode / .code for HTTP responses
  */
-async function markOrderArrived(orderId, { employeeId, latitude, longitude } = {}, db = prisma, deps = { buildPayload: buildOdooEventPayload, enqueue }) {
+async function markOrderArrived(orderId, { employeeId, latitude, longitude } = {}, db = prisma, deps = { enqueueOdooStatusEvent }) {
   if (!isUuid(orderId)) throw fail(400, 'INVALID_ORDER', 'Invalid order id.');
   if (!employeeId) throw fail(400, 'EMPLOYEE_REQUIRED', 'employee_id is required.');
 
@@ -77,11 +76,7 @@ async function markOrderArrived(orderId, { employeeId, latitude, longitude } = {
   // Odoo is told through the outbox, never inline. A failure here must not undo the arrival.
   if (fresh.odoo_order_ref) {
     try {
-      await deps.enqueue({
-        eventType: 'SLOT_STATUS_CHANGED', target: 'odoo',
-        payload: await deps.buildPayload(orderId, 'Arrived'),
-        idempotencyKey: `order:${orderId}:odoo:Arrived`,
-      });
+      await deps.enqueueOdooStatusEvent(db, orderId, 'Arrived');
     } catch (error) {
       console.error('[Arrival] Odoo enqueue failed (arrival is saved):', error.message);
     }

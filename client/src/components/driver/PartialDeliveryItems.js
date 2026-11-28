@@ -1,8 +1,10 @@
 // client/src/components/driver/PartialDeliveryItems.js
 // FRD INT-09 — per-unit outcome review inside the Delivered (POD) step.
 // Loaded units count as delivered unless the driver flips them; a unit that was never
-// loaded is undelivered. Every undelivered unit needs a reason.
-import { UNDELIVERED_REASONS } from '../../utils/partialDelivery';
+// loaded is undelivered. Every undelivered unit needs a reason. The reason "Damaged" makes
+// the unit damaged (FRD INT-10), and a damaged unit needs at least one photo.
+import PhotoPicker from './PhotoPicker';
+import { UNDELIVERED_REASONS, DAMAGED_REASON } from '../../utils/partialDelivery';
 
 /**
  * @param {{
@@ -52,7 +54,7 @@ export default function PartialDeliveryItems({ units, onChange, disabled = false
                       key={reason}
                       type="button"
                       disabled={disabled}
-                      onClick={() => onChange(unit.key, { reason })}
+                      onClick={() => onChange(unit.key, { reason, ...(reason !== DAMAGED_REASON && { damagePhotos: [] }) })}
                       className={`rounded-full border px-2.5 py-1 text-xs ${unit.choice === reason
                         ? 'border-amber-500 bg-amber-500 text-white'
                         : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
@@ -72,6 +74,25 @@ export default function PartialDeliveryItems({ units, onChange, disabled = false
                     aria-label={`Other reason for ${unit.serial || unit.name}`}
                     className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
                   />
+                )}
+                {unit.damaged && (
+                  <div className="rounded-lg border border-red-200 bg-white p-2 space-y-1.5">
+                    <PhotoPicker
+                      onFilesSelected={files => onChange(unit.key, { damagePhotos: [...unit.damagePhotos, ...files] })}
+                      label={`Photo of the damage (${unit.serial || `unit #${unit.unit_number}`})`}
+                      variant="issue"
+                      photosRequired
+                    />
+                    {unit.damagePhotos.length > 0 ? (
+                      <div className="flex items-center justify-between text-xs text-gray-600">
+                        <span>{unit.damagePhotos.length} photo{unit.damagePhotos.length === 1 ? '' : 's'} added</span>
+                        <button type="button" disabled={disabled} onClick={() => onChange(unit.key, { damagePhotos: [] })}
+                          className="text-red-600 hover:underline">Remove</button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-red-600">A damaged unit needs at least one photo.</p>
+                    )}
+                  </div>
                 )}
               </div>
             )}

@@ -3,6 +3,7 @@ const express = require('express');
 const { summarizeDelivery } = require('../services/deliverySummary');
 const router  = express.Router();
 const prisma  = require('../prismaClient');
+const { withCrewChangeNotice } = require('../services/odooCrewChangeService');
 const { departTimeSlot, endTimeSlotTrip, upsertEmployeeLocation } = require('../services/deliveryLifecycleService');
 const { optimizeScheduledSlot, DEFAULT_WAREHOUSE_ADDRESS } = require('../services/intelligentRouteOptimizationService');
 const {
@@ -446,10 +447,11 @@ router.post('/:id/end-trip', async (req, res) => {
 // ── PUT /api/time-slots/:id ───────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
   try {
-    const timeSlot = await prisma.time_slots.update({
+    // FRD INT-07: moving the slot to another truck changes its DOs' driver/vehicle.
+    const timeSlot = await withCrewChangeNotice([req.params.id], () => prisma.time_slots.update({
       where: { id: req.params.id },
       data:  req.body,
-    });
+    }));
     res.json(timeSlot);
   } catch (err) {
     console.error('PUT /api/time-slots/:id error', err);

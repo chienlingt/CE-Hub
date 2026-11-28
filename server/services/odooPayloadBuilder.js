@@ -69,18 +69,48 @@ function stageSerial(unit) {
   return unit.unloaded_serial || unit.loaded_serial || unit.assigned_serial;
 }
 
-// Delivered/undelivered split for one line. A unit with an explicit
-// `delivery_outcome` (partial delivery) uses it; otherwise the line's
-// delivered_quantity decides, so full deliveries and older rows still work.
-function splitUnits(item) {
+// Final outcome of every unit on a line: delivered, undelivered (returned intact)
+// or damaged. A unit with an explicit `delivery_outcome` (partial delivery or a
+// classified failure) uses it; otherwise the line's delivered_quantity decides, so
+// full deliveries, unclassified failures and older rows still work.
+const UNIT_OUTCOMES = ['delivered', 'undelivered', 'damaged'];
+
+function unitOutcomes(item) {
   const units = unitsFor(item);
   const delivered = resolveDeliveredQty(item);
   return units.map((unit, index) => ({
     unit,
-    delivered: unit.delivery_outcome
-      ? unit.delivery_outcome === 'delivered'
-      : delivered != null && index < delivered,
+    index,
+    outcome: UNIT_OUTCOMES.includes(unit.delivery_outcome)
+      ? unit.delivery_outcome
+      : delivered != null && index < delivered ? 'delivered' : 'undelivered',
   }));
+}
+
+// FRD §12 data points 17-24: quantities and serials are disjoint, so
+// delivered_qty + undelivered_qty + damaged_qty = quantity and every serial
+// appears in exactly one list.
+function resultFields(item) {
+  const outcomes = unitOutcomes(item);
+  const serialsOf = outcome => outcomes.filter(entry => entry.outcome === outcome)
+    .map(entry => entry.unit.assigned_serial || stageSerial(entry.unit)).filter(Boolean);
+  const count = outcome => outcomes.filter(entry => entry.outcome === outcome).length;
+  const deliveredQty = count('delivered');
+  return {
+    delivered_qty:              deliveredQty,
+    undelivered_qty:            count('undelivered'),
+    damaged_qty:                count('damaged'),
+    delivered_serial_numbers:   serialsOf('delivered'),
+    undelivered_serial_numbers: serialsOf('undelivered'),
+    damaged_serial_numbers:     serialsOf('damaged'),
+    exceptions: outcomes.filter(entry => entry.outcome !== 'delivered').map(entry => ({
+      serial_number:  entry.unit.assigned_serial || stageSerial(entry.unit) || null,
+      unit_number:    entry.index + 1,
+      outcome:        entry.outcome,
+      reason:         entry.unit.undelivered_reason || null,
+      evidence_paths: entry.unit.damage_evidence || [],
+    })),
+  };
 }
 
 function buildOrderLines(orderProducts, ceHubStatus) {
@@ -96,18 +126,36 @@ function buildOrderLines(orderProducts, ceHubStatus) {
       prepared_quantity:      item.prepared_quantity,
       status:                 resolveLineStatus(item),
     };
-    if (ceHubStatus !== 'Delivered') return line;
-
-    const split = splitUnits(item);
-    const serialsOf = flag => split.filter(entry => entry.delivered === flag)
-      .map(entry => entry.unit.assigned_serial || stageSerial(entry.unit)).filter(Boolean);
-    return {
-      ...line,
-      undelivered_qty:            line.actual_delivered_qty == null ? null : Math.max(0, (item.quantity || 0) - line.actual_delivered_qty),
-      delivered_serial_numbers:   serialsOf(true),
-      undelivered_serial_numbers: serialsOf(false),
-    };
+    if (!['Delivered', 'Failed'].includes(ceHubStatus)) return line;
+    const result = resultFields(item);
+    return { ...line, actual_delivered_qty: result.delivered_qty, ...result };
   });
+}
+
+// FRD §13 event time: when the milestone actually happened, not when the payload
+// was built. Falls back to now for milestones CE Hub does not timestamp (Picked).
+function occurredAtFor(order, ceHubStatus, latestFailure) {
+  switch (ceHubStatus) {
+    case 'Loaded': {
+      const times = order.order_products.flatMap(item => unitsFor(item).map(unit => unit.loaded_at))
+        .filter(Boolean).map(value => new Date(value)).filter(date => !Number.isNaN(date.getTime()));
+      return times.length ? new Date(Math.max(...times)) : new Date();
+    }
+    case 'Delivering': return order.delivery_start_date_time || order.time_slots?.departed_at || new Date();
+    case 'Arrived':    return order.actual_arrival_date_time || new Date();
+    case 'Delivered':  return order.delivery_end_date_time || new Date();
+    case 'Failed':     return latestFailure?.created_at || new Date();
+    default:           return new Date();
+  }
+}
+
+function attemptNumber(order) {
+  return order?.number_of_attempts > 0 ? order.number_of_attempts : 1;
+}
+
+// FRD §12 data point 15: one reference per delivery attempt of this DO.
+function attemptRef(orderId, attemptNo) {
+  return `${orderId}-A${attemptNo}`;
 }
 
 /**
@@ -116,7 +164,7 @@ function buildOrderLines(orderProducts, ceHubStatus) {
  * hand-rolled { orderId, odooRef, status } literal.
  *
  * @param {string} orderId
- * @param {string} ceHubStatus - Picked|Loaded|Arrived|Delivering|Delivered|Failed|Scheduled
+ * @param {string} ceHubStatus - Picked|Loaded|Delivering|Arrived|Delivered|Failed
  * @returns {Promise<object|null>} null if the order can't be found
  */
 async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
@@ -129,14 +177,14 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
         include: {
           truck: {
             select: {
-              plate_no: true,
+              id: true, plate_no: true, driver_id: true, assistant_id: true,
               employees_trucks_driver_idToemployees:    { select: { name: true, display_name: true } },
               employees_trucks_assistant_idToemployees: { select: { name: true, display_name: true } },
             },
           },
           lorry_trip: {
             select: {
-              id: true, driver_id: true, truck_id: true,
+              id: true, driver_id: true, assistant_id: true, truck_id: true,
               employees_lorry_trips_driver_idToemployees:    { select: { name: true, display_name: true } },
               employees_lorry_trips_assistant_idToemployees: { select: { name: true, display_name: true } },
             },
@@ -151,23 +199,37 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
 
   const latestFailure = order.delivery_failure_events?.[0] || null;
   const crew = resolveCrew(order.time_slots);
+  const slot = order.time_slots;
+  const attemptNo = attemptNumber(order);
 
   const orderLines = buildOrderLines(order.order_products, ceHubStatus);
-  const isPartial = ceHubStatus === 'Delivered' && orderLines.some(line => line.undelivered_qty > 0);
+  const isPartial = ceHubStatus === 'Delivered'
+    && orderLines.some(line => line.undelivered_qty > 0 || line.damaged_qty > 0);
 
   return {
     do_ref:                 order.odoo_order_ref || null,
     so_ref:                 order.odoo_sales_ref || null,
+    picking_id:             order.odoo_picking_id ?? null,
+    ce_hub_order_ref:       order.id,
     doo_ready:              order.doo_ready ?? null,
     order_line_model:       ODOO_LINE_MODEL,
     status:                 ceHubStatus,
+    // FRD §12 data points 12, 14, 15, 23: event time, vehicle/route, attempt and trip
+    // references travel with every status, not only Failed.
+    occurred_at:            toMytIso(occurredAtFor(order, ceHubStatus, latestFailure)),
+    attempt_no:             attemptNo,
+    attempt_ref:            attemptRef(order.id, attemptNo),
+    trip_ref:               slot?.lorry_trip?.id || null,
+    slot_ref:               order.time_slot_id || null,
+    driver_ref:             slot?.lorry_trip?.driver_id || slot?.truck?.driver_id || order.employee_id || null,
+    assistant_ref:          slot?.lorry_trip?.assistant_id || slot?.truck?.assistant_id || null,
+    vehicle_ref:            slot?.lorry_trip?.truck_id || slot?.truck?.id || slot?.truck_id || null,
     order_lines:            orderLines,
     ...(ceHubStatus === 'Delivered' && {
       is_partial: isPartial,
       ...(isPartial && order.delivery_notes && { remarks: order.delivery_notes }),
-      // FRD INT-08/INT-09 result references for the Odoo Log Note. The signature itself
-      // (a data URL) is never sent; only whether one was captured.
-      ce_hub_order_ref: order.id,
+      // FRD INT-08/INT-09 proof. Only references are stored on the outbox row; the
+      // worker reads the files when it sends them (odooProofFiles.js).
       delivery_notes: order.delivery_notes || null,
       proof_photo_paths: order.delivery_evidence || [],
       signature_captured: !!order.proof_of_delivery_url,
@@ -177,10 +239,7 @@ async function buildOdooEventPayload(orderId, ceHubStatus, db = prisma) {
       remarks:        latestFailure?.failure_desc   || order.issue_desc   || null,
       attempt_time: toMytIso(latestFailure?.created_at),
       failure_event_id: latestFailure?.id || null,
-      trip_ref: order.time_slots?.lorry_trip?.id || null,
-      slot_ref: order.time_slot_id || null,
-      driver_ref: order.time_slots?.lorry_trip?.driver_id || order.employee_id || null,
-      vehicle_ref: order.time_slots?.lorry_trip?.truck_id || order.time_slots?.truck_id || null,
+      evidence_paths: latestFailure?.evidence_urls || [],
       delivery_notes: order.delivery_notes || null,
     }),
     driver_name:            crew.driver_name,
@@ -243,6 +302,8 @@ async function buildAppointmentPayload(orderId, confirmationStatus, db = prisma)
     cehub_order_id:           order.id,
     request_ref:              order.appointment_request_ref || null,
     confirmation_status:      confirmationStatus,
+    attempt_no:               attemptNumber(order),
+    attempt_ref:              attemptRef(order.id, attemptNumber(order)),
     slot_ref:                 confirmed ? order.time_slot_id : null,
     confirmed_date:           confirmed ? slot?.date || null : null,
     confirmed_session:        confirmed ? sessionForWindow(slot?.time_window_start) : null,
@@ -294,4 +355,7 @@ function buildAppointmentDecisionPayload(request, order) {
   };
 }
 
-module.exports = { buildOdooEventPayload, buildAppointmentPayload, buildAppointmentDecisionPayload, buildOrderLines };
+module.exports = {
+  buildOdooEventPayload, buildAppointmentPayload, buildAppointmentDecisionPayload, buildOrderLines,
+  toMytIso, attemptNumber, attemptRef, resolveCrew,
+};
