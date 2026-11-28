@@ -11,7 +11,7 @@
 //   fleet/teams    crews (crewService: team + truck + member roles) and B.4 block-offs
 //   booked DOs     open orders on a time slot in the horizon, plus orders Odoo
 //                  booked (requested_appointment_date/session) not yet on a slot
-//   distance       Google Distance Matrix, only for DOs already within nearby_km
+//   distance       Google Routes matrix, only for DOs already within nearby_km
 //                  in a straight line (road km is never shorter). Without a key or
 //                  when Google fails, straight-line x 1.4 is used and flagged.
 
@@ -216,7 +216,7 @@ async function locate({ address, location }, building) {
  *   4. Match the address to a building (access hours)
  *   5. Booked DOs' service time and volume
  *   6. Locate the new address (confirmed location > building coords > strict Google Geocoding)
- *   7. Road distance to booked DOs (Google Distance Matrix, close ones only)
+ *   7. Road distance to booked DOs (Google Routes matrix, close ones only)
  *   8. Hard checks per date + session (spec.evaluateWindows)
  *   9. Rank and reply (spec.pickOptions)
  *
@@ -285,7 +285,7 @@ async function recommendSlots(input, { now = new Date(), db = prisma } = {}) {
 
   // Step 7. Road km to booked DOs. Their coords come from the cache or their
   // building only (never geocoded here). DOs further than nearby_km in a
-  // straight line are skipped; the rest go to the Google Distance Matrix API.
+  // straight line are skipped; the rest go to the Google Routes matrix.
   // If Google fails, straight-line x 1.4 is used and a note says so.
   const distance = await nearbyDistances(origin.coords, booked, nearbyKm);
 

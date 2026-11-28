@@ -357,7 +357,7 @@ async function fetchPendingOrders() {
  * googleRoutingService. Runs exactly once per scheduler run: grouping,
  * sequencing, and per-leg timing all happen inside planRoutes() up front,
  * so the slot-fitting loop in optimizeAndSchedule() never calls Google
- * again (every call there would otherwise re-bill Distance Matrix/Routes).
+ * again (every call there would otherwise re-bill the Routes API).
  *
  * Attaches each order's own precomputed leg duration (_legDurationSec) so
  * the scheduling loop can look up travel time per order directly, even

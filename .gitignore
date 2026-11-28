@@ -73,3 +73,4 @@ graphify-out
 /server/seedRouteDemo.js
 /server/seedPlanningTest.js
 /server/seedMonitoringDemo.js
+/server/seedScanDemo.js

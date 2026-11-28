@@ -7,7 +7,7 @@
 // departures; only address geocoding is reused through the durable cache.
 //
 //   1. Convert a delivery address into GPS coordinates (Geocoding API)
-//   2. Group nearby orders by real road travel time (Distance Matrix API)
+//   2. Group nearby orders by real road travel time (Routes API, computeRouteMatrix)
 //   3. Find the most efficient delivery sequence per group (Routes API)
 //   4. Calculate distance/time for each leg of the journey (Routes API)
 //   5. Work out the truck loading sequence (reverse of delivery order)
@@ -20,7 +20,9 @@
 const axios  = require('axios');
 const { geocodeCachedAddress, readCachedAddress, normalizeAddress, validCoords } = require('./routeGeocodeCache');
 
-const DISTANCE_MATRIX_URL = 'https://maps.googleapis.com/maps/api/distancematrix/json';
+// The legacy Distance Matrix API is no longer enabled for new/changed Google projects (REQUEST_DENIED), so the
+// matrices use the Routes API instead. Same pricing unit (per origin x destination element).
+const ROUTE_MATRIX_URL  = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 const ROUTES_URL        = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
 const NEARBY_TRAVEL_MINUTES = 20;
@@ -97,10 +99,31 @@ async function cachedOrderCoords(order) {
   return readCachedAddress(getOrderAddress(order));
 }
 
-// ── 2. Group nearby orders by real travel time (Distance Matrix, batched) ──
+// ── 2. Group nearby orders by real travel time (Routes API matrix, batched) ──
+
+const MATRIX_FIELDS = 'originIndex,destinationIndex,duration,distanceMeters,status,condition';
+const matrixWaypoint = c => ({ waypoint: { location: { latLng: { latitude: c.lat, longitude: c.lon } } } });
+// A usable element has a route and no error status. `duration` is a string such as "1104s".
+const matrixElementOk = el => el && el.condition === 'ROUTE_EXISTS' && !(el.status && el.status.code);
+const matrixSeconds = value => { const n = parseFloat(String(value)); return Number.isFinite(n) ? Math.round(n) : null; };
+
+// One computeRouteMatrix request. Elements come back with their own indexes (not necessarily in order).
+async function routeMatrixRequest(key, origins, destinations, extra) {
+  const res = await axios.post(ROUTE_MATRIX_URL, {
+    origins: origins.map(matrixWaypoint),
+    destinations: destinations.map(matrixWaypoint),
+    travelMode: 'DRIVE',
+    ...extra,
+  }, {
+    headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': MATRIX_FIELDS, 'Content-Type': 'application/json' },
+    timeout: 15000,
+  });
+  if (!Array.isArray(res.data)) throw new Error('Routes matrix error: unexpected response');
+  return res.data;
+}
 
 /**
- * One Distance Matrix call for the whole candidate set (NxN), instead of
+ * One Routes matrix call for the whole candidate set (NxN), instead of
  * the old pattern of one call per pair — this is the single biggest cost
  * lever versus the previous per-pair OSRM approach.
  */
@@ -110,8 +133,8 @@ async function buildTravelTimeMatrix(coordsList, departureTime = 'now') {
   return metrics.durations;
 }
 
-/** Road-time and road-distance matrices. Traffic-aware Distance Matrix calls
- * allow at most 100 elements per request, so larger capacity-driven runs are
+/** Road-time and road-distance matrices. Traffic-aware matrix calls are kept to
+ * 100 elements per request (10 x 10 tiles), so larger capacity-driven runs are
  * transparently tiled instead of imposing an artificial stop limit. */
 async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
   const key = apiKey();
@@ -120,31 +143,25 @@ async function buildTravelMetricsMatrix(coordsList, departureTime = 'now') {
   const distances = Array.from({ length: size }, () => Array(size).fill(null));
   if (!key || size === 0) return { durations, distances, usedFallback: true };
 
-  // Traffic-aware legacy Distance Matrix requests are limited to 100
-  // elements (origins x destinations), so use 10 x 10 tiles.
+  // Traffic-aware requests stay within 100 elements (origins x destinations): 10 x 10 tiles.
   const chunkSize = 10;
-  const departureEpoch = Math.floor(predictiveDeparture(departureTime) / 1000);
+  const departureTimeIso = new Date(predictiveDeparture(departureTime)).toISOString();
   for (let oi = 0; oi < size; oi += chunkSize) {
     for (let di = 0; di < size; di += chunkSize) {
       const origins = coordsList.slice(oi, oi + chunkSize);
       const destinations = coordsList.slice(di, di + chunkSize);
-      const res = await axios.get(DISTANCE_MATRIX_URL, {
-        params: {
-          origins: origins.map(c => `${c.lat},${c.lon}`).join('|'),
-          destinations: destinations.map(c => `${c.lat},${c.lon}`).join('|'),
-          key,
-          mode: 'driving',
-          departure_time: departureEpoch,
-          traffic_model: GOOGLE_TRAFFIC_MODEL.toLowerCase(),
-        },
-        timeout: 15000,
+      const elements = await routeMatrixRequest(key, origins, destinations, {
+        // Google rejects trafficModel unless the preference is TRAFFIC_AWARE_OPTIMAL; plain TRAFFIC_AWARE already uses BEST_GUESS.
+        routingPreference: 'TRAFFIC_AWARE',
+        departureTime: departureTimeIso,
       });
-      if (res.data?.status !== 'OK') throw new Error(`Distance Matrix error: ${res.data?.status}`);
-      res.data.rows.forEach((row, r) => row.elements.forEach((el, c) => {
-        if (el.status !== 'OK') return;
-        durations[oi + r][di + c] = el.duration_in_traffic?.value ?? el.duration?.value ?? null;
-        distances[oi + r][di + c] = el.distance?.value ?? null;
-      }));
+      for (const el of elements) {
+        if (!matrixElementOk(el)) continue;
+        const r = oi + el.originIndex, c = di + el.destinationIndex;
+        if (!(r >= oi && r < oi + origins.length && c >= di && c < di + destinations.length)) continue;
+        durations[r][c] = matrixSeconds(el.duration);
+        distances[r][c] = Number.isFinite(el.distanceMeters) ? el.distanceMeters : null;
+      }
     }
   }
   return { durations, distances, usedFallback: false };
@@ -198,7 +215,7 @@ async function groupNearbyOrders(ordersWithCoords, departureTime) {
   try {
     matrix = await buildTravelTimeMatrix(ordersWithCoords.map(o => o.coords), departureTime);
   } catch (err) {
-    console.warn('[GoogleRouting] Distance Matrix failed, falling back to Haversine clustering:', err.message);
+    console.warn('[GoogleRouting] Routes matrix failed, falling back to Haversine clustering:', err.message);
     matrix = null;
   }
 
@@ -478,7 +495,7 @@ async function planRoutes(orders, warehouseAddress) {
   return results;
 }
 
-// ── B.1 nearby check: road km from one point to many (Distance Matrix) ──────
+// ── B.1 nearby check: road km from one point to many (Routes matrix) ──────
 
 /**
  * Road distance in km from `origin` to each destination, in order. One origin
@@ -493,19 +510,11 @@ async function roadDistancesKm(origin, destinations) {
   const chunkSize = 25;
   for (let i = 0; i < destinations.length; i += chunkSize) {
     const chunk = destinations.slice(i, i + chunkSize);
-    const res = await axios.get(DISTANCE_MATRIX_URL, {
-      params: {
-        origins: `${origin.lat},${origin.lon}`,
-        destinations: chunk.map(c => `${c.lat},${c.lon}`).join('|'),
-        key,
-        mode: 'driving',
-      },
-      timeout: 15000,
-    });
-    if (res.data?.status !== 'OK') throw new Error(`Distance Matrix error: ${res.data?.status}`);
-    (res.data.rows?.[0]?.elements ?? []).forEach((el, j) => {
-      if (el.status === 'OK' && Number.isFinite(el.distance?.value)) out[i + j] = el.distance.value / 1000;
-    });
+    // No departure time: basic (non-traffic) distances.
+    const elements = await routeMatrixRequest(key, [origin], chunk, { routingPreference: 'TRAFFIC_UNAWARE' });
+    for (const el of elements) {
+      if (matrixElementOk(el) && el.originIndex === 0 && Number.isFinite(el.distanceMeters)) out[i + el.destinationIndex] = el.distanceMeters / 1000;
+    }
   }
   return out;
 }
